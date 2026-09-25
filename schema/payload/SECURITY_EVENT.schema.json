@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/SECURITY_EVENT.schema.json",
+  "title": "SECURITY_EVENT payload",
+  "$comment": "OWNER: 곽재혁 for category ARTIFACT_CANDIDATE and its evidence (WBS 2.6 Output 폴더 감시·메타데이터); other categories follow the Security & Monitoring Layer (spec G). Draft by 이준원 from protocol doc section 8.",
+  "description": "Runtime -> Host on the telemetry channel. Never carries binaries. relation/confidence say how sure the Runner is that the event belongs to action_id; unknown -> action_id null, relation unbound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "category", "observed_at", "process", "action_id", "relation", "confidence", "coverage", "evidence"],
+  "properties": {
+    "event_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "category": { "enum": ["PROCESS", "FILE", "NETWORK", "SCRIPT", "REGISTRY", "ARTIFACT_CANDIDATE", "MONITOR_DEGRADED"] },
+    "observed_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$" },
+    "process": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["pid", "ppid", "image"],
+          "properties": {
+            "pid": { "type": "integer", "minimum": 0 },
+            "ppid": { "type": "integer", "minimum": 0 },
+            "image": { "type": "string", "maxLength": 512 },
+            "command_line": { "type": "string", "maxLength": 4096 }
+          }
+        }
+      ]
+    },
+    "action_id": { "oneOf": [ { "type": "string", "minLength": 1, "maxLength": 64 }, { "type": "null" } ] },
+    "relation": { "enum": ["direct", "inferred", "unbound"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "coverage": { "enum": ["FULL", "PARTIAL", "DEGRADED"] },
+    "evidence": { "type": "object", "maxProperties": 32 }
+  },
+  "allOf": [
+    {
+      "$comment": "ARTIFACT_CANDIDATE is a constrained file event: size/name/hash/origin only, no content.",
+      "if": { "properties": { "category": { "const": "ARTIFACT_CANDIDATE" } } },
+      "then": { "properties": { "evidence": {
+        "type": "object", "additionalProperties": false,
+        "required": ["candidate_id", "name", "size_bytes", "sha256", "origin"],
+        "properties": {
+          "candidate_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 255, "description": "Guest filename; informational only. Host never derives a storage path from it." },
+          "size_bytes": { "type": "integer", "minimum": 0, "maximum": 52428800 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "origin": { "enum": ["output_dir"] }
+        }
+      } } }
+    }
+  ]
+}

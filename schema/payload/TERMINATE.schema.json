@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/TERMINATE.schema.json",
+  "title": "TERMINATE payload",
+  "description": "Host -> Runtime. The Runner's reply is advisory; termination is confirmed only by the Lifecycle Adapter on the Host side. EMERGENCY_KILL waits for nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reason", "grace_ms"],
+  "properties": {
+    "reason": { "enum": ["TASK_COMPLETE", "USER_STOP", "SECURITY_VIOLATION", "TIMEOUT", "RUNTIME_ERROR", "EMERGENCY_KILL"] },
+    "grace_ms": { "type": "integer", "minimum": 0, "maximum": 3000 }
+  }
+}

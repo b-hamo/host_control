@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/HELLO_ACK.schema.json",
+  "title": "HELLO_ACK payload",
+  "$comment": "OWNER: 정유진 (WBS 2.5). Draft from protocol doc section 4; limits vocabulary and channel credential shape to be finalized by her.",
+  "description": "Host -> Runtime. connection_id is in the envelope. Channel credentials are bound to Session/Runtime/Generation/Scope/expiry.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["selected_version", "allowed_capabilities", "limits", "channel_credentials"],
+  "properties": {
+    "selected_version": { "const": "1.0" },
+    "allowed_capabilities": {
+      "type": "array", "uniqueItems": true, "maxItems": 32,
+      "items": { "enum": ["gui.observe", "gui.input", "ui.automation", "filesystem.workspace", "network.internet"] }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_message_bytes", "max_queue_depth", "heartbeat_interval_ms", "alive_timeout_ms"],
+      "properties": {
+        "max_message_bytes": { "type": "integer", "minimum": 1024, "maximum": 65536 },
+        "max_queue_depth": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "heartbeat_interval_ms": { "type": "integer", "minimum": 1000, "maximum": 60000 },
+        "alive_timeout_ms": { "type": "integer", "minimum": 500, "maximum": 30000 }
+      }
+    },
+    "channel_credentials": {
+      "type": "object", "additionalProperties": false,
+      "required": ["telemetry", "reconnect"],
+      "properties": {
+        "telemetry": { "$ref": "#/$defs/credential" },
+        "reconnect": { "$ref": "#/$defs/credential" }
+      }
+    }
+  },
+  "$defs": {
+    "credential": {
+      "type": "object", "additionalProperties": false,
+      "required": ["token", "expires_at"],
+      "properties": {
+        "token": { "type": "string", "minLength": 32, "maxLength": 512 },
+        "expires_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$" }
+      }
+    }
+  }
+}

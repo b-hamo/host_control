@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/STATE_RESULT.schema.json",
+  "title": "STATE_RESULT payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runtime_state", "worker_alive", "queue_depth", "action_state"],
+  "properties": {
+    "runtime_state": { "enum": ["PREPARING", "READY", "RUNNING", "DEGRADED", "FROZEN", "UNRESPONSIVE", "TERMINATED"] },
+    "worker_alive": { "type": "boolean" },
+    "queue_depth": { "type": "integer", "minimum": 0, "maximum": 32 },
+    "action_state": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action_id", "status"],
+          "properties": {
+            "action_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "status": { "enum": ["PENDING", "RUNNING", "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "UNKNOWN", "BLOCKED"] }
+          }
+        }
+      ]
+    }
+  }
+}

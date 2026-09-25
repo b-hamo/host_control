@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/ACK.schema.json",
+  "title": "ACK payload",
+  "description": "Runtime -> Host. Envelope status is ACCEPTED or REJECTED. ACCEPTED means queued, not executed; execution outcome arrives in ACTION_RESULT.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["queue_position", "reject_reason"],
+  "properties": {
+    "queue_position": { "oneOf": [ { "type": "integer", "minimum": 0, "maximum": 32 }, { "type": "null" } ] },
+    "reject_reason": { "oneOf": [ { "type": "string", "maxLength": 256 }, { "type": "null" } ] }
+  }
+}

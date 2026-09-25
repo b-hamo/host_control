@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/STATE_REQUEST.schema.json",
+  "title": "STATE_REQUEST payload",
+  "description": "Host -> Runtime. Ask about the runtime and optionally one action (used instead of re-sending after a timeout).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action_id"],
+  "properties": {
+    "action_id": { "oneOf": [ { "type": "string", "minLength": 1, "maxLength": 64 }, { "type": "null" } ] }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/CHANNEL_HELLO.schema.json",
+  "title": "CHANNEL_HELLO payload",
+  "$comment": "OWNER: 정유진 (WBS 2.5). Telemetry channel binding.",
+  "description": "Runtime -> Host on the telemetry WSS. Credential from HELLO_ACK goes in the Authorization header; payload only names the channel.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["channel"],
+  "properties": {
+    "channel": { "const": "telemetry" }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/CHANNEL_ACK.schema.json",
+  "title": "CHANNEL_ACK payload",
+  "$comment": "OWNER: 정유진 (WBS 2.5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["channel", "max_event_bytes"],
+  "properties": {
+    "channel": { "const": "telemetry" },
+    "max_event_bytes": { "type": "integer", "minimum": 1024, "maximum": 16384 }
+  }
+}

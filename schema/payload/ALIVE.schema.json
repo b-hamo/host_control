@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/ALIVE.schema.json",
+  "title": "ALIVE payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runtime_state", "worker_alive", "queue_depth", "uptime_ms"],
+  "properties": {
+    "runtime_state": { "enum": ["PREPARING", "READY", "RUNNING", "DEGRADED", "FROZEN", "UNRESPONSIVE", "TERMINATED"] },
+    "worker_alive": { "type": "boolean" },
+    "queue_depth": { "type": "integer", "minimum": 0, "maximum": 32 },
+    "uptime_ms": { "type": "integer", "minimum": 0 }
+  }
+}

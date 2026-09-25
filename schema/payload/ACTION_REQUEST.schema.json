@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/ACTION_REQUEST.schema.json",
+  "title": "ACTION_REQUEST payload",
+  "description": "Host -> Runtime. Fixed operation enum with typed arguments only; no dynamic function names, scripts, or shell (spec E-2, protocol doc section 6). Per-operation argument limits are the Worker owner's (정유진) to confirm.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "arguments", "observation_id", "policy_version", "timeout_ms"],
+  "properties": {
+    "operation": {
+      "enum": [
+        "mouse.move", "mouse.click", "mouse.scroll",
+        "keyboard.type", "keyboard.press", "keyboard.hotkey",
+        "ui.click_element"
+      ]
+    },
+    "arguments": { "type": "object" },
+    "observation_id": {
+      "type": "string",
+      "description": "Coordinates are only valid against this observation; STALE_OBSERVATION if it is not the current one or older than 10s.",
+      "minLength": 1, "maxLength": 64
+    },
+    "policy_version": { "type": "string", "minLength": 1, "maxLength": 32 },
+    "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 60000 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "mouse.move" } } },
+      "then": { "properties": { "arguments": {
+        "type": "object", "additionalProperties": false, "required": ["x", "y"],
+        "properties": { "x": { "$ref": "#/$defs/coord" }, "y": { "$ref": "#/$defs/coord" } }
+      } } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "mouse.click" } } },
+      "then": { "properties": { "arguments": {
+        "type": "object", "additionalProperties": false, "required": ["x", "y", "button", "click_count"],
+        "properties": {
+          "x": { "$ref": "#/$defs/coord" }, "y": { "$ref": "#/$defs/coord" },
+          "button": { "$ref": "#/$defs/button" },
+          "click_count": { "enum": [1, 2] }
+        }
+      } } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "mouse.scroll" } } },
+      "then": { "properties": { "arguments": {
+        "type": "object", "additionalProperties": false, "required": ["x", "y", "direction", "steps"],
+        "properties": {
+          "x": { "$ref": "#/$defs/coord" }, "y": { "$ref": "#/$defs/coord" },
+          "direction": { "enum": ["up", "down", "left", "right"] },
+          "steps": { "type": "integer", "minimum": 1, "maximum": 10, "description": "1 step = Windows wheel delta 120" }
+        }
+      } } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "keyboard.type" } } },
+      "then": { "properties": { "arguments": {
+        "type": "object", "additionalProperties": false, "required": ["text"],
+        "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "UTF-8 <= 4 KiB; byte length is re-checked in code. Masked in logs." } }
+      } } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "keyboard.press" } } },
+      "then": { "properties": { "arguments": {
+        "type": "object", "additionalProperties": false, "required": ["key"],
+        "properties": { "key": { "$ref": "#/$defs/key" } }
+      } } }
+    },
+    {
+      "if": { "properties": { "operation": { "const": "keyboard.hotkey" } } },
+      "then": { "properties": { "arguments": {
+        "type": "object", "additionalProperties": false, "required": ["keys"],
+        "properties": { "keys": {
+          "type": "array", "minItems": 2, "maxItems": 4, "uniqueItems": true,
+          "items": { "anyOf": [ { "$ref": "#/$defs/modifier" }, { "$ref": "#/$defs/key" } ] }
+        } }
+      } } }
+    },
+    {
+      "$comment": "W2 decision (2026-09-22): UI_ACTION from the early 8-request table is kept, but as an operation with a closed selector. Worker acts only when exactly one element matches; 0 or >1 -> FAILED. Requires the ui.automation capability in HELLO.",
+      "if": { "properties": { "operation": { "const": "ui.click_element" } } },
+      "then": { "properties": { "arguments": {
+        "type": "object", "additionalProperties": false, "required": ["window_id", "selector", "button"],
+        "properties": {
+          "window_id": { "oneOf": [ { "type": "string", "minLength": 1, "maxLength": 64 }, { "type": "null" } ] },
+          "selector": {
+            "type": "object", "additionalProperties": false, "required": ["name", "control_type"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Exact UIA Name match. No wildcards, regex, or XPath." },
+              "control_type": { "enum": ["Button", "Edit", "CheckBox", "RadioButton", "ComboBox", "ListItem", "MenuItem", "TabItem", "Hyperlink", "Text", "TreeItem"] }
+            }
+          },
+          "button": { "$ref": "#/$defs/button" }
+        }
+      } } }
+    }
+  ],
+  "$defs": {
+    "coord": { "type": "integer", "minimum": 0, "maximum": 16383, "description": "Pixel in the referenced observation; 0 <= x < width, 0 <= y < height checked at runtime." },
+    "button": { "enum": ["left", "right", "middle"] },
+    "modifier": { "enum": ["ctrl", "alt", "shift", "win"] },
+    "key": {
+      "description": "Closed key enum covering every key on a standard Korean (103/106) Windows keyboard, named after the Windows virtual-key code so the Worker maps 1:1 to SendInput. Press+release is one action. Deliberately excluded: sleep/power (kills the session), media/volume/browser/launch keys (no task use, only attack surface). Text goes through keyboard.type (Unicode injection, IME-independent); press is for non-character keys and raw key events.",
+      "enum": [
+        "enter", "tab", "escape", "backspace", "delete", "insert", "space",
+        "capslock", "numlock", "scrolllock", "pause", "printscreen", "apps",
+        "ctrl", "alt", "shift", "win",
+        "hangul", "hanja",
+        "up", "down", "left", "right", "home", "end", "pageup", "pagedown",
+        "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+        "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+        "minus", "equal", "leftbracket", "rightbracket", "backslash",
+        "semicolon", "quote", "backtick", "comma", "period", "slash",
+        "numpad0", "numpad1", "numpad2", "numpad3", "numpad4",
+        "numpad5", "numpad6", "numpad7", "numpad8", "numpad9",
+        "numpadadd", "numpadsubtract", "numpadmultiply", "numpaddivide",
+        "numpaddecimal", "numpadenter"
+      ]
+    }
+  }
+}
