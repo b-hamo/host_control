@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scrp.local/schema/payload/ACTION_REQUEST.schema.json",
   "title": "ACTION_REQUEST payload",
-  "description": "Host -> Runtime. Fixed operation enum with typed arguments only; no dynamic function names, scripts, or shell (spec E-2, protocol doc section 6). Per-operation argument limits are the Worker owner's (정유진) to confirm.",
+  "description": "Host -> Runtime. Fixed operation enum with typed arguments only; no dynamic function names, scripts, or shell (spec E-2, protocol doc section 6). Per-operation argument limits are the Worker owner's (Runner 담당) to confirm.",
   "type": "object",
   "additionalProperties": false,
   "required": ["operation", "arguments", "observation_id", "policy_version", "timeout_ms"],

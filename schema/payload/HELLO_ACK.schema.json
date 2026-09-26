@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scrp.local/schema/payload/HELLO_ACK.schema.json",
   "title": "HELLO_ACK payload",
-  "$comment": "OWNER: 정유진 (WBS 2.5). Draft from protocol doc section 4; limits vocabulary and channel credential shape to be finalized by her.",
+  "$comment": "OWNER: Runner 담당 (WBS 2.5). Draft from protocol doc section 4; limits vocabulary and channel credential shape to be finalized by her.",
   "description": "Host -> Runtime. connection_id is in the envelope. Channel credentials are bound to Session/Runtime/Generation/Scope/expiry.",
   "type": "object",
   "additionalProperties": false,

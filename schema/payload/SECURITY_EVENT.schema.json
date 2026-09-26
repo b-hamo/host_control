@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scrp.local/schema/payload/SECURITY_EVENT.schema.json",
   "title": "SECURITY_EVENT payload",
-  "$comment": "OWNER: 곽재혁 for category ARTIFACT_CANDIDATE and its evidence (WBS 2.6 Output 폴더 감시·메타데이터); other categories follow the Security & Monitoring Layer (spec G). Draft by 이준원 from protocol doc section 8.",
+  "$comment": "OWNER: Artifact 담당 for category ARTIFACT_CANDIDATE and its evidence (WBS 2.6 Output 폴더 감시·메타데이터); other categories follow the Security & Monitoring Layer (spec G). Draft by Host 통신 담당 from protocol doc section 8.",
   "description": "Runtime -> Host on the telemetry channel. Never carries binaries. relation/confidence say how sure the Runner is that the event belongs to action_id; unknown -> action_id null, relation unbound.",
   "type": "object",
   "additionalProperties": false,
