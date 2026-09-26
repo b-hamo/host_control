@@ -55,7 +55,7 @@ Windows Sandbox에서 접속받으려면 Host 방화벽에서 TCP 17443 인바�
 .venv/Scripts/python.exe -m pytest -q tests
 ```
 
-## Runner가 접속하는 방법 (정유진 참고)
+## Runner가 접속하는 방법
 
 프로토콜 문서 §4의 Host 측 구현이다. Runner(C++)는 같은 방식으로 접속해야 한다.
 
