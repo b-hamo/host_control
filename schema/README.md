@@ -41,10 +41,10 @@ payload/<TYPE>.schema.json  type별 payload 20종 (정의에 없는 필드는 �
 
 | 범위 | 담당 | 상태 |
 |---|---|---|
-| Envelope, ACK·ERROR, OBSERVE*, ACTION_REQUEST·RESULT 구조, STATE*, HEARTBEAT·ALIVE, TERMINATE*, ARTIFACT_REQUEST·RESULT | 이준원 (2.2, 2.3) | 초안 |
-| ACTION_REQUEST의 operation별 인자 한계값 (키 목록, 좌표 상한, text 길이 단위) | 정유진 (2.3) | **확정 필요** |
-| HELLO, HELLO_ACK, CHANNEL_HELLO·ACK — Capability 어휘, limits, 자격 구조 | 정유진 (2.5) | 이준원 초안, **확정 필요** |
-| SECURITY_EVENT(ARTIFACT_CANDIDATE) evidence | 곽재혁 (2.6) | 이준원 초안, **확정 필요** |
+| Envelope, ACK·ERROR, OBSERVE*, ACTION_REQUEST·RESULT 구조, STATE*, HEARTBEAT·ALIVE, TERMINATE*, ARTIFACT_REQUEST·RESULT | Host 통신 담당 (2.2, 2.3) | 초안 |
+| ACTION_REQUEST의 operation별 인자 한계값 (키 목록, 좌표 상한, text 길이 단위) | Runner 담당 (2.3) | **확정 필요** |
+| HELLO, HELLO_ACK, CHANNEL_HELLO·ACK — Capability 어휘, limits, 자격 구조 | Runner 담당 (2.5) | Host 통신 담당 초안, **확정 필요** |
+| SECURITY_EVENT(ARTIFACT_CANDIDATE) evidence | Artifact 담당 (2.6) | Host 통신 담당 초안, **확정 필요** |
 
 ## 동결 (M2)
 

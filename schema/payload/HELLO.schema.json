@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scrp.local/schema/payload/HELLO.schema.json",
   "title": "HELLO payload",
-  "$comment": "OWNER: 정유진 (WBS 2.5 핸드셰이크·Capability·버전 규칙). Draft by 이준원 from protocol doc section 4 so the envelope tests can run; field list and capability vocabulary are hers to finalize.",
+  "$comment": "OWNER: Runner 담당 (WBS 2.5 핸드셰이크·Capability·버전 규칙). Draft by Host 통신 담당 from protocol doc section 4 so the envelope tests can run; field list and capability vocabulary are the owner's to finalize.",
   "description": "Runtime -> Host, first message (sequence 1). Bootstrap token goes in the HTTP Authorization header, never here.",
   "type": "object",
   "additionalProperties": false,
