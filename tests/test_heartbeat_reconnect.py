@@ -3,6 +3,10 @@
 Server tests run the real Host server with short intervals (heartbeat every
 0.2 s, ALIVE within 0.1 s) so the whole miss → DEGRADED → UNRESPONSIVE
 sequence takes well under a second.
+
+Since WBS 4.5 a session only counts once Startup Verification has passed, so
+tests that exercise reconnects first let the runner serve until READY
+(`connect_ready`); dropping before that fails the startup instead.
 """
 
 import asyncio
@@ -41,6 +45,14 @@ async def served(certs, body, *, run_demo=False, **session_kwargs):
                             sessions=sessions) as server:
         port = server.sockets[0].getsockname()[1]
         return await body(port, reg, sessions, rec)
+
+
+async def connect_ready(r: MiniRunner, token: str, sessions) -> asyncio.Task:
+    """Connect, keep answering, and return once the Host has verified and marked READY."""
+    await r.connect(token)
+    serving = asyncio.create_task(r.serve())
+    await until(lambda: sessions.get(SES).ready.is_set())
+    return serving
 
 
 async def until(pred, timeout=5.0):
@@ -111,8 +123,7 @@ def test_actions_are_refused_while_disconnected():
 def test_heartbeats_are_sent_periodically_and_answered(certs):
     async def body(port, reg, sessions, rec):
         r = MiniRunner(port, certs[2], SES)
-        await r.connect(rec.token)
-        serving = asyncio.create_task(r.serve())
+        serving = await connect_ready(r, rec.token, sessions)
         await until(lambda: r.heartbeats >= 4)
         assert sessions.get(SES).health.state is Health.OK
         r.drop()
@@ -124,9 +135,9 @@ def test_missing_alive_degrades_then_unresponsive_then_recovers(certs):
     changes = []
 
     async def body(port, reg, sessions, rec):
-        r = MiniRunner(port, certs[2], SES, answer_heartbeats=False)
-        await r.connect(rec.token)
-        serving = asyncio.create_task(r.serve())
+        r = MiniRunner(port, certs[2], SES)
+        serving = await connect_ready(r, rec.token, sessions)
+        r.answer_heartbeats = False                   # the Runtime goes quiet after a good start
         session = sessions.get(SES)
         await until(lambda: session.health.state is Health.UNRESPONSIVE)
         with pytest.raises(ProtocolError, match="UNRESPONSIVE"):
@@ -144,8 +155,8 @@ def test_missing_alive_degrades_then_unresponsive_then_recovers(certs):
 def test_reconnect_with_the_reconnect_token_continues_the_session(certs):
     async def body(port, reg, sessions, rec):
         r = MiniRunner(port, certs[2], SES)
-        first = await r.connect(rec.token)
-        serving = asyncio.create_task(r.serve())
+        serving = await connect_ready(r, rec.token, sessions)
+        first_id = r.me.connection_id
         r.drop()
         await serving
         session = sessions.get(SES)
@@ -154,7 +165,7 @@ def test_reconnect_with_the_reconnect_token_continues_the_session(certs):
         second = await r.connect(r.reconnect_token)
         serving = asyncio.create_task(r.serve())
         await until(lambda: session.ready.is_set())
-        assert second["connection_id"] != first["connection_id"]
+        assert second["connection_id"] != first_id
         assert second["sequence_number"] == 1          # sequence starts over per connection
         assert session.connections == 2 and session.conn.id == second["connection_id"]
         r.drop()
@@ -165,12 +176,14 @@ def test_reconnect_with_the_reconnect_token_continues_the_session(certs):
 def test_reconnect_token_is_single_use_and_superseded(certs):
     async def body(port, reg, sessions, rec):
         r = MiniRunner(port, certs[2], SES)
-        await r.connect(rec.token)
+        serving = await connect_ready(r, rec.token, sessions)
         token1 = r.reconnect_token
         r.drop()
+        await serving
         await until(lambda: sessions.get(SES).conn is None)
-        await r.connect(token1)                         # uses token1, gets token2
+        serving = await connect_ready(r, token1, sessions)   # uses token1, gets token2
         r.drop()
+        await serving
         await until(lambda: sessions.get(SES).conn is None)
         with pytest.raises(InvalidStatus) as e:
             await MiniRunner(port, certs[2], SES).connect(token1)
@@ -181,8 +194,7 @@ def test_reconnect_token_is_single_use_and_superseded(certs):
 def test_a_new_connection_replaces_the_old_one(certs):
     async def body(port, reg, sessions, rec):
         old = MiniRunner(port, certs[2], SES)
-        await old.connect(rec.token)
-        old_serving = asyncio.create_task(old.serve())
+        old_serving = await connect_ready(old, rec.token, sessions)
         new = MiniRunner(port, certs[2], SES)
         await new.connect(old.reconnect_token)
         new_serving = asyncio.create_task(new.serve())
@@ -200,8 +212,9 @@ def test_no_reconnect_within_grace_reports_unresponsive(certs):
 
     async def body(port, reg, sessions, rec):
         r = MiniRunner(port, certs[2], SES)
-        await r.connect(rec.token)
+        serving = await connect_ready(r, rec.token, sessions)
         r.drop()
+        await serving
         await until(lambda: Health.UNRESPONSIVE in changes)
 
     run(served(certs, body, reconnect_grace_s=0.3, heartbeat_interval_s=5.0,
@@ -223,7 +236,8 @@ def test_cut_off_action_is_resolved_by_state_request_not_resent(certs):
 
     r, session = run(served(certs, body, run_demo=True, heartbeat_interval_s=5.0))
     click, typed = r.executed                           # each action ran exactly once
-    assert r.state_requests[0] == click                 # first thing after reconnect: what happened to it?
+    asked = [a for a in r.state_requests if a is not None]   # None = the startup Worker check
+    assert asked[0] == click                            # first thing after reconnect: what happened to it?
     assert session.actions == {click: "SUCCESS", typed: "SUCCESS"}
     assert session.terminated
 
@@ -231,9 +245,7 @@ def test_cut_off_action_is_resolved_by_state_request_not_resent(certs):
 def test_no_reconnect_after_terminate(certs):
     async def body(port, reg, sessions, rec):
         r = MiniRunner(port, certs[2], SES)
-        await r.connect(rec.token)
-        serving = asyncio.create_task(r.serve())
-        await until(lambda: sessions.get(SES).ready.is_set())
+        serving = await connect_ready(r, rec.token, sessions)
         await sessions.get(SES).terminate()
         assert await serving == "terminated"
         with pytest.raises(InvalidStatus) as e:
@@ -246,10 +258,8 @@ def test_sequence_stays_strict_with_heartbeats_running_during_actions(certs):
     """Heartbeat loop and actions share one connection; the Runner must see 1, 2, 3, ..."""
     async def body(port, reg, sessions, rec):
         r = MiniRunner(port, certs[2], SES)
-        await r.connect(rec.token)
-        serving = asyncio.create_task(r.serve())
+        serving = await connect_ready(r, rec.token, sessions)
         session = sessions.get(SES)
-        await until(lambda: session.ready.is_set())
         for _ in range(10):
             await session.observe()
             await session.action("mouse.click", {"x": 1, "y": 1, "button": "left", "click_count": 1})
