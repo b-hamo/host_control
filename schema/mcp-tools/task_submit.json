@@ -1,0 +1,61 @@
+{
+  "name": "task_submit",
+  "description": "Register the goal you are about to pursue, before using any computer_* tool. The classifier uses it to decide which runtime the work runs in and which capabilities are granted, so describe the real intent, including whether you expect to download, install or run files. Returns the task_id, the chosen runtime and the granted capabilities.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "goal"
+    ],
+    "properties": {
+      "goal": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "description": "What the user wants accomplished, in plain language."
+      },
+      "required_capabilities": {
+        "type": "array",
+        "uniqueItems": true,
+        "maxItems": 16,
+        "default": [],
+        "description": "Capabilities the work needs. Ask only for what you will use.",
+        "items": {
+          "type": "string",
+          "enum": [
+            "gui.observe",
+            "gui.input",
+            "ui.automation",
+            "browser.open",
+            "network.internet",
+            "filesystem.workspace",
+            "process.execute"
+          ]
+        }
+      },
+      "network_required": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether the task needs internet access."
+      },
+      "artifact_expected": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether the task should produce a file for the user."
+      },
+      "constraints": {
+        "type": "string",
+        "maxLength": 1024,
+        "description": "Limits the user set, such as sites to avoid or a deadline.",
+        "default": ""
+      }
+    }
+  },
+  "annotations": {
+    "title": "Submit task",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

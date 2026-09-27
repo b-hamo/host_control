@@ -1,0 +1,32 @@
+{
+  "name": "artifact_export",
+  "description": "Request that one inspected artifact be copied out of the runtime to the user's safe results folder. Only artifacts whose status is SAFE can be exported, and the export needs its own permission, so this may be denied or held for user approval. Call artifact_list first to get the artifact_id and check the status.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "artifact_id"
+    ],
+    "properties": {
+      "artifact_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "From artifact_list, e.g. ART-000237."
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 256,
+        "description": "Why the user needs this file; shown in the approval prompt and the audit log.",
+        "default": ""
+      }
+    }
+  },
+  "annotations": {
+    "title": "Export artifact",
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

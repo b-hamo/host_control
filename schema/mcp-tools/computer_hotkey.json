@@ -1,0 +1,41 @@
+{
+  "name": "computer_hotkey",
+  "description": "Press a key combination in the runtime, such as ctrl+c or ctrl+shift+n. Keys are pressed in the given order and released in reverse. Two to four keys; put the modifiers first.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["keys"],
+    "properties": {
+      "keys": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 4,
+        "uniqueItems": true,
+        "description": "Example: [\"ctrl\", \"c\"]. Same key vocabulary as computer_keypress.",
+        "items": {
+          "type": "string",
+          "enum": [
+            "ctrl", "alt", "shift", "win",
+            "enter", "tab", "escape", "backspace", "delete", "insert", "space",
+            "capslock", "numlock", "scrolllock", "pause", "printscreen", "apps",
+            "hangul", "hanja",
+            "up", "down", "left", "right", "home", "end", "pageup", "pagedown",
+            "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+            "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+            "minus", "equal", "leftbracket", "rightbracket", "backslash",
+            "semicolon", "quote", "backtick", "comma", "period", "slash"
+          ]
+        }
+      }
+    }
+  },
+  "annotations": {
+    "title": "Hotkey",
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

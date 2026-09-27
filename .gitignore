@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 host/.certs/
 host/.bootstrap/
+host/.audit/

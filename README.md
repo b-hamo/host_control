@@ -5,9 +5,9 @@ AI Agent(Codex)의 요청을 검사해서 격리된 Sandbox 안의 Runner(`b-ham
 돌아온 결과를 검증한다.
 
 ```
-Codex ──MCP──▶ [ MCP Server + Broker ] ──▶ [ Host 송신기 ] ──WSS──▶ [ Runner ]
-                  W5 예정                   host/sender.py          sandbox_runner
-                                           (현재 포함)              Sandbox 안
+Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ RuntimeSession ] ──WSS──▶ [ Runner ]
+                  5.7 예정        host/broker.py   host/runtime_session.py      sandbox_runner
+                                  (도구 호출 검사)  (연결·재연결·READY 관리)      Sandbox 안
 ```
 
 ## 현재 포함된 것
@@ -15,6 +15,10 @@ Codex ──MCP──▶ [ MCP Server + Broker ] ──▶ [ Host 송신기 ] �
 | 경로 | 내용 | WBS |
 |---|---|---|
 | `host/sender.py` | Host 송신기. Runner 접속 수락, 인증, 데모 실행 | 3.4, 4.6 |
+| `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
+| `host/tool_catalog.py` | 도구 13개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
+| `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
 | `host/connection.py` | 연결 1개: 수신 메시지 검증, 요청·응답 짝 맞춤 | 3.4 |
 | `host/runtime_session.py` | 재연결해도 이어지는 세션: Heartbeat·Health, 재연결 후 재동기화, 상태 조회 | 4.4, 4.5 |
 | `host/startup.py` | Startup Verification: Host가 확인한 뒤에만 READY | 4.5 |
@@ -24,7 +28,8 @@ Codex ──MCP──▶ [ MCP Server + Broker ] ──▶ [ Host 송신기 ] �
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
 | `schema/` | Host ↔ Runner 메시지 규격. **Runner도 이 파일을 기준으로 구현** | 2.2, 2.3 |
-| `tests/` | 인증·TLS·replay 거부, Heartbeat·재연결, Startup Verification 자동 테스트 | 4.4, 4.5, 4.6 |
+| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 13개의 입력 규격 | 2.4 |
+| `tests/` | 인증·TLS·replay 거부, Heartbeat·재연결, Startup Verification, Broker 자동 테스트 | 4.4~4.6, 5.6 |
 
 규격의 결정 사항과 노션 초기 표와의 차이는 [schema/README.md](schema/README.md)에 있다.
 
@@ -59,6 +64,26 @@ Windows Sandbox에서 접속받으려면 Host 방화벽에서 TCP 17443 인바�
 .venv/Scripts/python.exe -m pip install pytest
 .venv/Scripts/python.exe -m pytest -q tests
 ```
+
+## Broker (WBS 5.6)
+
+Agent의 도구 호출은 모두 `Broker.call(tool, arguments)` 하나로 들어온다. 순서대로 검사하고, 하나라도 걸리면 Runner까지 가지 않는다.
+
+| 순서 | 검사 | 걸리면 | 명세서 |
+|---|---|---|---|
+| 1 | 알려진 도구인가, 이 세션에서 쓸 수 있는가 (Capability, 미구현 Artifact 도구는 숨김) | `POLICY_DENIED` | B-11 |
+| 2 | 입력 스키마 (타입·필수·enum·길이·범위, 모르는 필드 거부). 생략한 선택 인자는 기본값으로 채움 | `INVALID_ARGUMENT` | B-2 |
+| 3 | 세션: 종료됐나, READY인가, `task_submit`을 먼저 했나 | `SESSION_TERMINATED` / `RUNTIME_UNAVAILABLE` / `POLICY_DENIED` | B-3 |
+| 4 | 호출 빈도: 관찰 초당 2회, 입력 초당 5회, 제어 초당 5회. 기다리게 하지 않고 바로 거절 | `RATE_LIMITED` (+`retry_after`) | B-7 |
+| 5 | 정책: DENY 규칙(예: Win+R 등 명령 실행 창을 여는 단축키), 승인 필요 도구 | `POLICY_DENIED` (+`rule_id`) | B-5, B-8 |
+| 6 | 좌표가 마지막 화면 안인가, 화면이 10초 이내인가, 글자가 4 KiB 이하인가 | `INVALID_ARGUMENT` / `STALE_OBSERVATION` | 프로토콜 §6 |
+| 7 | Action ID 발급 → SCRP 메시지로 변환해 전송 (`computer_click` → `mouse.click`) | | B-4 |
+| 8 | 결과·오류를 표준 형식으로: `error`, `message`, `retryable`, `retry_after`, `recommended_next_step` | | B-10 |
+| 9 | 감사 로그 1줄: 시각, 세션, task, action, 도구, 인자(입력 글자는 길이+해시만), 정책 결과, 결과, 지연 | | B-9 |
+
+- Broker는 입력을 **절대 다시 보내지 않는다.** `ACTION_TIMEOUT`이면 `recommended_next_step: runtime_get_state`로 Agent가 먼저 확인하게 한다
+- Agent는 `session_id`를 넘기지 않는다. Broker 하나가 세션 하나에 묶인다 (다른 세션 조작 불가)
+- 데모: `python host/sender.py --demo broker` — 도구 호출 9개 중 3개(작업 등록 전 관찰, 화면 밖 클릭, Win+R)가 거부되고 Runner에는 2개만 도착한다. 감사 로그는 `host/.audit/<session>.jsonl`
 
 ## Runner가 접속하는 방법
 
@@ -125,4 +150,7 @@ Host가 거부하는 경우:
 - reconnect token은 1시간 유효하고 연결 중 갱신 메시지가 없다. 1시간 넘게 연결된 뒤 끊기면 Lifecycle Manager가 bootstrap을 다시 발급해야 한다
 - HELLO_ACK의 telemetry token은 발급만 하고 아직 쓰지 않는다
 - Action timeout(연속 Timeout → Health 저하, 명세서 E-6)은 아직 Health에 반영하지 않는다. Heartbeat 누락만 반영
-- task_id·action_id를 세션이 임시로 발급한다. W5에 Broker(명세서 B-4)로 옮긴다
+- 데모(`--demo protocol`)는 Broker를 거치지 않고 세션을 직접 부른다. `--demo broker`가 실제 경로다
+- Broker의 정책 규칙은 초기값이다. FORCE_SANDBOX·FORCE_VM 같은 실행 위치 결정은 Translator(WBS 7.x, 8.8) 몫이라 아직 없다
+- `computer_observe`는 화면 메타데이터(크기·해시)만 돌려준다. PNG 자체를 받는 업로드 경로(프로토콜 §8)는 아직 없다
+- 승인 Workflow(B-8)는 `approver` 콜백 자리만 있다. 사용자에게 묻는 UI는 없으므로 승인 필요 도구는 지금은 거부된다

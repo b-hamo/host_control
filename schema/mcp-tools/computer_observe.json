@@ -1,0 +1,23 @@
+{
+  "name": "computer_observe",
+  "description": "Capture the current screen of the session's runtime and return it as a PNG image. Call this before any coordinate-based action: x/y for click, move and scroll are pixels in the image this returns, origin at the top-left. A capture older than 10 seconds, or one taken before the screen resolution changed, is rejected as stale and must be retaken.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "display_id": {
+        "type": "string",
+        "enum": ["primary"],
+        "default": "primary",
+        "description": "Which display to capture. v1 supports the primary display only."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Observe screen",
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

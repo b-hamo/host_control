@@ -1,0 +1,33 @@
+{
+  "name": "computer_move",
+  "description": "Move the mouse cursor to pixel coordinates (x, y) of the most recent computer_observe result without pressing any button. Use it to reveal hover states or tooltips, then observe again to see the effect.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "x",
+      "y"
+    ],
+    "properties": {
+      "x": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16383,
+        "description": "Pixels from the left edge of the last observation."
+      },
+      "y": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16383,
+        "description": "Pixels from the top edge of the last observation."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Move cursor",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

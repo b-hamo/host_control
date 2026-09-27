@@ -45,7 +45,8 @@ class Connection:
         await self.ws.send(json.dumps(msg, ensure_ascii=False))
         log.info("SENT %-16s seq=%s", msg["type"], msg["sequence_number"])
 
-    async def request(self, msg: dict, expect: tuple[str, ...], timeout: float = 10.0) -> dict:
+    async def request(self, msg: dict, expect: tuple[str, ...], timeout: float = 10.0,
+                      final_if=None) -> dict:
         """Send a request and wait for the response(s) correlated to it.
 
         Returns the last message in `expect`; earlier ones (e.g. ACK before
@@ -74,6 +75,8 @@ class Connection:
                     raise ProtocolError("RUNTIME_UNAVAILABLE", f"connection closed while waiting for {wanted}")
                 if reply["type"] != wanted:
                     raise ProtocolError("PROTOCOL_DENIED", f"expected {wanted}, got {reply['type']}")
+                if final_if is not None and final_if(reply):
+                    return reply                     # e.g. ACK REJECTED: no ACTION_RESULT will follow
             return reply
         finally:
             self.pending.pop(msg["message_id"], None)
