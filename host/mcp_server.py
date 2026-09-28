@@ -54,6 +54,8 @@ INSTRUCTIONS = (
     "These tools control a GUI inside an isolated Windows Sandbox, not this computer. "
     "Call task_submit with your goal first. Then call computer_observe before any coordinate-based "
     "action; x/y are pixels of the most recent observation, origin top-left. "
+    "If the screen is still loading, call computer_observe again with wait_ms (up to 10000) "
+    "rather than calling it repeatedly. "
     "Errors come back as JSON with error, retryable and recommended_next_step: follow "
     "recommended_next_step. Never repeat an input after ACTION_TIMEOUT; call runtime_get_state instead. "
     "The screenshot image itself is not delivered yet: computer_observe returns only its size and hash."

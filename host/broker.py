@@ -14,6 +14,7 @@ For each call, in this order (spec part B):
 5. Policy (B-5, B-8)   ALLOW / REQUIRE_APPROVAL / DENY with a rule id → POLICY_DENIED
 6. Pre-checks          coordinates inside the last observation, observation ≤ 10 s old,
                        text ≤ 4 KiB as UTF-8                         → INVALID_ARGUMENT / STALE_OBSERVATION
+                       (computer_observe with wait_ms waits here before capturing)
 7. Action ID (B-4)     issued here, so the audit record, the SCRP message and the
                        Runner's record all carry the same ACT-… id
 8. Translate + send    MCP tool → SCRP operation (computer_click → mouse.click, ...)
@@ -27,6 +28,7 @@ call runtime_get_state (protocol doc §7).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -252,6 +254,11 @@ class Broker:
             return {"task_id": self.task_id, "accepted": True, "runtime_id": s.identity[1],
                     "runtime_state": s.runtime_state}
         if tool == "computer_observe":
+            if args["wait_ms"]:
+                # Waiting happens here on the Host, so the Runner and the SCRP OBSERVE
+                # message stay as they are. The Agent picks the delay (tool description
+                # gives typical values); the schema caps it at 10 s.
+                await asyncio.sleep(args["wait_ms"] / 1000)
             obs = await s.observe(task_id=self.task_id, action_id=action_id)
             # The PNG itself comes over the separate upload path (protocol doc §8), not built yet.
             return {"action_id": action_id, "observation_id": obs["observation_id"], "width": obs["width"],
