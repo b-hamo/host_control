@@ -14,10 +14,11 @@ from host.session_registry import SessionRecord
 
 BOOTSTRAP_VERSION = "1.0"
 CONTROL_PATH = "/scrp/v1/control"
+OBSERVATION_UPLOAD_PATH = "/scrp/v1/observations/"
 
 
 def write_bootstrap(path: Path, rec: SessionRecord, cert_pem: str, port: int,
-                    host: str | None = None) -> None:
+                    host: str | None = None, upload_port: int | None = None) -> None:
     data = {
         "bootstrap_version": BOOTSTRAP_VERSION,
         "session_id": rec.session_id,
@@ -30,5 +31,9 @@ def write_bootstrap(path: Path, rec: SessionRecord, cert_pem: str, port: int,
         "token_expires_at": rec.expires_utc,
         "host_certificate_pem": cert_pem,
     }
+    if upload_port is not None:
+        # Screenshot uploads (protocol doc §8): PUT https://<host>:<upload_port><path><upload_id>,
+        # same host rule and same pinned certificate as the control channel.
+        data["observation_upload"] = {"port": upload_port, "path": OBSERVATION_UPLOAD_PATH}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

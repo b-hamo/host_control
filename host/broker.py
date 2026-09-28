@@ -106,6 +106,7 @@ class ToolResult:
     data: dict = field(default_factory=dict)
     error: dict | None = None
     action_id: str | None = None
+    image: bytes | None = field(default=None, repr=False)   # validated PNG for the Agent, if any
 
 
 class RateLimiter:
@@ -169,6 +170,7 @@ class Broker:
         self.limiter = RateLimiter(rates or RATE_LIMITS, clock)
         self.task_id: str | None = None
         self.goal: str | None = None
+        self._pending_image: bytes | None = None
 
     # -- B-11 ----------------------------------------------------------------
     def tools(self) -> list[dict]:
@@ -199,8 +201,9 @@ class Broker:
             await self._enforce(tool, args, decision)
             if tool in OPERATIONS or tool == "computer_observe":
                 action_id = self.session.next_action()
+            self._pending_image = None
             data = await self._dispatch(tool, args, action_id)
-            result = ToolResult(True, data, action_id=action_id)
+            result = ToolResult(True, data, action_id=action_id, image=self._pending_image)
         except BrokerError as e:
             result = ToolResult(False, error=e.as_dict(), action_id=action_id)
         except ProtocolError as e:
@@ -260,10 +263,15 @@ class Broker:
                 # gives typical values); the schema caps it at 10 s.
                 await asyncio.sleep(args["wait_ms"] / 1000)
             obs = await s.observe(task_id=self.task_id, action_id=action_id)
-            # The PNG itself comes over the separate upload path (protocol doc §8), not built yet.
+            # The PNG comes over the separate upload path (protocol doc §8) and is only
+            # attached once the Host has validated it against this OBSERVE_RESULT.
+            shot = s.last_screenshot if s.last_screenshot and \
+                s.last_screenshot.observation_id == obs["observation_id"] else None
+            self._pending_image = shot.png if shot else None
             return {"action_id": action_id, "observation_id": obs["observation_id"], "width": obs["width"],
                     "height": obs["height"], "captured_at": obs["captured_at"], "sha256": obs["sha256"],
-                    "image": None}
+                    "image": "attached" if shot else None,
+                    "image_state": s.last_screenshot_state or "NO_UPLOAD_PATH"}
         if tool in OPERATIONS:
             if tool == "computer_type" and len(args["text"].encode("utf-8")) > MAX_TEXT_BYTES:
                 raise BrokerError("INVALID_ARGUMENT", f"text is more than {MAX_TEXT_BYTES} bytes as UTF-8")

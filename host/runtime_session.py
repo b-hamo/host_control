@@ -31,6 +31,7 @@ from enum import Enum
 from typing import Callable
 
 from host.connection import Connection
+from host.observation_store import ObservationUploads, Screenshot
 from host.startup import StartupProfile, StartupReport, check_hello, verify_runtime
 from scrp.validate import ProtocolError
 
@@ -105,8 +106,12 @@ class RuntimeSession:
                  on_health: HealthCallback | None = None,
                  on_terminated: Callable[[tuple[str, str, int]], None] | None = None,
                  profile: StartupProfile | None = None,
-                 on_startup: Callable[[tuple[str, str, int], StartupReport], None] | None = None):
+                 on_startup: Callable[[tuple[str, str, int], StartupReport], None] | None = None,
+                 uploads: ObservationUploads | None = None):
         self.identity = identity
+        self.uploads = uploads                 # None: no screenshot upload path (images never reach the Agent)
+        self.last_screenshot: Screenshot | None = None
+        self.last_screenshot_state: str | None = None   # VALIDATED / MISSING / BLOCKED
         self.profile = profile or StartupProfile()
         self.startup = StartupReport()
         self.verified = False                  # Startup Verification passed at least once
@@ -206,6 +211,7 @@ class RuntimeSession:
         self.terminated = True
         self.end_reason = reason
         self.ready.clear()
+        self._forget_screenshots()
         for t in (self._watchdog, self._grace):
             if t and t is not asyncio.current_task():
                 t.cancel()
@@ -213,6 +219,12 @@ class RuntimeSession:
             self._on_terminated(self.identity)       # revoke every token of this session
         if self.conn is not None and not self.conn.closed.is_set():
             await self.conn.ws.close(code=1008, reason="RUNTIME_START_FAILED")
+
+    def _forget_screenshots(self) -> None:
+        """Screens can show anything; they do not outlive the session."""
+        self.last_screenshot = None
+        if self.uploads is not None:
+            self.uploads.purge(self.identity)
 
     # -- ids (per session, never reused across connections) -------------------
     def next_task(self) -> str:
@@ -348,15 +360,32 @@ class RuntimeSession:
     # -- operations (what the Broker will call) -------------------------------
     async def _observe(self, conn: Connection, timeout: float = 5.0, *,
                        task_id: str | None = None, action_id: str | None = None) -> dict:
-        upload_id = uuid.uuid4().hex + uuid.uuid4().hex[:8]   # one-time, >=16 chars
+        action_id = action_id or self.next_action()
+        if self.uploads is not None:
+            upload_id = self.uploads.issue(self.identity, action_id)   # 256-bit, 30 s, single use (§8)
+        else:
+            upload_id = uuid.uuid4().hex + uuid.uuid4().hex[:8]        # no receiver: nothing can use it
         msg = conn.me.envelope("OBSERVE", {
             "display_id": "primary", "capture_format": "png", "upload_id": upload_id,
-        }, task_id=task_id or self.next_task(), action_id=action_id or self.next_action())
+        }, task_id=task_id or self.next_task(), action_id=action_id)
         result = await conn.request(msg, ("OBSERVE_RESULT",), timeout=timeout)
         p = result["payload"]
+        shot, state = None, None
+        if self.uploads is not None:
+            state, shot, reason = self.uploads.finalize(upload_id, p)
+            if state == "BLOCKED":
+                # What arrived is not what the Runner reported (or an inspector objected):
+                # this observation must not become the basis for coordinates.
+                log.warning("  observation %s screenshot BLOCKED: %s", p["observation_id"], reason)
+                code = "SECURITY_BLOCKED" if reason.startswith("screenshot inspection") else "ACTION_FAILED"
+                raise ProtocolError(code, reason)
+            if state == "MISSING":
+                log.info("  observation %s has no uploaded screenshot (metadata only)", p["observation_id"])
         self.last_observation = p
         self.last_observation_at = time.monotonic()
-        log.info("  observation %s %sx%s sha256=%s…", p["observation_id"], p["width"], p["height"], p["sha256"][:12])
+        self.last_screenshot, self.last_screenshot_state = shot, state
+        log.info("  observation %s %sx%s sha256=%s… image=%s", p["observation_id"], p["width"], p["height"],
+                 p["sha256"][:12], state or "n/a")
         return p
 
     async def observe(self, *, task_id: str | None = None, action_id: str | None = None) -> dict:
@@ -407,6 +436,7 @@ class RuntimeSession:
         self.terminated = True                     # no reconnects from here on, even if the reply is lost
         self.end_reason = reason
         self.ready.clear()
+        self._forget_screenshots()
         if self._on_terminated:
             self._on_terminated(self.identity)
         return await conn.request(msg, ("TERMINATE_RESULT",), timeout=5.0)

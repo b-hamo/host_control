@@ -116,7 +116,7 @@ async def verify_runtime(session: RuntimeSession, conn: Connection,
     try:
         obs = await session._observe(conn, timeout=t)
     except ProtocolError as e:
-        return report.add("first_capture", False, f"no OBSERVE_RESULT ({e.code})")
+        return report.add("first_capture", False, f"no usable capture ({e.code}: {e.detail})")
     took = time.monotonic() - started
     # Fresh by construction: it answered our request within the step timeout.
     # captured_at comes from the Runner's clock, so only check it is plausible

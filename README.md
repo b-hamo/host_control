@@ -53,6 +53,7 @@ python -m venv .venv
 2. 세션 1개(`SES-001 / RT-SBX-001 / gen 1`, `--session` 등으로 변경)를 등록하고 1회용 token을 발급한다
 3. `host/.bootstrap/bootstrap.json`을 쓴다. Runner는 이 파일만 있으면 접속할 수 있다
 4. `listening on wss://0.0.0.0:17443/scrp/v1/control` → Runner 접속 대기
+   (스크린샷 업로드는 `https://0.0.0.0:17444/scrp/v1/observations/`, 아래 참고)
 5. Runner가 접속하면 **Startup Verification**을 한 뒤에만 READY (아래). 등록 후 120초(`--startup-timeout`) 안에 READY가 안 되면 세션 실패
 
 Runner가 접속해 HELLO를 보내면 데모 순서(화면 관찰 → 클릭 → 입력 → 생존 확인 → 상태 조회 → 종료)를
@@ -60,7 +61,7 @@ Runner가 접속해 HELLO를 보내면 데모 순서(화면 관찰 → 클릭 �
 bootstrap token은 한 번 쓰면 끝이므로, 새 세션을 시작하려면 Host를 재시작해 새 token을 받는다.
 연결이 끊긴 경우의 재접속은 HELLO_ACK로 받은 reconnect token으로 한다 (아래).
 
-Windows Sandbox에서 접속받으려면 Host 방화벽에서 TCP 17443 인바운드를 허용해야 한다.
+Windows Sandbox에서 접속받으려면 Host 방화벽에서 TCP **17443**(제어 채널)과 **17444**(스크린샷 업로드) 인바운드를 허용해야 한다.
 
 테스트:
 
@@ -135,6 +136,7 @@ codex -s read-only `
    | `token` | 1회용 접속 token (256-bit, 5분 유효). **로그에 남기지 말 것** |
    | `token_expires_at` | token 만료 시각 (UTC) |
    | `host_certificate_pem` | 신뢰할 Host 인증서. **이 인증서만 신뢰** |
+   | `observation_upload` | 스크린샷 업로드 주소 `{"port": 17444, "path": "/scrp/v1/observations/"}`. host는 위와 같은 규칙 |
 
 2. `wss://<host>:<port><path>`로 접속한다. TLS 1.2 이상. 인증서는 `host_certificate_pem` 하나만 신뢰하고,
    주소가 부팅마다 바뀌므로 호스트명 검사는 끈다. 인증서가 다르면 접속하지 않는다. **평문 ws://로 재시도하지 않는다**
@@ -165,6 +167,30 @@ Startup Verification (WBS 4.5): HELLO_ACK를 받았다고 READY가 아니다. Ho
 - 같은 Runtime의 새 연결이 오면 Host는 이전 연결을 close code **4001 (REPLACED)**로 끊는다. 4001을 받으면 재접속하지 않는다
 - TERMINATE 이후에는 모든 token이 폐기되어 재접속할 수 없다
 
+스크린샷 업로드 (프로토콜 §8):
+
+1. Host가 OBSERVE에 1회용 `upload_id`를 넣어 보낸다 (256-bit, 30초 유효, 세션·Action에 묶임)
+2. Runner는 캡처한 PNG를 `PUT https://<host>:<observation_upload.port><path><upload_id>`로 올린다
+   - 헤더: `Content-Type: image/png`, `Content-Length` 필수 (chunked 안 됨), 8 MiB 이하
+   - TLS·인증서는 제어 채널과 같다 (`host_certificate_pem` 하나만 신뢰, 호스트명 검사 끔, 평문 http로 재시도하지 않음)
+   - 성공하면 `201`. 본문은 Host가 계산한 sha256
+3. **업로드가 끝난 뒤** OBSERVE_RESULT(`sha256`, `width`, `height`, `upload_id`)를 보낸다
+4. Host가 PNG를 직접 다시 검사한다: PNG 구조(시그니처·IHDR·IEND), 16 MP 이하, sha256·크기가 OBSERVE_RESULT와 같은지.
+   맞으면 그때 Agent에게 이미지로 보여준다. 다르면 그 화면은 버리고 `ACTION_FAILED`로 알린다
+5. 스크린샷은 Host 메모리에만 있고 (세션당 최근 8장) 세션이 끝나면 지운다. 화면에는 비밀번호도 보일 수 있기 때문
+
+업로드를 안 한 Runner도 동작은 한다. 그때 `computer_observe`는 크기·해시만 돌려준다 (`image_state: MISSING`).
+
+| 업로드 거부 | HTTP |
+|---|---|
+| 모르는 · 만료된 · 이미 쓴 `upload_id` | 401 |
+| 경로가 다름 / PUT이 아님 | 404 / 405 |
+| `Content-Length` 없음, chunked | 411 |
+| 8 MiB 초과, 16 MP 초과 | 413 |
+| `image/png`가 아님, PNG 시그니처가 아님 | 415 |
+| PNG가 잘렸거나 CRC가 틀림, IHDR로 시작 안 함 | 400 |
+| 헤더 5초 · 본문 15초 안에 다 안 옴 | 408 |
+
 Host가 거부하는 경우:
 
 | 상황 | 결과 |
@@ -188,6 +214,8 @@ Host가 거부하는 경우:
 - Action timeout(연속 Timeout → Health 저하, 명세서 E-6)은 아직 Health에 반영하지 않는다. Heartbeat 누락만 반영
 - 데모(`--demo protocol`)는 Broker를 거치지 않고 세션을 직접 부른다. `--demo broker`가 실제 경로다
 - Broker의 정책 규칙은 초기값이다. FORCE_SANDBOX·FORCE_VM 같은 실행 위치 결정은 Translator(WBS 7.x, 8.8) 몫이라 아직 없다
-- `computer_observe`는 화면 메타데이터(크기·해시)만 돌려준다. PNG 자체를 받는 업로드 경로(프로토콜 §8)는 아직 없어서 Codex가 화면을 보지 못한다
+- 스크린샷 안의 글자로 Agent를 속이는 경우(화면 프롬프트 인젝션) 검사는 아직 없다. `ObservationUploads`의 `inspectors`에 W8~9 탐지기가 들어올 자리만 있다
+- 스크린샷은 원본 크기 그대로 Agent에게 간다 (Sandbox 화면 2048×1232 기준 약 2.5 MB). AI 비용이 문제가 되면 줄여서 보내고 좌표를 원본으로 환산하는 기능을 넣는다
+- Artifact(파일) 업로드 경로 `/scrp/v1/artifacts/`는 아직 없다
 - MCP Server 1개 = 세션 1개. Codex를 다시 켜면 새 세션이 만들어지고 Sandbox도 다시 접속해야 한다
 - 승인 Workflow(B-8)는 `approver` 콜백 자리만 있다. 사용자에게 묻는 UI는 없으므로 승인 필요 도구는 지금은 거부된다

@@ -9,7 +9,11 @@ record keeping (protocol doc §7).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import http.client
 import json
+import struct
+import zlib
 from datetime import datetime, timedelta, timezone
 
 from websockets.asyncio.client import connect
@@ -23,6 +27,26 @@ from scrp.validate import parse_and_validate
 
 DEFAULT_CAPABILITIES = ["gui.observe", "gui.input"]
 DEFAULT_COVERAGE = {"process": False, "file": True, "network": False, "script": False, "registry": False}
+
+
+def make_png(width: int, height: int, shade: int = 0) -> bytes:
+    """A valid grey PNG, standard library only."""
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+    raw = b"".join(b"\x00" + bytes([shade % 256]) * width for _ in range(height))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def put_png(port: int, cert_pem: str, upload_id: str, data: bytes) -> int:
+    """PUT a screenshot the way a Runner must (pinned certificate). Returns the HTTP status."""
+    conn = http.client.HTTPSConnection("127.0.0.1", port, context=tls.client_context(cert_pem), timeout=10)
+    try:
+        conn.request("PUT", f"/scrp/v1/observations/{upload_id}", body=data,
+                     headers={"Content-Type": "image/png", "Content-Length": str(len(data))})
+        return conn.getresponse().status
+    finally:
+        conn.close()
 
 
 def hello_msg(me: Endpoint, capabilities=None, coverage=None) -> dict:
@@ -43,7 +67,9 @@ class MiniRunner:
                  capabilities: list[str] | None = None, coverage: dict | None = None,
                  reject_actions: bool = False, action_status: str = "SUCCESS",
                  action_error: dict | None = None, observe_error: dict | None = None,
-                 capture_clock_offset_s: float = 0.0):
+                 capture_clock_offset_s: float = 0.0,
+                 upload_port: int | None = None, upload_tamper: bool = False,
+                 screen: tuple[int, int] = (1280, 720)):
         self.url = f"wss://127.0.0.1:{port}{CONTROL_PATH}"
         self.cert_pem = cert_pem
         self.identity = identity
@@ -58,6 +84,10 @@ class MiniRunner:
         self.action_error = action_error          # envelope error on ACK REJECTED / ACTION_RESULT
         self.observe_error = observe_error        # answer OBSERVE with a correlated ERROR instead
         self.capture_clock_offset_s = capture_clock_offset_s   # skew the Runner's captured_at
+        self.upload_port = upload_port            # None: behave like a Runner that does not upload yet
+        self.upload_tamper = upload_tamper        # upload one PNG, report another
+        self.screen = screen
+        self.uploads: list[int] = []              # HTTP status of each upload
         self.requests: list[dict] = []          # every ACTION_REQUEST as received
         self.executed: list[str] = []          # action_ids, in order
         self.state_requests: list[str | None] = []
@@ -102,9 +132,16 @@ class MiniRunner:
                         continue
                     stamp = (datetime.now(timezone.utc) + timedelta(seconds=self.capture_clock_offset_s)
                              ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                    w, h = self.screen
+                    png = make_png(w, h, len(self.uploads))
+                    sha = hashlib.sha256(png).hexdigest()
+                    if self.upload_port is not None:              # PUT first, then OBSERVE_RESULT (§8)
+                        sent = make_png(w, h, 200) if self.upload_tamper else png
+                        self.uploads.append(await asyncio.to_thread(
+                            put_png, self.upload_port, self.cert_pem, msg["payload"]["upload_id"], sent))
                     await self._send(self.me.reply(msg, "OBSERVE_RESULT", {
-                        "observation_id": f"OBS-{msg['action_id']}", "width": 1280, "height": 720,
-                        "captured_at": stamp, "sha256": "0" * 64,
+                        "observation_id": f"OBS-{msg['action_id']}", "width": w, "height": h,
+                        "captured_at": stamp, "sha256": sha,
                         "upload_id": msg["payload"]["upload_id"]}))
                 elif t == "ACTION_REQUEST":
                     self.requests.append(msg)

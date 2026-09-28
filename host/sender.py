@@ -52,6 +52,8 @@ from host.audit import AuditLog
 from host.broker import Broker
 from host.bootstrap import CONTROL_PATH, write_bootstrap
 from host.connection import Connection
+from host.observation_store import ObservationUploads
+from host.upload_server import UPLOAD_PATH, UPLOAD_PORT, start_upload_server
 from host.runtime_session import (ALIVE_TIMEOUT_S, HEARTBEAT_INTERVAL_S, RECONNECT_GRACE_S,
                                   RuntimeSession)
 from host.session_registry import AuthError, SessionRegistry, bearer_token
@@ -303,17 +305,20 @@ async def main(run_demo: str | None, session: tuple[str, str, int], bootstrap_fi
     cert_path, key_path = tls.ensure_dev_cert(CERT_DIR)
     cert_pem = cert_path.read_text(encoding="ascii")
     registry = SessionRegistry()
-    sessions = Sessions(registry, profile=StartupProfile(timeout_s=startup_timeout_s))
+    uploads = ObservationUploads()
+    sessions = Sessions(registry, profile=StartupProfile(timeout_s=startup_timeout_s), uploads=uploads)
     rec = registry.issue(*session)
-    write_bootstrap(bootstrap_file, rec, cert_pem, PORT)
+    write_bootstrap(bootstrap_file, rec, cert_pem, PORT, upload_port=UPLOAD_PORT)
     # The token itself is never logged.
     log.info("session %s / %s / gen %s registered; token valid until %s, single use",
              *rec.identity(), rec.expires_utc)
     log.info("bootstrap written to %s", bootstrap_file)
     log.info("host certificate sha256=%s", tls.fingerprint(cert_pem))
 
-    async with start_server(registry, cert_path, key_path, run_demo, sessions=sessions):
+    upload_server = await start_upload_server(uploads, tls.server_context(cert_path, key_path), HOST, UPLOAD_PORT)
+    async with upload_server, start_server(registry, cert_path, key_path, run_demo, sessions=sessions):
         log.info("listening on wss://%s:%d%s", HOST, PORT, CONTROL_PATH)
+        log.info("screenshot uploads on https://%s:%d%s<upload_id>", HOST, UPLOAD_PORT, UPLOAD_PATH)
         sessions.register(rec.identity())
         log.info("waiting for the Runner; READY must be reached within %.0fs", startup_timeout_s)
         await asyncio.Future()

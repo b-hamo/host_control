@@ -153,7 +153,7 @@ def test_dead_worker_is_not_promoted(certs):
 
 
 def test_no_first_capture_is_not_promoted(certs):
-    expect_start_failure(certs, {"answer_observe": False}, "first_capture: no OBSERVE_RESULT")
+    expect_start_failure(certs, {"answer_observe": False}, "first_capture: no usable capture")
 
 
 def test_no_alive_at_startup_is_not_promoted(certs):

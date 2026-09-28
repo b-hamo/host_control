@@ -42,7 +42,7 @@ class Client:
 
 async def start(tmp_path):
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, str(SERVER), "--port", "0", "--startup-timeout", "20",
+        sys.executable, str(SERVER), "--port", "0", "--upload-port", "0", "--startup-timeout", "20",
         "--bootstrap-out", str(tmp_path / "bootstrap.json"), "--cert-dir", str(tmp_path / "certs"),
         "--audit-dir", str(tmp_path / "audit"), "--log-file", str(tmp_path / "mcp.log"),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
@@ -149,3 +149,36 @@ def test_codex_to_runner_end_to_end(tmp_path):
     assert typed["ok"] and stop_["ok"]
     assert r.executed == [click["action_id"], typed["action_id"]]      # the denied hotkey never arrived
     assert "안녕하세요" not in audit and len(audit.splitlines()) >= 6
+
+
+def test_observe_returns_the_screenshot_as_mcp_image_content(tmp_path):
+    """Protocol doc §8: the Runner PUTs the PNG, the Host validates it, Codex gets an image block."""
+    async def body():
+        import base64
+        proc, c = await start(tmp_path)
+        await c.rpc("initialize")
+        await c.call("task_submit", {"goal": "화면 보기"})
+        while not (tmp_path / "bootstrap.json").exists():
+            await asyncio.sleep(0.05)
+        boot = json.loads((tmp_path / "bootstrap.json").read_text(encoding="utf-8"))
+        assert boot["observation_upload"]["path"] == "/scrp/v1/observations/"
+        r = MiniRunner(boot["port"], boot["host_certificate_pem"],
+                       (boot["session_id"], boot["runtime_id"], boot["generation"]),
+                       upload_port=boot["observation_upload"]["port"])
+        await r.connect(boot["token"])
+        serving = asyncio.create_task(r.serve())
+        while (await c.call("runtime_get_state"))["runtime_state"] != "READY":
+            await asyncio.sleep(0.1)
+        raw = (await c.rpc("tools/call", {"name": "computer_observe", "arguments": {}}))["result"]
+        r.drop()
+        await serving
+        await stop(proc)
+        return raw, base64
+
+    raw, base64 = run(body())
+    kinds = [x["type"] for x in raw["content"]]
+    assert kinds == ["image", "text"] and raw["isError"] is False
+    png = base64.b64decode(raw["content"][0]["data"])
+    assert raw["content"][0]["mimeType"] == "image/png" and png.startswith(b"\x89PNG")
+    meta = json.loads(raw["content"][1]["text"])
+    assert meta["image"] == "attached" and meta["image_state"] == "VALIDATED" and meta["width"] == 1280
