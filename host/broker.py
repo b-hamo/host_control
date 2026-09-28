@@ -32,7 +32,6 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from host.audit import AuditLog, mask
@@ -40,7 +39,6 @@ from host.policy import Decision, Policy
 from host.runtime_session import RuntimeSession
 from host.startup import MAX_CAPTURE_AGE_S
 from host.tool_catalog import ToolCatalog, ToolError
-from scrp.envelope import parse_utc
 from scrp.validate import ProtocolError
 
 log = logging.getLogger("host-broker")
@@ -236,9 +234,11 @@ class Broker:
 
     def _observation_for(self, tool: str, args: dict) -> str:
         obs = self.session.last_observation
-        if obs is None:
+        if obs is None or self.session.last_observation_at is None:
             raise BrokerError("STALE_OBSERVATION", "no observation yet; call computer_observe first")
-        age = (datetime.now(timezone.utc) - parse_utc(obs["captured_at"])).total_seconds()
+        # Host clock only (see RuntimeSession.last_observation_at): a Runner clock
+        # that is off by 20 s must not make a fresh capture look stale.
+        age = time.monotonic() - self.session.last_observation_at
         if age > MAX_CAPTURE_AGE_S:
             raise BrokerError("STALE_OBSERVATION", f"last observation is {age:.0f}s old (max {MAX_CAPTURE_AGE_S:.0f}s)")
         if tool in COORDINATE_TOOLS and not (0 <= args["x"] < obs["width"] and 0 <= args["y"] < obs["height"]):
@@ -320,14 +320,28 @@ def _normalize(code: str) -> str:
     return "INTERNAL"
 
 
+def _runner_error(reply: dict, default_code: str, default_message: str) -> BrokerError:
+    """Prefer the reason the Runner put in the envelope's error (e.g. STALE_OBSERVATION
+    when its own re-check before executing failed), so the Agent gets the right next
+    step instead of a generic ACTION_FAILED."""
+    err = reply.get("error") or {}
+    if err.get("code"):
+        return BrokerError(_normalize(err["code"]), err.get("message") or default_message)
+    return BrokerError(default_code, default_message)
+
+
 def _action_outcome(reply: dict, action_id: str) -> dict:
     if reply["type"] == "ACK":                        # REJECTED before anything ran
-        raise BrokerError("ACTION_FAILED", f"runtime rejected the action: {reply['payload']['reject_reason']}")
+        raise _runner_error(reply, "ACTION_FAILED",
+                            f"runtime rejected the action: {reply['payload']['reject_reason']}")
     status, p = reply["status"], reply["payload"]
+    detail = p["result"].get("detail")
     if status == "BLOCKED":
-        raise BrokerError("SECURITY_BLOCKED", p["result"].get("detail", "blocked by the runtime"))
+        # BLOCKED means "not executed". That is a security block only when the Runner
+        # says so; a Runner that is stopping also answers BLOCKED for queued actions.
+        raise _runner_error(reply, "ACTION_FAILED", detail or "the runtime did not execute this action")
     if status == "FAILED":
-        raise BrokerError("ACTION_FAILED", p["result"].get("detail", "the runtime reported failure"))
+        raise _runner_error(reply, "ACTION_FAILED", detail or "the runtime reported failure")
     if status == "UNKNOWN":
         raise BrokerError("ACTION_FAILED", "outcome unknown", next_step="runtime_get_state")
     return {"action_id": action_id, "status": status, "result": p["result"],

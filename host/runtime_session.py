@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -117,6 +118,10 @@ class RuntimeSession:
         self.health = HealthTracker(identity, on_health)
         self.actions: dict[str, str] = {}      # action_id -> SENT / UNKNOWN / final status
         self.last_observation: dict | None = None
+        # When the Host received it, on the Host's monotonic clock. Freshness is
+        # measured with this, never with the Runner's captured_at: the two clocks
+        # may differ by up to MAX_CLOCK_SKEW_S (protocol doc §7).
+        self.last_observation_at: float | None = None
         self.granted_capabilities: set[str] = set()   # from the latest HELLO_ACK
         self.last_action_id: str | None = None
         self.heartbeat_interval_s = heartbeat_interval_s
@@ -350,6 +355,7 @@ class RuntimeSession:
         result = await conn.request(msg, ("OBSERVE_RESULT",), timeout=timeout)
         p = result["payload"]
         self.last_observation = p
+        self.last_observation_at = time.monotonic()
         log.info("  observation %s %sx%s sha256=%s…", p["observation_id"], p["width"], p["height"], p["sha256"][:12])
         return p
 

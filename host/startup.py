@@ -112,13 +112,20 @@ async def verify_runtime(session: RuntimeSession, conn: Connection,
                       f"worker_alive={st['worker_alive']} runtime_state={st['runtime_state']}"):
         return False
 
+    started = time.monotonic()
     try:
         obs = await session._observe(conn, timeout=t)
     except ProtocolError as e:
         return report.add("first_capture", False, f"no OBSERVE_RESULT ({e.code})")
-    age = abs((datetime.now(timezone.utc) - parse_utc(obs["captured_at"])).total_seconds())
-    if not report.add("first_capture", age <= MAX_CAPTURE_AGE_S,
-                      f"{obs['observation_id']} {obs['width']}x{obs['height']}, {age:.0f}s old"):
+    took = time.monotonic() - started
+    # Fresh by construction: it answered our request within the step timeout.
+    # captured_at comes from the Runner's clock, so only check it is plausible
+    # given the skew already allowed at HELLO.
+    drift = abs((datetime.now(timezone.utc) - parse_utc(obs["captured_at"])).total_seconds())
+    if not report.add("first_capture", drift <= MAX_CLOCK_SKEW_S + MAX_CAPTURE_AGE_S,
+                      f"{obs['observation_id']} {obs['width']}x{obs['height']}, answered in {took * 1000:.0f} ms"
+                      + ("" if drift <= MAX_CLOCK_SKEW_S + MAX_CAPTURE_AGE_S
+                         else f", captured_at is {drift:.0f}s off the Host clock")):
         return False
 
     try:

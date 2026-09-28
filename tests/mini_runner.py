@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
@@ -40,7 +41,9 @@ class MiniRunner:
                  answer_heartbeats: bool = True, drop_after_first_ack: bool = False,
                  worker_alive: bool = True, answer_observe: bool = True,
                  capabilities: list[str] | None = None, coverage: dict | None = None,
-                 reject_actions: bool = False, action_status: str = "SUCCESS"):
+                 reject_actions: bool = False, action_status: str = "SUCCESS",
+                 action_error: dict | None = None, observe_error: dict | None = None,
+                 capture_clock_offset_s: float = 0.0):
         self.url = f"wss://127.0.0.1:{port}{CONTROL_PATH}"
         self.cert_pem = cert_pem
         self.identity = identity
@@ -52,6 +55,9 @@ class MiniRunner:
         self.coverage = coverage
         self.reject_actions = reject_actions
         self.action_status = action_status
+        self.action_error = action_error          # envelope error on ACK REJECTED / ACTION_RESULT
+        self.observe_error = observe_error        # answer OBSERVE with a correlated ERROR instead
+        self.capture_clock_offset_s = capture_clock_offset_s   # skew the Runner's captured_at
         self.requests: list[dict] = []          # every ACTION_REQUEST as received
         self.executed: list[str] = []          # action_ids, in order
         self.state_requests: list[str | None] = []
@@ -90,16 +96,24 @@ class MiniRunner:
                 elif t == "OBSERVE":
                     if not self.answer_observe:
                         continue
+                    if self.observe_error:
+                        await self._send(self.me.error(self.observe_error["code"], self.observe_error["message"],
+                                                       correlation_id=msg["message_id"]))
+                        continue
+                    stamp = (datetime.now(timezone.utc) + timedelta(seconds=self.capture_clock_offset_s)
+                             ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
                     await self._send(self.me.reply(msg, "OBSERVE_RESULT", {
                         "observation_id": f"OBS-{msg['action_id']}", "width": 1280, "height": 720,
-                        "captured_at": msg["timestamp"], "sha256": "0" * 64,
+                        "captured_at": stamp, "sha256": "0" * 64,
                         "upload_id": msg["payload"]["upload_id"]}))
                 elif t == "ACTION_REQUEST":
                     self.requests.append(msg)
                     if self.reject_actions:
-                        await self._send(self.me.reply(msg, "ACK", {"queue_position": None,
-                                                                    "reject_reason": "queue full"},
-                                                       status="REJECTED"))
+                        ack = self.me.reply(msg, "ACK", {"queue_position": None, "reject_reason": "queue full"},
+                                            status="REJECTED")
+                        if self.action_error:
+                            ack["error"] = self.action_error
+                        await self._send(ack)
                         continue
                     self.executed.append(msg["action_id"])
                     await self._send(self.me.reply(msg, "ACK", {"queue_position": 0, "reject_reason": None},
@@ -111,8 +125,11 @@ class MiniRunner:
                     result = {"input_delivered": self.action_status == "SUCCESS"}
                     if self.action_status != "SUCCESS":
                         result["detail"] = "element not found"
-                    await self._send(self.me.reply(msg, "ACTION_RESULT", {
-                        "execution_time_ms": 1, "result": result}, status=self.action_status))
+                    done = self.me.reply(msg, "ACTION_RESULT", {"execution_time_ms": 1, "result": result},
+                                         status=self.action_status)
+                    if self.action_error and self.action_status != "SUCCESS":
+                        done["error"] = self.action_error
+                    await self._send(done)
                 elif t == "STATE_REQUEST":
                     target = msg["payload"]["action_id"]
                     self.state_requests.append(target)
