@@ -161,8 +161,11 @@ class Broker:
     def __init__(self, session: RuntimeSession, catalog: ToolCatalog | None = None, *,
                  policy: Policy | None = None, audit: AuditLog | None = None,
                  approver: Approver | None = None, rates: dict[str, float] | None = None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, launcher=None):
         self.session = session                       # B-3: bound for the Broker's lifetime
+        # host/lifecycle.py SandboxLauncher: task_submit starts the Sandbox. None: the
+        # Runtime is started some other way (by hand, run_demo.ps1).
+        self.launcher = launcher
         self.catalog = catalog or ToolCatalog()
         self.policy = policy or Policy()
         self.audit = audit or AuditLog()
@@ -171,6 +174,7 @@ class Broker:
         self.task_id: str | None = None
         self.goal: str | None = None
         self._pending_image: bytes | None = None
+        self._waited_s = 0.0
 
     # -- B-11 ----------------------------------------------------------------
     def tools(self) -> list[dict]:
@@ -195,6 +199,7 @@ class Broker:
                 args = self.catalog.validate(tool, arguments)
             except ToolError as e:
                 raise BrokerError(e.code, e.message) from None
+            self._waited_s = await self._wait_for_start(tool, args)
             self._check_session(tool)
             self.limiter.take(category(tool))
             decision = self.policy.decide(tool, args)
@@ -213,6 +218,20 @@ class Broker:
         return result
 
     # -- steps ---------------------------------------------------------------
+    async def _wait_for_start(self, tool: str, args: dict) -> float:
+        """computer_observe with wait_ms while the runtime is still starting waits for
+        READY instead of failing at once, so the Agent has one way to wait after
+        task_submit. Returns the seconds spent; the capture then follows without the extra delay."""
+        s = self.session
+        if tool != "computer_observe" or not args.get("wait_ms") or self.task_id is None                 or s.terminated or s.verified or s.ready.is_set():
+            return 0.0
+        started = time.monotonic()
+        try:
+            await asyncio.wait_for(s.ready.wait(), args["wait_ms"] / 1000)
+        except asyncio.TimeoutError:
+            pass                                     # _check_session reports RUNTIME_UNAVAILABLE
+        return time.monotonic() - started
+
     def _check_session(self, tool: str) -> None:
         s = self.session
         if s.terminated:
@@ -254,14 +273,23 @@ class Broker:
         if tool == "task_submit":
             self.task_id, self.goal = s.next_task(), args["goal"]
             log.info("TASK %s submitted (Translator classification is WBS 7.x)", self.task_id)
-            return {"task_id": self.task_id, "accepted": True, "runtime_id": s.identity[1],
-                    "runtime_state": s.runtime_state}
+            reply = {"task_id": self.task_id, "accepted": True, "runtime_id": s.identity[1],
+                     "runtime_state": s.runtime_state}
+            if self.launcher is not None:
+                self.launcher.begin()                # returns at once; the Sandbox boots meanwhile
+                reply["sandbox"] = self.launcher.status()
+            if not s.ready.is_set():
+                reply["message"] = ("The runtime is starting (usually 20-60 s). Call computer_observe "
+                                    "with wait_ms=10000 to wait for it; repeat while it is not READY.")
+            return reply
         if tool == "computer_observe":
-            if args["wait_ms"]:
+            # Already waited for the runtime to start: capture right away (it has just come up).
+            rest = 0 if self._waited_s else args["wait_ms"] / 1000
+            if rest > 0:
                 # Waiting happens here on the Host, so the Runner and the SCRP OBSERVE
                 # message stay as they are. The Agent picks the delay (tool description
                 # gives typical values); the schema caps it at 10 s.
-                await asyncio.sleep(args["wait_ms"] / 1000)
+                await asyncio.sleep(rest)
             obs = await s.observe(task_id=self.task_id, action_id=action_id)
             # The PNG comes over the separate upload path (protocol doc §8) and is only
             # attached once the Host has validated it against this OBSERVE_RESULT.
@@ -287,6 +315,8 @@ class Broker:
             host_view = {"runtime_state": s.runtime_state, "health": s.health.state.value,
                          "connected": not s.disconnected(),
                          "action": {"action_id": wanted, "status": s.actions[wanted]} if wanted else None}
+            if self.launcher is not None:
+                host_view["sandbox"] = self.launcher.status()
             if not s.ready.is_set():
                 return {**host_view, "source": "host"}   # the Runner is not reachable right now
             st = (await s.state(wanted))["payload"]

@@ -39,9 +39,11 @@ import http
 import logging
 import re
 import secrets
+import ssl
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # run as `python host/sender.py`
 
@@ -160,8 +162,10 @@ async def broker_demo(session: RuntimeSession) -> None:
 class Sessions:
     """RuntimeSessions by identity; one Host process may hold several."""
 
-    def __init__(self, registry: SessionRegistry, **session_kwargs):
+    def __init__(self, registry: SessionRegistry, *,
+                 on_end: Callable[[tuple[str, str, int]], None] | None = None, **session_kwargs):
         self.registry = registry
+        self._on_end = on_end                        # e.g. stop the Sandbox (host/lifecycle.py)
         self._kwargs = session_kwargs
         self._by_id: dict[tuple[str, str, int], RuntimeSession] = {}
 
@@ -173,9 +177,13 @@ class Sessions:
 
     def get(self, identity: tuple[str, str, int]) -> RuntimeSession:
         if identity not in self._by_id:
-            self._by_id[identity] = RuntimeSession(
-                identity, on_terminated=lambda ident: self.registry.revoke(ident), **self._kwargs)
+            self._by_id[identity] = RuntimeSession(identity, on_terminated=self._ended, **self._kwargs)
         return self._by_id[identity]
+
+    def _ended(self, identity: tuple[str, str, int]) -> None:
+        self.registry.revoke(identity)               # every token of this session
+        if self._on_end:
+            self._on_end(identity)
 
 
 def make_process_request(registry: SessionRegistry):
@@ -282,8 +290,12 @@ def start_server(registry: SessionRegistry, cert_path: Path, key_path: Path,
                  heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S,
                  alive_timeout_s: float = ALIVE_TIMEOUT_S,
                  reconnect_grace_s: float = RECONNECT_GRACE_S,
-                 profile: StartupProfile | None = None):
-    """The wss:// server. There is deliberately no plaintext variant."""
+                 profile: StartupProfile | None = None, ssl_context: ssl.SSLContext | None = None):
+    """The wss:// server. There is deliberately no plaintext variant.
+
+    Pass ssl_context to keep a handle on it: load_cert_chain() on it again
+    switches new connections to a new certificate (host/mcp_server.py does
+    this once the Sandbox's Host address is known)."""
     if sessions is None:
         sessions = Sessions(registry, heartbeat_interval_s=heartbeat_interval_s,
                             alive_timeout_s=alive_timeout_s, reconnect_grace_s=reconnect_grace_s,
@@ -295,7 +307,7 @@ def start_server(registry: SessionRegistry, cert_path: Path, key_path: Path,
         "alive_timeout_ms": max(500, int(alive_timeout_s * 1000)),
     }
     return serve(make_handler(run_demo, sessions, limits), host, port,
-                 ssl=tls.server_context(cert_path, key_path),
+                 ssl=ssl_context or tls.server_context(cert_path, key_path),
                  process_request=make_process_request(registry),
                  max_size=64 * 1024)
 

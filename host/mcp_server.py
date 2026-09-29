@@ -15,6 +15,11 @@ import:
   starts the wss server for the Runner, registers a session, writes the
   bootstrap file. tools/call waits for this half and then runs Broker.call().
 
+With --runner-exe, the Windows Sandbox is started by the Lifecycle team's
+Sandbox Manager when the Agent calls task_submit, and stopped when the
+session ends or Codex closes this process (host/lifecycle.py). Without it,
+the bootstrap is written at start and the Runtime is started by hand.
+
 stdout belongs to the MCP protocol. Every log line goes to stderr and to
 host/.logs/mcp_server.log, never to stdout.
 
@@ -52,7 +57,9 @@ START_CAPABILITIES = {"gui.observe", "gui.input"}
 
 INSTRUCTIONS = (
     "These tools control a GUI inside an isolated Windows Sandbox, not this computer. "
-    "Call task_submit with your goal first. Then call computer_observe before any coordinate-based "
+    "Call task_submit with your goal first. The runtime may take up to a minute to start after that; "
+    "computer_observe with wait_ms=10000 waits for it. "
+    "Then call computer_observe before any coordinate-based "
     "action; x/y are pixels of the most recent observation, origin top-left. "
     "If the screen is still loading, call computer_observe again with wait_ms (up to 10000) "
     "rather than calling it repeatedly. "
@@ -75,7 +82,7 @@ def load_tool_list() -> list[dict]:
 class HostBackend(threading.Thread):
     """The Host stack on its own event loop, started after the MCP handshake."""
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args: argparse.Namespace, sandbox_manager=None):
         super().__init__(name="scrp-host", daemon=True)
         self.args = args
         self.ready = threading.Event()
@@ -83,6 +90,9 @@ class HostBackend(threading.Thread):
         self.loop = None
         self.broker = None
         self.session = None
+        self.launcher = None
+        self._sandbox_manager = sandbox_manager      # tests pass a fake; otherwise built from --runner-exe
+        self._stop = None
 
     def run(self) -> None:
         import asyncio
@@ -109,29 +119,68 @@ class HostBackend(threading.Thread):
         from host.upload_server import UPLOAD_PATH, start_upload_server
 
         a = self.args
+        sandboxed = self._sandbox_manager is not None or a.runner_exe is not None
         advertise = a.advertise_address
         cert_path, key_path = tls.ensure_dev_cert(a.cert_dir, addresses=[advertise] if advertise else ())
         cert_pem = cert_path.read_text(encoding="ascii")
+        # Kept so the certificate can be swapped once the Sandbox's Host address is known.
+        ssl_contexts = (tls.server_context(cert_path, key_path), tls.server_context(cert_path, key_path))
         registry = SessionRegistry()
         uploads = ObservationUploads()
-        sessions = Sessions(registry, profile=StartupProfile(timeout_s=a.startup_timeout), uploads=uploads)
+        sessions = Sessions(registry, profile=StartupProfile(timeout_s=a.startup_timeout), uploads=uploads,
+                            on_end=lambda ident: self.launcher and self.launcher.session_ended(ident),
+                            on_startup=lambda ident, rep: self.launcher and self.launcher.on_startup(ident, rep))
         identity = (a.session or datetime.now().strftime("SES-%Y%m%d-%H%M%S"), a.runtime, a.generation)
-        upload_server = await start_upload_server(uploads, tls.server_context(cert_path, key_path),
-                                                  a.host, a.upload_port)
+        upload_server = await start_upload_server(uploads, ssl_contexts[1], a.host, a.upload_port)
+        self._stop = asyncio.Event()
         async with upload_server, start_server(registry, cert_path, key_path, run_demo=None, host=a.host,
-                                               port=a.port, sessions=sessions) as server:
+                                               port=a.port, sessions=sessions,
+                                               ssl_context=ssl_contexts[0]) as server:
             port = server.sockets[0].getsockname()[1]
             upload_port = upload_server.sockets[0].getsockname()[1]
-            rec = registry.issue(*identity)
-            write_bootstrap(a.bootstrap_out, rec, cert_pem, port, host=advertise, upload_port=upload_port)
-            self.session = sessions.register(identity)
-            self.broker = Broker(self.session, audit=AuditLog(a.audit_dir / f"{identity[0]}.jsonl"))
-            log.info("Host ready: wss://%s:%d%s, session %s, bootstrap %s (token valid until %s)",
-                     a.host, port, CONTROL_PATH, identity[0], a.bootstrap_out, rec.expires_utc)
+            audit = AuditLog(a.audit_dir / f"{identity[0]}.jsonl")
+
+            if sandboxed:
+                from host.lifecycle import SandboxLauncher
+
+                def publish(address: str, bootstrap_path: Path) -> str:
+                    """The Host part of the launch: certificate for this address, token, bootstrap."""
+                    cert, key = tls.ensure_dev_cert(a.cert_dir, addresses=[address])
+                    for ctx in ssl_contexts:
+                        ctx.load_cert_chain(cert, key)     # new connections get the new certificate
+                    pem = cert.read_text(encoding="ascii")
+                    rec = registry.issue(*identity)        # 5 min from now, not from MCP start
+                    write_bootstrap(bootstrap_path, rec, pem, port, host=address, upload_port=upload_port)
+                    log.info("bootstrap for %s written (token valid until %s)", identity[0], rec.expires_utc)
+                    return pem
+
+                manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root)
+                self.session = sessions.get(identity)      # startup clock starts at task_submit
+                self.launcher = SandboxLauncher(manager, a.runner_exe or Path("sandbox_runner.exe"),
+                                                self.session, publish)
+                self.broker = Broker(self.session, audit=audit, launcher=self.launcher)
+                log.info("Host ready: wss://%s:%d%s, session %s; the Sandbox starts at task_submit (Runner %s)",
+                         a.host, port, CONTROL_PATH, identity[0], a.runner_exe)
+            else:
+                rec = registry.issue(*identity)
+                write_bootstrap(a.bootstrap_out, rec, cert_pem, port, host=advertise, upload_port=upload_port)
+                self.session = sessions.register(identity)
+                self.broker = Broker(self.session, audit=audit)
+                log.info("Host ready: wss://%s:%d%s, session %s, bootstrap %s (token valid until %s)",
+                         a.host, port, CONTROL_PATH, identity[0], a.bootstrap_out, rec.expires_utc)
+                log.info("start the Sandbox now; the Runner must be READY within %.0fs", a.startup_timeout)
             log.info("screenshot uploads on https://%s:%d%s<upload_id>", a.host, upload_port, UPLOAD_PATH)
-            log.info("start the Sandbox now; the Runner must be READY within %.0fs", a.startup_timeout)
             self.ready.set()
-            await asyncio.Future()
+            await self._stop.wait()
+            if self.launcher is not None:
+                await self.launcher.shutdown()
+
+    def shutdown(self, timeout: float = 70.0) -> None:
+        """Codex closed stdin: end the session and stop the Sandbox before the process exits."""
+        if self.loop is None or self._stop is None or not self.is_alive():
+            return
+        self.loop.call_soon_threadsafe(self._stop.set)
+        self.join(timeout)
 
     def call(self, tool: str, arguments: dict) -> dict:
         """Run one tool call on the Host loop and return an MCP CallToolResult."""
@@ -160,6 +209,15 @@ class HostBackend(threading.Thread):
             return {"content": content, "isError": False}
         return {"content": [{"type": "text", "text": json.dumps({"ok": False, **result.error}, ensure_ascii=False)}],
                 "isError": True}
+
+
+def _real_sandbox_manager(root: Path | None):
+    try:
+        from sandbox_manager import SandboxManager
+    except ImportError as e:
+        raise RuntimeError("--runner-exe needs the Sandbox Manager package "
+                           "(pip install -r requirements.txt)") from e
+    return SandboxManager(root, log=lambda msg: log.info("sandbox-manager %s", msg))
 
 
 def _error_result(code: str, message: str, retryable: bool, next_step: str | None) -> dict:
@@ -227,11 +285,24 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--startup-timeout", type=float, default=120.0)
     ap.add_argument("--advertise-address", default=None,
                     help="Host address the Runner connects to (goes into the certificate SAN and bootstrap host)")
-    ap.add_argument("--bootstrap-out", type=Path, default=HOST_DIR / ".bootstrap" / "bootstrap.json")
+    ap.add_argument("--bootstrap-out", type=Path, default=None,
+                    help="where to write bootstrap.json (default host/.bootstrap/bootstrap.json)")
+    ap.add_argument("--runner-exe", type=Path, default=None,
+                    help="start the Windows Sandbox with this Runner at task_submit (Sandbox Manager)")
+    ap.add_argument("--sandbox-root", type=Path, default=None,
+                    help="Sandbox Manager workspace (default %%LOCALAPPDATA%%/SecureCUA/sandbox-manager)")
     ap.add_argument("--cert-dir", type=Path, default=HOST_DIR / ".certs")
     ap.add_argument("--audit-dir", type=Path, default=HOST_DIR / ".audit")
     ap.add_argument("--log-file", type=Path, default=HOST_DIR / ".logs" / "mcp_server.log")
     args = ap.parse_args(argv)
+    if args.runner_exe is not None:
+        # The Sandbox Manager says where the bootstrap goes and which address the Runner dials.
+        if args.advertise_address or args.bootstrap_out:
+            ap.error("--advertise-address and --bootstrap-out come from the Sandbox Manager with --runner-exe")
+        if not args.runner_exe.is_file():
+            ap.error(f"Runner exe not found: {args.runner_exe}")
+    elif args.bootstrap_out is None:
+        args.bootstrap_out = HOST_DIR / ".bootstrap" / "bootstrap.json"
     _setup_logging(args.log_file)
 
     server = McpServer(HostBackend(args), load_tool_list())
@@ -250,6 +321,7 @@ def main(argv: list[str] | None = None) -> None:
             out.write(json.dumps(reply, ensure_ascii=False).encode("utf-8") + b"\n")
             out.flush()
     log.info("stdin closed; MCP server exiting")
+    server.backend.shutdown()
 
 
 if __name__ == "__main__":
