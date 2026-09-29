@@ -301,14 +301,16 @@ def start_server(registry: SessionRegistry, cert_path: Path, key_path: Path,
 
 
 async def main(run_demo: str | None, session: tuple[str, str, int], bootstrap_file: Path,
-               startup_timeout_s: float = STARTUP_TIMEOUT_S) -> None:
-    cert_path, key_path = tls.ensure_dev_cert(CERT_DIR)
+               startup_timeout_s: float = STARTUP_TIMEOUT_S, advertise: str | None = None) -> None:
+    # advertise: the Host address the Runner connects to (Sandbox Manager's start()).
+    # It goes into the certificate SAN and the bootstrap file.
+    cert_path, key_path = tls.ensure_dev_cert(CERT_DIR, addresses=[advertise] if advertise else ())
     cert_pem = cert_path.read_text(encoding="ascii")
     registry = SessionRegistry()
     uploads = ObservationUploads()
     sessions = Sessions(registry, profile=StartupProfile(timeout_s=startup_timeout_s), uploads=uploads)
     rec = registry.issue(*session)
-    write_bootstrap(bootstrap_file, rec, cert_pem, PORT, upload_port=UPLOAD_PORT)
+    write_bootstrap(bootstrap_file, rec, cert_pem, PORT, host=advertise, upload_port=UPLOAD_PORT)
     # The token itself is never logged.
     log.info("session %s / %s / gen %s registered; token valid until %s, single use",
              *rec.identity(), rec.expires_utc)
@@ -336,10 +338,12 @@ if __name__ == "__main__":
                     help="where to write the Runner's bootstrap config")
     ap.add_argument("--startup-timeout", type=float, default=STARTUP_TIMEOUT_S,
                     help="seconds from registration to READY before the session fails (default 120)")
+    ap.add_argument("--advertise-address", default=None,
+                    help="Host address the Runner connects to (goes into the certificate SAN and bootstrap host)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-5s %(message)s")
     try:
         asyncio.run(main(None if args.no_demo else args.demo, (args.session, args.runtime, args.generation),
-                         args.bootstrap_out, args.startup_timeout))
+                         args.bootstrap_out, args.startup_timeout, args.advertise_address))
     except KeyboardInterrupt:
         pass

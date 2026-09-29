@@ -109,7 +109,8 @@ class HostBackend(threading.Thread):
         from host.upload_server import UPLOAD_PATH, start_upload_server
 
         a = self.args
-        cert_path, key_path = tls.ensure_dev_cert(a.cert_dir)
+        advertise = a.advertise_address
+        cert_path, key_path = tls.ensure_dev_cert(a.cert_dir, addresses=[advertise] if advertise else ())
         cert_pem = cert_path.read_text(encoding="ascii")
         registry = SessionRegistry()
         uploads = ObservationUploads()
@@ -122,7 +123,7 @@ class HostBackend(threading.Thread):
             port = server.sockets[0].getsockname()[1]
             upload_port = upload_server.sockets[0].getsockname()[1]
             rec = registry.issue(*identity)
-            write_bootstrap(a.bootstrap_out, rec, cert_pem, port, upload_port=upload_port)
+            write_bootstrap(a.bootstrap_out, rec, cert_pem, port, host=advertise, upload_port=upload_port)
             self.session = sessions.register(identity)
             self.broker = Broker(self.session, audit=AuditLog(a.audit_dir / f"{identity[0]}.jsonl"))
             log.info("Host ready: wss://%s:%d%s, session %s, bootstrap %s (token valid until %s)",
@@ -222,8 +223,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--session", default=None, help="session id (default: SES-<date>-<time>)")
     ap.add_argument("--runtime", default="RT-SBX-001")
     ap.add_argument("--generation", type=int, default=1)
-    # The bootstrap token lives 5 minutes, so waiting longer for the Runner gains nothing.
-    ap.add_argument("--startup-timeout", type=float, default=300.0)
+    # Protocol doc §7: boot + Startup Verification within 120 s (same default as sender.py).
+    ap.add_argument("--startup-timeout", type=float, default=120.0)
+    ap.add_argument("--advertise-address", default=None,
+                    help="Host address the Runner connects to (goes into the certificate SAN and bootstrap host)")
     ap.add_argument("--bootstrap-out", type=Path, default=HOST_DIR / ".bootstrap" / "bootstrap.json")
     ap.add_argument("--cert-dir", type=Path, default=HOST_DIR / ".certs")
     ap.add_argument("--audit-dir", type=Path, default=HOST_DIR / ".audit")
