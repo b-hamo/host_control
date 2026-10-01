@@ -250,6 +250,57 @@ def test_only_the_first_task_submit_starts_a_sandbox(tmp_path):
     assert fake.names().count("prepare") == 1 and fake.names().count("start") == 1
 
 
+def test_a_session_ending_right_after_ready_never_overlaps_mark_ready_and_stop(tmp_path):
+    """sandbox_manager #3: mark_ready() and stop() run in worker threads; they must not overlap."""
+    import threading
+
+    class SlowReady(FakeManager):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.busy, self.overlap, self.guard = 0, False, threading.Lock()
+
+        def _enter(self):
+            with self.guard:
+                self.busy += 1
+                self.overlap |= self.busy > 1
+
+        def _leave(self):
+            with self.guard:
+                self.busy -= 1
+
+        def mark_ready(self, s):
+            self._enter()
+            time.sleep(1.0)                                  # long enough for the session to end meanwhile
+            try:
+                super().mark_ready(s)
+            finally:
+                self._leave()
+
+        def stop(self, s, reason, *, emergency=False):
+            self._enter()
+            try:
+                return super().stop(s, reason, emergency=emergency)
+            finally:
+                self._leave()
+
+    fake = SlowReady(tmp_path / "sbx")
+
+    async def body():
+        host = Host(tmp_path, fake)
+        await host.call("task_submit", {"goal": "g"})
+        r, _, serving = await guest(*paths(tmp_path / "sbx"))
+        await host.wait_state("READY")
+        await host.call("session_stop", {"reason": "TASK_COMPLETE"})   # while mark_ready is still running
+        await serving
+        await asyncio.to_thread(host.backend.shutdown)
+        return host.backend.launcher.status()
+
+    status = run(body())
+    assert not fake.overlap
+    assert fake.names().index("mark_ready") < fake.names().index("stop")
+    assert status["state"] == "STOPPED"                          # not overwritten back to READY
+
+
 def test_before_task_submit_nothing_is_started_and_exit_is_quiet(tmp_path):
     fake = FakeManager(tmp_path / "sbx")
     host = Host(tmp_path, fake)

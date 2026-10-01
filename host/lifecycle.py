@@ -62,6 +62,7 @@ class SandboxLauncher:
         self.sandbox = None                          # SandboxSession once prepared
         self.cleanup_result: dict | None = None
         self._launch: asyncio.Task | None = None
+        self._ready: asyncio.Task | None = None
         self._finish: asyncio.Task | None = None
 
     def status(self) -> dict:
@@ -107,8 +108,8 @@ class SandboxLauncher:
     # -- READY -----------------------------------------------------------------
     def on_startup(self, identity: tuple[str, str, int], report: StartupReport) -> None:
         """RuntimeSession's on_startup. Failures arrive through session_ended instead."""
-        if report.ok and self._launch is not None:
-            asyncio.get_running_loop().create_task(self._mark_ready())
+        if report.ok and self._launch is not None and self._ready is None:
+            self._ready = asyncio.get_running_loop().create_task(self._mark_ready())
 
     async def _mark_ready(self) -> None:
         await asyncio.gather(self._launch, return_exceptions=True)   # publish_bootstrap has returned
@@ -131,6 +132,9 @@ class SandboxLauncher:
         if self._launch is not None:
             # Never call stop() while start() is still running in its thread.
             await asyncio.gather(self._launch, return_exceptions=True)
+        if self._ready is not None:
+            # Nor while mark_ready() is: a session can end right after READY (sandbox_manager #3).
+            await asyncio.gather(self._ready, return_exceptions=True)
         if self.sandbox is None:
             return
         reason, emergency = self._stop_reason()
