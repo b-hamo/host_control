@@ -64,6 +64,7 @@ class FakeManager:
 
     def mark_ready(self, s):
         self.calls.append(("mark_ready",))
+        s.ready_path.unlink(missing_ok=True)                # like the real one: marker and token file
         s.bootstrap_path.unlink()
 
     def stop(self, s, reason, *, emergency=False):

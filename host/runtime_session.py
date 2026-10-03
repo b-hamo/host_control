@@ -226,6 +226,18 @@ class RuntimeSession:
         if self.uploads is not None:
             self.uploads.purge(self.identity)
 
+    def inherit(self, old: "RuntimeSession") -> list[str]:
+        """Continue a previous generation of the same session after its Runner was restarted.
+
+        Task and action ids keep counting (never reused). Actions that had no final result
+        stay UNKNOWN: the new Runner never saw them and nothing is re-sent. The last
+        observation is not carried over; the screen must be looked at again.
+        Returns the unresolved action ids.
+        """
+        self._task_seq, self._action_seq = old._task_seq, old._action_seq
+        self.actions = {a: ("UNKNOWN" if s in UNRESOLVED else s) for a, s in old.actions.items()}
+        return [a for a, s in self.actions.items() if s == "UNKNOWN"]
+
     # -- ids (per session, never reused across connections) -------------------
     def next_task(self) -> str:
         self._task_seq += 1

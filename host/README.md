@@ -50,7 +50,7 @@ Sandbox 안 Runner
 | 파일 | 하는 일 | WBS |
 |---|---|---|
 | `runtime_session.py` | 연결이 끊겨도 이어지는 세션. 5초마다 HEARTBEAT, 연속 2회 누락 DEGRADED · 3회 UNRESPONSIVE. 끊길 때 결과를 못 받은 Action은 재전송하지 않고 재접속 후 STATE_REQUEST로 확인. task_id·action_id 발급, 마지막 화면과 받은 시각 보관, `status()`로 상태 조회 | 4.4, 4.5 |
-| `lifecycle.py` | Sandbox 켜고 끄기 (Lifecycle 담당의 Sandbox Manager 호출). `task_submit` 때 백그라운드로 켜기 시작 → Sandbox가 보는 Host 주소로 인증서·bootstrap 작성 → READY면 token 파일 삭제 → 세션이 끝나면(정상·실패·Codex 종료) 끄고 치운다. `mcp_server.py --runner-exe`일 때만 쓴다 | 5.9 |
+| `lifecycle.py` | Sandbox 켜고 끄기 (Lifecycle 담당의 Sandbox Manager 호출). `task_submit` 때 백그라운드로 켜기 시작 → Sandbox가 보는 Host 주소로 인증서·bootstrap 작성 → READY면 token 파일 삭제 → 세션이 끝나면(정상·실패·Codex 종료) 끄고 치운다. Runner가 응답이 없으면 같은 Sandbox에서 Runner만 다시 켜거나 Sandbox를 새로 켠다(다음 세대). `mcp_server.py --runner-exe`일 때만 쓴다 | 5.9 |
 | `startup.py` | Startup Verification. Runner가 "준비됐다"고 해도 Host가 7가지(버전·Capability·Monitor·시계 / Worker 생존·첫 캡처·Heartbeat)를 확인한 뒤에만 READY. 등록 후 120초 안에 안 되면 실패 | 4.5 |
 
 ## ④ Sandbox와 통신하는 층
@@ -115,6 +115,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_broker.py` | 검사별 거부, 정책, 빈도 제한, 감사 로그 마스킹, 도구 규격 ↔ 프로토콜 교차 검사 |
 | `tests/test_mcp_server.py` | 실제 자식 프로세스로 기동, 도구 목록 속도, Codex → Runner 전 구간, 스크린샷이 MCP image로 전달 |
 | `tests/test_observation_upload.py` | upload_id(1회용·만료), PNG 검사, HTTPS 수신 거부 코드, 해시·크기 대조, 조작된 업로드 차단, 세션 종료 시 삭제 |
+| `tests/test_sandbox_recovery.py` | Runner만 다시 켜기, 창 닫힘은 다시 안 켬, 먹통이면 Sandbox 새로 켜기, 실패 시 넘어가기·종료, 옛 세대 token 거부, 실제 Sandbox Manager로 재시작 확인 |
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
 | `tests/mini_runner.py` | 테스트용 최소 Runner (테스트가 아니라 도구) |
 
