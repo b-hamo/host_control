@@ -264,7 +264,10 @@ def test_replayed_nonce_is_rejected(certs):
             again = me.error("INTERNAL", "replay probe")
             again["nonce"] = first["nonce"]
             await ws.send(json.dumps(again))
-            err = parse_and_validate((await ws.recv()).encode())
+            while True:                                  # skip the Host's startup checks
+                err = parse_and_validate((await ws.recv()).encode())
+                if err["type"] == "ERROR":
+                    break
             with pytest.raises(ConnectionClosed) as closed:
                 await ws.recv()
             return err, closed.value.rcvd.code

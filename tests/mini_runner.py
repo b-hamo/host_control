@@ -20,25 +20,35 @@ from scrp.envelope import Endpoint, new_nonce
 from scrp.validate import parse_and_validate
 
 
-def hello_msg(me: Endpoint) -> dict:
+DEFAULT_CAPABILITIES = ["gui.observe", "gui.input"]
+DEFAULT_COVERAGE = {"process": False, "file": True, "network": False, "script": False, "registry": False}
+
+
+def hello_msg(me: Endpoint, capabilities=None, coverage=None) -> dict:
     return me.envelope("HELLO", {
         "supported_versions": ["1.0"],
         "os": {"family": "windows", "build": "26200.9457"},
         "runner_version": "mini-0.1.0",
-        "capabilities": ["gui.observe", "gui.input"],
-        "monitoring_coverage": {"process": False, "file": True, "network": False, "script": False, "registry": False},
+        "capabilities": DEFAULT_CAPABILITIES if capabilities is None else capabilities,
+        "monitoring_coverage": DEFAULT_COVERAGE if coverage is None else coverage,
         "client_nonce": new_nonce(),
     })
 
 
 class MiniRunner:
     def __init__(self, port: int, cert_pem: str, identity: tuple[str, str, int], *,
-                 answer_heartbeats: bool = True, drop_after_first_ack: bool = False):
+                 answer_heartbeats: bool = True, drop_after_first_ack: bool = False,
+                 worker_alive: bool = True, answer_observe: bool = True,
+                 capabilities: list[str] | None = None, coverage: dict | None = None):
         self.url = f"wss://127.0.0.1:{port}{CONTROL_PATH}"
         self.cert_pem = cert_pem
         self.identity = identity
         self.answer_heartbeats = answer_heartbeats
         self.drop_after_first_ack = drop_after_first_ack
+        self.worker_alive = worker_alive
+        self.answer_observe = answer_observe
+        self.capabilities = capabilities
+        self.coverage = coverage
         self.executed: list[str] = []          # action_ids, in order
         self.state_requests: list[str | None] = []
         self.heartbeats = 0
@@ -47,10 +57,11 @@ class MiniRunner:
         self.me: Endpoint | None = None
 
     async def connect(self, token: str) -> dict:
+        """HELLO → HELLO_ACK. Raises ConnectionClosed if the Host refuses at HELLO."""
         self.ws = await connect(self.url, ssl=tls.client_context(self.cert_pem),
                                 additional_headers={"Authorization": f"Bearer {token}"}, open_timeout=5)
         self.me = Endpoint(*self.identity)
-        hello = hello_msg(self.me)
+        hello = hello_msg(self.me, self.capabilities, self.coverage)
         await self.ws.send(json.dumps(hello))
         ack = parse_and_validate((await asyncio.wait_for(self.ws.recv(), 5)).encode())
         assert ack["type"] == "HELLO_ACK", ack
@@ -73,6 +84,8 @@ class MiniRunner:
                         await self._send(self.me.reply(msg, "ALIVE", {
                             "runtime_state": "READY", "worker_alive": True, "queue_depth": 0, "uptime_ms": 1}))
                 elif t == "OBSERVE":
+                    if not self.answer_observe:
+                        continue
                     await self._send(self.me.reply(msg, "OBSERVE_RESULT", {
                         "observation_id": f"OBS-{msg['action_id']}", "width": 1280, "height": 720,
                         "captured_at": msg["timestamp"], "sha256": "0" * 64,
@@ -91,7 +104,7 @@ class MiniRunner:
                     target = msg["payload"]["action_id"]
                     self.state_requests.append(target)
                     await self._send(self.me.reply(msg, "STATE_RESULT", {
-                        "runtime_state": "READY", "worker_alive": True, "queue_depth": 0,
+                        "runtime_state": "READY", "worker_alive": self.worker_alive, "queue_depth": 0,
                         "action_state": {"action_id": target, "status": "SUCCESS"}
                         if target in self.executed else None}))
                 elif t == "TERMINATE":

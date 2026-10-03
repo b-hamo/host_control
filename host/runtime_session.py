@@ -13,6 +13,11 @@ Rules from protocol doc §7 that this enforces:
   session asks STATE_REQUEST for every action without a final result and
   takes a new observation; only then does it accept new actions.
 - While disconnected, or before that resync, new actions are refused.
+
+And from §4 step 6 / spec J-4 (WBS 4.5, host/startup.py): the session only
+becomes READY after the Host's own Startup Verification passes, within
+120 s of registration. A failed or timed-out startup terminates the session
+and revokes its tokens; the Lifecycle side has to create a new generation.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from enum import Enum
 from typing import Callable
 
 from host.connection import Connection
+from host.startup import StartupProfile, StartupReport, check_hello, verify_runtime
 from scrp.validate import ProtocolError
 
 log = logging.getLogger("host-sender")
@@ -96,8 +102,14 @@ class RuntimeSession:
                  alive_timeout_s: float = ALIVE_TIMEOUT_S,
                  reconnect_grace_s: float = RECONNECT_GRACE_S,
                  on_health: HealthCallback | None = None,
-                 on_terminated: Callable[[tuple[str, str, int]], None] | None = None):
+                 on_terminated: Callable[[tuple[str, str, int]], None] | None = None,
+                 profile: StartupProfile | None = None,
+                 on_startup: Callable[[tuple[str, str, int], StartupReport], None] | None = None):
         self.identity = identity
+        self.profile = profile or StartupProfile()
+        self.startup = StartupReport()
+        self.verified = False                  # Startup Verification passed at least once
+        self.end_reason: str | None = None
         self.conn: Connection | None = None
         self.connections = 0
         self.ready = asyncio.Event()           # connected and resynced: actions allowed
@@ -113,7 +125,88 @@ class RuntimeSession:
         self._task_seq = 0
         self._action_seq = 0
         self._grace: asyncio.Task | None = None
+        self._watchdog: asyncio.Task | None = None
+        self._on_startup = on_startup
         self.demo_task: asyncio.Task | None = None
+
+    # -- state (spec D-2 Runtime states) ----------------------------------------
+    @property
+    def runtime_state(self) -> str:
+        if self.terminated:
+            return "TERMINATED"
+        if not self.verified:
+            return "PREPARING"
+        if self.health.state is not Health.OK:
+            return self.health.state.value
+        if self.conn is None:
+            return "DEGRADED"                 # verified, waiting for a reconnect
+        if any(v == "SENT" for v in self.actions.values()):
+            return "RUNNING"
+        return "READY"
+
+    def status(self) -> dict:
+        """Snapshot for the Runtime Manager / Dashboard."""
+        return {
+            "session_id": self.identity[0], "runtime_id": self.identity[1], "generation": self.identity[2],
+            "state": self.runtime_state,
+            "health": self.health.state.value,
+            "missed_heartbeats": self.health.misses,
+            "connected": not self.disconnected(),
+            "connection_id": self.conn.id if self.conn else None,
+            "connections": self.connections,
+            "startup": self.startup.as_dict(),
+            "end_reason": self.end_reason,
+            "actions": dict(self.actions),
+        }
+
+    # -- startup (WBS 4.5) -----------------------------------------------------
+    def start_watchdog(self) -> None:
+        """Fail the session if it is not READY within profile.timeout_s of now."""
+        self._watchdog = asyncio.get_running_loop().create_task(self._startup_deadline())
+
+    async def _startup_deadline(self) -> None:
+        await asyncio.sleep(self.profile.timeout_s)
+        if not self.verified and not self.terminated:
+            why = "runner never connected" if self.connections == 0 else "verification did not finish"
+            await self.fail_startup(f"timeout after {self.profile.timeout_s:.0f}s: {why}")
+
+    async def admit_hello(self, hello: dict) -> None:
+        """HELLO checks on every connection, before any credential is handed out.
+
+        Failing them ends the session either way: at startup it never became
+        trustworthy, and a Runner that reconnects with less than it started
+        with (e.g. a monitor gone) is not the Runtime we verified.
+        """
+        report = self.startup if not self.verified else StartupReport()
+        if check_hello(hello, self.profile, report):
+            return
+        if not self.verified:
+            await self.fail_startup(report.reason)
+        else:
+            log.error("RECONNECT REJECTED %s: %s", self.identity[0], report.reason)
+            await self._end(f"RECONNECT_REJECTED: {report.reason}")
+        raise ProtocolError("RUNTIME_START_FAILED", report.reason)
+
+    async def fail_startup(self, reason: str) -> None:
+        if self.terminated:
+            return
+        self.startup.finish(False, reason)
+        log.error("STARTUP FAILED %s: %s", self.identity[0], self.startup.reason)
+        await self._end(f"RUNTIME_START_FAILED: {self.startup.reason}")
+        if self._on_startup:
+            self._on_startup(self.identity, self.startup)
+
+    async def _end(self, reason: str) -> None:
+        self.terminated = True
+        self.end_reason = reason
+        self.ready.clear()
+        for t in (self._watchdog, self._grace):
+            if t and t is not asyncio.current_task():
+                t.cancel()
+        if self._on_terminated:
+            self._on_terminated(self.identity)       # revoke every token of this session
+        if self.conn is not None and not self.conn.closed.is_set():
+            await self.conn.ws.close(code=1008, reason="RUNTIME_START_FAILED")
 
     # -- ids (per session, never reused across connections) -------------------
     def next_task(self) -> str:
@@ -136,7 +229,20 @@ class RuntimeSession:
         if old is not None and not old.closed.is_set():
             log.warning("connection %s replaced by %s", old.id, conn.id)
             await old.ws.close(code=REPLACED_CLOSE_CODE, reason="REPLACED")
-        if self.connections > 1:
+        if not self.verified:
+            log.info("STARTUP verifying %s on %s ...", self.identity[0], conn.id)
+            if not await verify_runtime(self, conn, self.profile, self.startup):
+                await self.fail_startup(self.startup.reason)
+                raise ProtocolError("RUNTIME_START_FAILED", self.startup.reason)
+            self.startup.finish(True)
+            self.verified = True
+            if self._watchdog:
+                self._watchdog.cancel()
+            log.info("STARTUP OK %s in %.1fs: %s", self.identity[0], self.startup.as_dict()["elapsed_s"],
+                     ", ".join(f"{c.name}={c.detail}" for c in self.startup.checks))
+            if self._on_startup:
+                self._on_startup(self.identity, self.startup)
+        elif self.connections > 1:
             await self.resync(conn)
         if self.conn is conn and not conn.closed.is_set():
             if self.connections > 1:
@@ -217,10 +323,10 @@ class RuntimeSession:
                 else:
                     return                         # connection gone; detach handles it
 
-    async def _heartbeat(self, conn: Connection) -> dict:
+    async def _heartbeat(self, conn: Connection, timeout: float | None = None) -> dict:
         lease_s = self.heartbeat_interval_s * UNRESPONSIVE_AFTER
         msg = conn.me.envelope("HEARTBEAT", {"lease_expires_at": _utc_in(lease_s)})
-        alive = await conn.request(msg, ("ALIVE",), timeout=self.alive_timeout_s)
+        alive = await conn.request(msg, ("ALIVE",), timeout=timeout or self.alive_timeout_s)
         self.health.alive()
         log.info("  alive: %s queue=%s", alive["payload"]["runtime_state"], alive["payload"]["queue_depth"])
         return alive
@@ -234,12 +340,12 @@ class RuntimeSession:
             raise
 
     # -- operations (what the Broker will call) -------------------------------
-    async def _observe(self, conn: Connection) -> dict:
+    async def _observe(self, conn: Connection, timeout: float = 5.0) -> dict:
         upload_id = uuid.uuid4().hex + uuid.uuid4().hex[:8]   # one-time, >=16 chars
         msg = conn.me.envelope("OBSERVE", {
             "display_id": "primary", "capture_format": "png", "upload_id": upload_id,
         }, task_id=self.next_task(), action_id=self.next_action())
-        result = await conn.request(msg, ("OBSERVE_RESULT",), timeout=5.0)
+        result = await conn.request(msg, ("OBSERVE_RESULT",), timeout=timeout)
         p = result["payload"]
         self.last_observation = p
         log.info("  observation %s %sx%s sha256=%s…", p["observation_id"], p["width"], p["height"], p["sha256"][:12])
@@ -271,9 +377,9 @@ class RuntimeSession:
         log.info("  %s %s -> %s %s", action_id, operation, result["status"], result["payload"]["result"])
         return result
 
-    async def _state(self, conn: Connection, action_id: str | None) -> dict:
+    async def _state(self, conn: Connection, action_id: str | None, timeout: float = 3.0) -> dict:
         msg = conn.me.envelope("STATE_REQUEST", {"action_id": action_id})
-        state = await conn.request(msg, ("STATE_RESULT",), timeout=3.0)
+        state = await conn.request(msg, ("STATE_RESULT",), timeout=timeout)
         log.info("  state: %s action=%s", state["payload"]["runtime_state"], state["payload"]["action_state"])
         return state
 
@@ -284,6 +390,7 @@ class RuntimeSession:
         conn = self._live()
         msg = conn.me.envelope("TERMINATE", {"reason": reason, "grace_ms": 1000})
         self.terminated = True                     # no reconnects from here on, even if the reply is lost
+        self.end_reason = reason
         self.ready.clear()
         if self._on_terminated:
             self._on_terminated(self.identity)

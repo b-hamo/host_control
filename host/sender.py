@@ -1,4 +1,4 @@
-"""Host-side sender for the SCRP control channel (WBS 3.4, 4.4, 4.6).
+"""Host-side sender for the SCRP control channel (WBS 3.4, 4.4, 4.5, 4.6).
 
 The Runner connects to us (reverse direction, protocol doc §3); we answer HELLO
 with HELLO_ACK and then drive the session: OBSERVE, ACTION_REQUEST, HEARTBEAT,
@@ -18,6 +18,12 @@ a fresh one-time reconnect token. If the connection drops, the Runner comes
 back with it and the same RuntimeSession continues on the new connection,
 after asking STATE_REQUEST about anything left unfinished. HEARTBEAT runs
 every 5 s while connected. See host/runtime_session.py.
+
+Startup Verification (protocol doc §4 step 6, WBS 4.5): a Runner that has
+connected is not READY yet. The Host checks its HELLO (version, capabilities,
+monitors, clock) and then asks it to prove it works (Worker state, a first
+capture, a heartbeat). Only then do actions flow. If that does not happen
+within 120 s of registration the session fails. See host/startup.py.
 
 Run:
   python host/sender.py            # wait for a Runner, run the demo sequence
@@ -46,6 +52,7 @@ from host.connection import Connection
 from host.runtime_session import (ALIVE_TIMEOUT_S, HEARTBEAT_INTERVAL_S, RECONNECT_GRACE_S,
                                   RuntimeSession)
 from host.session_registry import AuthError, SessionRegistry, bearer_token
+from host.startup import STARTUP_TIMEOUT_S, StartupProfile
 from scrp.validate import ProtocolError, parse_and_validate
 
 log = logging.getLogger("host-sender")
@@ -120,6 +127,12 @@ class Sessions:
         self._kwargs = session_kwargs
         self._by_id: dict[tuple[str, str, int], RuntimeSession] = {}
 
+    def register(self, identity: tuple[str, str, int]) -> RuntimeSession:
+        """Create the session at registration and start its startup clock."""
+        session = self.get(identity)
+        session.start_watchdog()
+        return session
+
     def get(self, identity: tuple[str, str, int]) -> RuntimeSession:
         if identity not in self._by_id:
             self._by_id[identity] = RuntimeSession(
@@ -171,6 +184,7 @@ async def handle(ws, run_demo: bool, sessions: Sessions, limits: dict) -> None:
     session = sessions.get(rec.identity())
     if session.terminated:
         raise ProtocolError("SESSION_TERMINATED", f"{rec.session_id} is terminated")
+    await session.admit_hello(hello)                  # no credentials for a Runner that fails this
     log.info("RECV %-16s runner=%s caps=%s session=%s (%s token accepted)", "HELLO",
              hello["payload"]["runner_version"], hello["payload"]["capabilities"], rec.session_id, rec.kind)
 
@@ -188,6 +202,8 @@ async def handle(ws, run_demo: bool, sessions: Sessions, limits: dict) -> None:
     }))
     log.info("CONNECTION %s up (connection #%d of %s) granted=%s",
              conn.id, session.connections + 1, rec.session_id, granted)
+    if not session.verified:
+        log.info("Runner says it is ready; the Host verifies before READY")
 
     reader = asyncio.create_task(conn.reader())
     heartbeat = None
@@ -224,11 +240,13 @@ def start_server(registry: SessionRegistry, cert_path: Path, key_path: Path,
                  sessions: Sessions | None = None,
                  heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S,
                  alive_timeout_s: float = ALIVE_TIMEOUT_S,
-                 reconnect_grace_s: float = RECONNECT_GRACE_S):
+                 reconnect_grace_s: float = RECONNECT_GRACE_S,
+                 profile: StartupProfile | None = None):
     """The wss:// server. There is deliberately no plaintext variant."""
     if sessions is None:
         sessions = Sessions(registry, heartbeat_interval_s=heartbeat_interval_s,
-                            alive_timeout_s=alive_timeout_s, reconnect_grace_s=reconnect_grace_s)
+                            alive_timeout_s=alive_timeout_s, reconnect_grace_s=reconnect_grace_s,
+                            profile=profile)
     limits = {
         "max_message_bytes": 65536,
         "max_queue_depth": 32,
@@ -241,10 +259,12 @@ def start_server(registry: SessionRegistry, cert_path: Path, key_path: Path,
                  max_size=64 * 1024)
 
 
-async def main(run_demo: bool, session: tuple[str, str, int], bootstrap_file: Path) -> None:
+async def main(run_demo: bool, session: tuple[str, str, int], bootstrap_file: Path,
+               startup_timeout_s: float = STARTUP_TIMEOUT_S) -> None:
     cert_path, key_path = tls.ensure_dev_cert(CERT_DIR)
     cert_pem = cert_path.read_text(encoding="ascii")
     registry = SessionRegistry()
+    sessions = Sessions(registry, profile=StartupProfile(timeout_s=startup_timeout_s))
     rec = registry.issue(*session)
     write_bootstrap(bootstrap_file, rec, cert_pem, PORT)
     # The token itself is never logged.
@@ -253,23 +273,27 @@ async def main(run_demo: bool, session: tuple[str, str, int], bootstrap_file: Pa
     log.info("bootstrap written to %s", bootstrap_file)
     log.info("host certificate sha256=%s", tls.fingerprint(cert_pem))
 
-    async with start_server(registry, cert_path, key_path, run_demo):
+    async with start_server(registry, cert_path, key_path, run_demo, sessions=sessions):
         log.info("listening on wss://%s:%d%s", HOST, PORT, CONTROL_PATH)
+        sessions.register(rec.identity())
+        log.info("waiting for the Runner; READY must be reached within %.0fs", startup_timeout_s)
         await asyncio.Future()
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="SCRP Host sender (WBS 3.4, 4.4, 4.6)")
+    ap = argparse.ArgumentParser(description="SCRP Host sender (WBS 3.4, 4.4, 4.5, 4.6)")
     ap.add_argument("--no-demo", action="store_true", help="handshake and heartbeats only")
     ap.add_argument("--session", default="SES-001")
     ap.add_argument("--runtime", default="RT-SBX-001")
     ap.add_argument("--generation", type=int, default=1)
     ap.add_argument("--bootstrap-out", type=Path, default=BOOTSTRAP_FILE,
                     help="where to write the Runner's bootstrap config")
+    ap.add_argument("--startup-timeout", type=float, default=STARTUP_TIMEOUT_S,
+                    help="seconds from registration to READY before the session fails (default 120)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-5s %(message)s")
     try:
         asyncio.run(main(not args.no_demo, (args.session, args.runtime, args.generation),
-                         args.bootstrap_out))
+                         args.bootstrap_out, args.startup_timeout))
     except KeyboardInterrupt:
         pass
