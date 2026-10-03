@@ -11,7 +11,7 @@
     "selected_version": { "const": "1.0" },
     "allowed_capabilities": {
       "type": "array", "uniqueItems": true, "maxItems": 32,
-      "items": { "enum": ["gui.observe", "gui.input", "ui.automation", "filesystem.workspace", "network.internet"] }
+      "items": { "enum": ["gui.observe", "gui.input", "ui.automation", "filesystem.workspace", "network.internet", "artifact.export.v1"] }
     },
     "limits": {
       "type": "object", "additionalProperties": false,

@@ -56,7 +56,7 @@ OPERATIONS = {
     "computer_click_element": "ui.click_element",
 }
 COORDINATE_TOOLS = {"computer_move", "computer_click", "computer_scroll"}
-RUNTIME_TOOLS = {"computer_observe", *OPERATIONS}          # need a READY runtime
+RUNTIME_TOOLS = {"computer_observe", "artifact_export", *OPERATIONS}   # need a READY runtime
 
 # Rate limits per session (protocol doc §7: input 5/s, observe 2/s)
 RATE_LIMITS = {"observe": 2.0, "input": 5.0, "control": 5.0}
@@ -73,6 +73,7 @@ ERROR_HINTS = {
     "STALE_OBSERVATION": (True, "computer_observe"),
     "RUNTIME_UNAVAILABLE": (True, "runtime_get_state"),
     "RUNTIME_START_FAILED": (False, "RECLASSIFY_RUNTIME"),
+    "ARTIFACT_BUSY": (True, "artifact_list"),
     "ACTION_FAILED": (False, "computer_observe"),
     "ACTION_TIMEOUT": (False, "runtime_get_state"),          # never repeat the input blindly
     "SECURITY_BLOCKED": (False, "session_stop"),
@@ -161,13 +162,15 @@ class Broker:
     def __init__(self, session: RuntimeSession, catalog: ToolCatalog | None = None, *,
                  policy: Policy | None = None, audit: AuditLog | None = None,
                  approver: Approver | None = None, rates: dict[str, float] | None = None,
-                 clock=time.monotonic, launcher=None):
+                 clock=time.monotonic, launcher=None, artifacts=None):
         # B-3: bound to one session. Only a new generation of that same session replaces it
         # (switch_session), when the Runner or the Sandbox had to be restarted.
         self.session = session
         # host/lifecycle.py SandboxLauncher: task_submit starts the Sandbox. None: the
         # Runtime is started some other way (by hand, run_demo.ps1).
         self.launcher = launcher
+        # host/artifacts.py ArtifactBroker (artifact-export-v1 sessions). None: no artifact tools.
+        self.artifacts = artifacts
         self.catalog = catalog or ToolCatalog()
         self.policy = policy or Policy()
         self.audit = audit or AuditLog()
@@ -212,7 +215,10 @@ class Broker:
             self._check_session(tool)
             self.limiter.take(category(tool))
             decision = self.policy.decide(tool, args)
-            await self._enforce(tool, args, decision)
+            shown: dict = {}
+            if tool == "artifact_export":
+                decision, shown = self._artifact_decision(args, decision)
+            await self._enforce(tool, args, decision, shown)
             if tool in OPERATIONS or tool == "computer_observe":
                 action_id = self.session.next_action()
             self._pending_image = None
@@ -266,7 +272,22 @@ class Broker:
             raise BrokerError("RUNTIME_UNAVAILABLE",
                               f"runtime is {s.runtime_state}, not READY" + (f"; {hint}" if hint else ""))
 
-    async def _enforce(self, tool: str, args: dict, decision: Decision) -> None:
+    def _artifact_decision(self, args: dict, decision: Decision) -> tuple[Decision, dict]:
+        """Before any approval prompt: does the artifact exist, and does this call start a new
+        transfer? A repeat call for one already requested or finished just reports its state
+        (idempotent) and asks nobody."""
+        from host.artifacts import ArtifactError
+        if self.artifacts is None:
+            raise BrokerError("POLICY_DENIED", "artifact export is not enabled for this session")
+        try:
+            art = self.artifacts.precheck(self.session, args["artifact_id"])
+        except ArtifactError as e:
+            raise BrokerError(e.code, e.message, next_step=e.next_step) from None
+        if not self.artifacts.needs_new_attempt(art):
+            return Decision("ALLOW", "P-ARTIFACT-EXISTING", "already requested; returns its state"), {}
+        return decision, {"path": art.relative_path, "artifact_id": art.artifact_id}
+
+    async def _enforce(self, tool: str, args: dict, decision: Decision, shown: dict | None = None) -> None:
         if decision.result == "DENY":
             raise BrokerError("POLICY_DENIED", decision.reason, rule_id=decision.rule_id)
         if decision.result == "REQUIRE_APPROVAL":
@@ -274,7 +295,7 @@ class Broker:
                 raise BrokerError("POLICY_DENIED", f"{decision.reason}; no approver is configured",
                                   rule_id=decision.rule_id, next_step="ask_user")
             summary = {"tool": tool, "arguments": mask(tool, args), "session_id": self.session.identity[0],
-                       "runtime_id": self.session.identity[1], "reason": decision.reason}
+                       "runtime_id": self.session.identity[1], "reason": decision.reason, **(shown or {})}
             if not await self.approver(summary):
                 raise BrokerError("POLICY_DENIED", "the user did not approve this action", rule_id=decision.rule_id)
 
@@ -348,6 +369,16 @@ class Broker:
                 s.actions[wanted] = st["action_state"]["status"]
             return {**host_view, "runtime_state": st["runtime_state"], "worker_alive": st["worker_alive"],
                     "queue_depth": st["queue_depth"], "action": st["action_state"], "source": "runtime"}
+        if tool in ("artifact_list", "artifact_export"):
+            from host.artifacts import ArtifactError
+            if self.artifacts is None:
+                raise BrokerError("POLICY_DENIED", "artifact export is not enabled for this session")
+            if tool == "artifact_list":
+                return self.artifacts.list(s, args["status"], args["limit"], args["cursor"])
+            try:
+                return await self.artifacts.export(s, args["artifact_id"])
+            except ArtifactError as e:
+                raise BrokerError(e.code, e.message, next_step=e.next_step) from None
         if tool == "session_stop":
             if s.ready.is_set():
                 await s.terminate(STOP_REASONS[args["reason"]])

@@ -16,6 +16,10 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 |---|---|---|
 | `host/sender.py` | Host 송신기. Runner 접속 수락, 인증, 데모 실행 | 3.4, 4.6 |
 | `host/mcp_server.py` | MCP Server: Codex가 자식 프로세스로 켜고 stdio로 도구를 부르는 창구 | 5.7 |
+| `host/artifacts.py` | 파일 반출 (artifact-export-v1): 후보 등록, 승인 후 업로드 권한, 결과 대조, 검사, 최종 공개, 취소 | 5.8 |
+| `host/telemetry.py` | Telemetry 채널 (`/scrp/v1/telemetry`): 후보 SECURITY_EVENT 수신, EVENT_ACK | 5.8 |
+| `host/artifact_scan.py` | 반출 전 검사: 형식 정책(UTF-8 TXT) + 백신 (기본 미설정 = 차단) | 5.8 |
+| `host/approval.py` | 사용자 승인 창 (Host 화면) | 5.6 |
 | `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
 | `host/tool_catalog.py` | 도구 13개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
@@ -183,6 +187,51 @@ Host가 언제 할지 정하고, 실제로 끄고 켜는 건 Sandbox Manager(`re
   없으면 `firewall not ready`로 거부한다. Lifecycle 저장소의 `tools/install_firewall.ps1`을 **관리자 권한으로** 한 번 실행한다
 - Windows Sandbox는 PC당 1개. 이미 켜져 있으면 `a Windows Sandbox is already running`으로 거부된다
 
+## 파일 반출 (artifact-export-v1)
+
+Sandbox 안에서 만들어진 파일 하나를 **사람의 승인 → 수신 → 검사 → 공개** 순서로 Host로 꺼낸다.
+계약은 Runner 담당이 정의·구현한 `artifact-export-v1`
+(`b-hamo/sandbox_runner` `32700916f4e7074051a109aaf6b4728dbeba7df4`, `docs/artifact-export-contract.md`)을 그대로 채택했다.
+메시지 규격은 [schema/profiles/artifact-export-v1/](schema/profiles/artifact-export-v1/README.md).
+
+```powershell
+codex ... -c "mcp_servers.scrp.args=['$server', '--runner-exe', '<sandbox_runner.exe>', '--artifact-export', '--artifact-scanner', 'amsi']"
+```
+
+`--artifact-export`를 줄 때만 켜진다. 안 주면 기존 동작 그대로다 (bootstrap·HELLO_ACK·도구 목록 모두 이전과 같음).
+
+| 단계 | 누가 | 무엇을 |
+|---|---|---|
+| 선택 | Host | bootstrap에 `control_contract: "artifact-export-v1"` + `artifact_upload {port, path}`. HELLO에 `artifact.export.v1`이 있어야 하고 HELLO_ACK에서 허용 |
+| Telemetry | Runner → Host | HELLO_ACK의 telemetry token으로 `wss://…/scrp/v1/telemetry` 접속 (그 채널 전용, 1회용). CHANNEL_HELLO/ACK |
+| 시작 검사 | Host | 기존 Startup Verification + **Telemetry 채널이 붙어야 READY** (Runner는 채널이 붙은 뒤에 생긴 파일만 보고) |
+| 후보 | Runner → Host | SECURITY_EVENT 4필드(`event_id/observed_at/category/relative_path`) → EVENT_ACK `STORED` (같은 id·같은 내용 재전송도 STORED, 같은 id·다른 내용은 `REJECTED`). Host가 `ART-000001` 같은 artifact_id 발급. 크기·해시·형식은 아직 모름 |
+| 요청 | Agent → Host | `artifact_export(artifact_id, reason)`: READY·task_submit 필요 → 정책 `REQUIRE_APPROVAL` → **Host 화면 확인 창** (2분, 무응답 = 거부) |
+| 권한 | Host | 새 `upload_id`(192-bit)·token(256-bit, 43자)·기한(120초)·상한(기본 1 MiB)을 **먼저 등록**한 뒤 ARTIFACT_REQUEST. token은 Agent·로그에 안 나감 |
+| 수신 | Runner → Host | `PUT /scrp/v1/artifacts/<upload_id>` + Bearer token. 디스크로 스트리밍, 크기·SHA-256 확정 후 **본문 없는 201** |
+| 결과 | Runner → Host | ARTIFACT_RESULT가 원 요청과 짝이 맞고, candidate·upload_id·bytes_sent가 **실제 수신 기록과 같을 때만** 검사 |
+| 검사 | Host | 같은 바이트(해시 재확인)로 형식(UTF-8 `.txt`) + 백신. 오류·미설치·시간 초과(30초)는 통과 아님 |
+| 공개 | Host | 검사한 파일을 그대로 `host/.exports/<세션>/<artifact_id>/<파일명>`으로 옮김 → `EXPORTED`, `export_path` 제공 |
+
+`artifact_list` 상태: PENDING(후보·전송 중) / QUARANTINED(수신, 결과 대기) / SCANNING / EXPORTED / BLOCKED(`result.code`가 이유).
+같은 artifact_id로 다시 부르면 진행·완료 상태만 돌려준다(승인 창도 다시 안 뜸). 전송 실패(`UPLOAD_FAILED` 등)만 새 승인으로 다시 시도할 수 있다.
+
+**취소:** 세션 종료, Runtime 세대 변경(복구), Control 연결 끊김(진행 중 전송), Telemetry 채널 끊김(그 Runtime의 반출 전부 중지).
+취소된 권한으로 온 PUT은 410. 받은 파일은 지운다. Host를 다시 켜면 남은 임시 파일은 공개하지 않고 지운다.
+
+**수신 거부 코드:** 401 token 없음 · 403 token 틀림 또는 모르는 upload_id(구분 안 함) · 409 이미 사용 · 410 만료·취소 ·
+411 길이 없음 · 413 상한 초과 · 415 `application/octet-stream`이 아니거나 Transfer/Content-Encoding·Content-Range · 408 기한 초과.
+인증 전 거부(415·411)는 권한을 소모하지 않고, 인증 뒤 실패는 권한을 소모한다(재사용 없음).
+
+**백신 (`--artifact-scanner`):** 어떤 엔진을 쓸지는 아직 팀 결정이 필요하다.
+- `none` (기본): 검사기 없음 → 모든 반출이 `BLOCKED` (`SCANNER_UNAVAILABLE`). 성공으로 대신하지 않는다
+- `amsi`: Windows AMSI에 등록된 백신(Defender, 또는 AMSI 제공자로 등록한 제품)에 메모리로 검사 요청.
+  **처음 쓸 때 EICAR 테스트 문자열(메모리에서만)로 자체 시험**해서 탐지하지 못하면 사용 불가로 본다.
+  예: 개발 PC의 McAfee AMSI 제공자는 EICAR를 "탐지 안 됨"으로 답했다 → 그 PC에서는 `amsi`도 `SCANNER_UNAVAILABLE`
+
+**승인 (`--approval`):** `dialog`(기본) Host 화면에 확인 창. Sandbox가 보고한 경로와 AI가 적은 이유를 "확인되지 않은 내용"으로 표시.
+`deny` 모두 거부.
+
 ## Runner가 접속하는 방법
 
 프로토콜 문서 §4의 Host 측 구현이다. Runner(C++)는 같은 방식으로 접속해야 한다.
@@ -288,7 +337,9 @@ Host가 거부하는 경우:
 - Broker의 정책 규칙은 초기값이다. FORCE_SANDBOX·FORCE_VM 같은 실행 위치 결정은 Translator(WBS 7.x, 8.8) 몫이라 아직 없다
 - 스크린샷 안의 글자로 Agent를 속이는 경우(화면 프롬프트 인젝션) 검사는 아직 없다. `ObservationUploads`의 `inspectors`에 W8~9 탐지기가 들어올 자리만 있다
 - 스크린샷은 원본 크기 그대로 Agent에게 간다 (Sandbox 화면 2048×1232 기준 약 2.5 MB). AI 비용이 문제가 되면 줄여서 보내고 좌표를 원본으로 환산하는 기능을 넣는다
-- Artifact(파일) 업로드 경로 `/scrp/v1/artifacts/`는 아직 없다
+- 파일 반출의 백신 엔진은 미정이다 (`--artifact-scanner` 기본 `none` = 모두 차단). 형식 정책은 발표용 UTF-8 `.txt` 한 가지
+- 후보 무효화 메시지가 계약에 없어서 `artifact_list`는 "보고된 후보" 목록이다. 지워지거나 바뀐 파일은 반출할 때 Runner가 거부한다
+- 반출은 한 번에 하나만 (`ARTIFACT_BUSY`). 후보·전송 상태는 메모리에만 있다 (Host를 다시 켜면 새로 시작)
 - MCP Server 1개 = 세션 1개. Codex를 다시 켜면 새 세션이 만들어지고 Sandbox도 다시 접속해야 한다
 - Codex가 MCP Server를 강제로 죽이면(stdin을 닫지 않고) Sandbox가 남는다. 다음 `task_submit` 때 Sandbox Manager가
   켠 Host가 죽은 세션의 Sandbox를 먼저 정리하고 시작한다 (손으로 켠 Sandbox는 건드리지 않고 거부)

@@ -1,6 +1,6 @@
 {
   "name": "artifact_export",
-  "description": "Request that one inspected artifact be copied out of the runtime to the user's safe results folder. Only artifacts whose status is SAFE can be exported, and the export needs its own permission, so this may be denied or held for user approval. Call artifact_list first to get the artifact_id and check the status.",
+  "description": "Ask to bring one file the runtime reported (from artifact_list) out to this computer. The user is asked to approve it on the Host; then the Host receives the file, checks its format and scans it, and only a file that passes is saved to the results folder. This returns at once with the accepted state; follow progress with artifact_list until the status is EXPORTED (export_path is then set) or BLOCKED (result says why). Calling it again for the same artifact_id returns its current state without starting a second transfer. Only plain UTF-8 .txt files are exported for now.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -12,12 +12,12 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 64,
-        "description": "From artifact_list, e.g. ART-000237."
+        "description": "From artifact_list, e.g. ART-000001."
       },
       "reason": {
         "type": "string",
         "maxLength": 256,
-        "description": "Why the user needs this file; shown in the approval prompt and the audit log.",
+        "description": "Why the user needs this file; shown to the user in the approval prompt (marked as written by you) and kept in the audit log.",
         "default": ""
       }
     }

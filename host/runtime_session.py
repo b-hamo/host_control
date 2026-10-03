@@ -107,8 +107,15 @@ class RuntimeSession:
                  on_terminated: Callable[[tuple[str, str, int]], None] | None = None,
                  profile: StartupProfile | None = None,
                  on_startup: Callable[[tuple[str, str, int], StartupReport], None] | None = None,
-                 uploads: ObservationUploads | None = None):
+                 uploads: ObservationUploads | None = None,
+                 contract: str | None = None,
+                 startup_checks: list | None = None):
         self.identity = identity
+        # Control contract this session selected (bootstrap control_contract), e.g.
+        # "artifact-export-v1". None: the base contract only.
+        self.contract = contract
+        # Extra Startup Verification steps after the base ones: async (session) -> (ok, detail, name)
+        self.startup_checks = list(startup_checks or [])
         self.uploads = uploads                 # None: no screenshot upload path (images never reach the Agent)
         self.last_screenshot: Screenshot | None = None
         self.last_screenshot_state: str | None = None   # VALIDATED / MISSING / BLOCKED

@@ -18,8 +18,12 @@ CONTROL_PATH = "/scrp/v1/control"
 OBSERVATION_UPLOAD_PATH = "/scrp/v1/observations/"
 
 
+ARTIFACT_UPLOAD_PATH = "/scrp/v1/artifacts/"
+
+
 def write_bootstrap(path: Path, rec: SessionRecord, cert_pem: str, port: int,
-                    host: str | None = None, upload_port: int | None = None) -> None:
+                    host: str | None = None, upload_port: int | None = None, *,
+                    control_contract: str | None = None, artifact_upload_port: int | None = None) -> None:
     data = {
         "bootstrap_version": BOOTSTRAP_VERSION,
         "session_id": rec.session_id,
@@ -38,5 +42,11 @@ def write_bootstrap(path: Path, rec: SessionRecord, cert_pem: str, port: int,
         # Screenshot uploads (protocol doc §8): PUT https://<host>:<upload_port><path><upload_id>,
         # same host rule and same pinned certificate as the control channel.
         data["observation_upload"] = {"port": upload_port, "path": OBSERVATION_UPLOAD_PATH}
+    if control_contract is not None:
+        # artifact-export-v1 (Runner contract §4): both fields or neither; the Runner refuses half of it.
+        if artifact_upload_port is None:
+            raise ValueError(f"{control_contract} needs artifact_upload_port")
+        data["control_contract"] = control_contract
+        data["artifact_upload"] = {"port": artifact_upload_port, "path": ARTIFACT_UPLOAD_PATH}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

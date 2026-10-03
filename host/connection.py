@@ -25,10 +25,13 @@ CLOCK_SKEW_S = 60
 
 
 class Connection:
-    def __init__(self, ws, hello: dict, identity: tuple[str, str, int]):
+    def __init__(self, ws, hello: dict, identity: tuple[str, str, int], *,
+                 profile: str | None = None, prefix: str = "CONN", max_bytes: int | None = None):
         self.ws = ws
+        self.profile = profile                         # e.g. artifact-export-v1: which schema checks which type
+        self.max_bytes = max_bytes
         # Identity comes from the session registry, not from what the Runner claims.
-        self.me = Endpoint(*identity, connection_id=f"CONN-{uuid.uuid4().hex[:8]}")
+        self.me = Endpoint(*identity, connection_id=f"{prefix}-{uuid.uuid4().hex[:8]}")
         self.expected_in_seq = hello["sequence_number"] + 1
         self.seen_message_ids = {hello["message_id"]}
         self.seen_nonces = {hello["nonce"]}
@@ -41,7 +44,7 @@ class Connection:
 
     # -- sending -------------------------------------------------------------
     async def send(self, msg: dict) -> None:
-        validate(msg)
+        validate(msg, self.profile)
         await self.ws.send(json.dumps(msg, ensure_ascii=False))
         log.info("SENT %-16s seq=%s", msg["type"], msg["sequence_number"])
 
@@ -85,6 +88,12 @@ class Connection:
             self.pending.pop(msg["message_id"], None)
 
     # -- receiving -----------------------------------------------------------
+    def parse(self, raw: bytes | str) -> dict:
+        data = raw if isinstance(raw, bytes) else raw.encode("utf-8")
+        if self.max_bytes is not None:
+            return parse_and_validate(data, self.profile, self.max_bytes)
+        return parse_and_validate(data, self.profile)
+
     def check(self, msg: dict) -> None:
         if (msg["session_id"], msg["runtime_id"], msg["generation"]) != \
            (self.me.session_id, self.me.runtime_id, self.me.generation):
@@ -110,7 +119,7 @@ class Connection:
         try:
             async for raw in self.ws:
                 try:
-                    msg = parse_and_validate(raw if isinstance(raw, bytes) else raw.encode("utf-8"))
+                    msg = self.parse(raw)
                     self.check(msg)
                 except ProtocolError as e:
                     log.error("REJECTED inbound: %s", e)

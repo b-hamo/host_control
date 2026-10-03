@@ -1,0 +1,396 @@
+{
+  "profile": "artifact-export-v1",
+  "note": "Documentation examples, not live credentials. Each alternate response is a separate scenario replacing the success response, not additional frames in the same connection. Control HELLO/ACK are assumed complete and are not included.",
+  "success_messages": [
+    {
+      "version": "1.0",
+      "session_id": "SES-demo",
+      "runtime_id": "RT-demo",
+      "generation": 1,
+      "connection_id": null,
+      "message_id": "c13a0000-0000-4000-8000-000000000001",
+      "task_id": null,
+      "action_id": null,
+      "sequence_number": 1,
+      "timestamp": "2026-10-03T03:00:01.123Z",
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAQ",
+      "type": "CHANNEL_HELLO",
+      "correlation_id": null,
+      "status": null,
+      "error": null,
+      "payload": {
+        "channel": "telemetry"
+      }
+    },
+    {
+      "version": "1.0",
+      "session_id": "SES-demo",
+      "runtime_id": "RT-demo",
+      "generation": 1,
+      "connection_id": "TEL-demo",
+      "message_id": "c13a0000-0000-4000-8000-000000000002",
+      "task_id": null,
+      "action_id": null,
+      "sequence_number": 1,
+      "timestamp": "2026-10-03T03:00:01.123Z",
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAg",
+      "type": "CHANNEL_ACK",
+      "correlation_id": "c13a0000-0000-4000-8000-000000000001",
+      "status": "OK",
+      "error": null,
+      "payload": {
+        "channel": "telemetry",
+        "max_event_bytes": 16384
+      }
+    },
+    {
+      "version": "1.0",
+      "session_id": "SES-demo",
+      "runtime_id": "RT-demo",
+      "generation": 1,
+      "connection_id": "TEL-demo",
+      "message_id": "c13a0000-0000-4000-8000-000000000003",
+      "task_id": null,
+      "action_id": null,
+      "sequence_number": 2,
+      "timestamp": "2026-10-03T03:00:01.123Z",
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAw",
+      "type": "SECURITY_EVENT",
+      "correlation_id": null,
+      "status": null,
+      "error": null,
+      "payload": {
+        "event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+        "observed_at": "2026-10-03T03:00:00.123Z",
+        "category": "ARTIFACT_CANDIDATE",
+        "relative_path": "reports\\결과.txt"
+      }
+    },
+    {
+      "version": "1.0",
+      "session_id": "SES-demo",
+      "runtime_id": "RT-demo",
+      "generation": 1,
+      "connection_id": "TEL-demo",
+      "message_id": "c13a0000-0000-4000-8000-000000000004",
+      "task_id": null,
+      "action_id": null,
+      "sequence_number": 2,
+      "timestamp": "2026-10-03T03:00:01.123Z",
+      "nonce": "AAAAAAAAAAAAAAAAAAAABA",
+      "type": "EVENT_ACK",
+      "correlation_id": "c13a0000-0000-4000-8000-000000000003",
+      "status": "STORED",
+      "error": null,
+      "payload": {
+        "event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101"
+      }
+    },
+    {
+      "version": "1.0",
+      "session_id": "SES-demo",
+      "runtime_id": "RT-demo",
+      "generation": 1,
+      "connection_id": "CTL-demo",
+      "message_id": "c13a0000-0000-4000-8000-000000000005",
+      "task_id": null,
+      "action_id": null,
+      "sequence_number": 2,
+      "timestamp": "2026-10-03T03:00:01.123Z",
+      "nonce": "AAAAAAAAAAAAAAAAAAAABQ",
+      "type": "ARTIFACT_REQUEST",
+      "correlation_id": null,
+      "status": null,
+      "error": null,
+      "payload": {
+        "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+        "upload_id": "u_MidtermDemo_20261003_01",
+        "upload_token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "upload_deadline_at": "2026-10-03T03:02:01Z",
+        "max_bytes": 1048576
+      }
+    },
+    {
+      "version": "1.0",
+      "session_id": "SES-demo",
+      "runtime_id": "RT-demo",
+      "generation": 1,
+      "connection_id": "CTL-demo",
+      "message_id": "c13a0000-0000-4000-8000-000000000006",
+      "task_id": null,
+      "action_id": null,
+      "sequence_number": 2,
+      "timestamp": "2026-10-03T03:00:01.123Z",
+      "nonce": "AAAAAAAAAAAAAAAAAAAABg",
+      "type": "ARTIFACT_RESULT",
+      "correlation_id": "c13a0000-0000-4000-8000-000000000005",
+      "status": "OK",
+      "error": null,
+      "payload": {
+        "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+        "upload_id": "u_MidtermDemo_20261003_01",
+        "transfer": "UPLOADED",
+        "bytes_sent": 6
+      }
+    }
+  ],
+  "http_upload": {
+    "method": "PUT",
+    "path": "/scrp/v1/artifacts/u_MidtermDemo_20261003_01",
+    "headers": {
+      "Host": "host.example:17444",
+      "Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "Content-Type": "application/octet-stream",
+      "Content-Length": "6"
+    },
+    "body_utf8": "hello\n",
+    "response": {
+      "status": 201,
+      "body": ""
+    }
+  },
+  "alternate_responses": [
+    {
+      "name": "CANDIDATE_UNAVAILABLE",
+      "message": {
+        "version": "1.0",
+        "session_id": "SES-demo",
+        "runtime_id": "RT-demo",
+        "generation": 1,
+        "connection_id": "CTL-demo",
+        "message_id": "c13a0000-0000-4000-8000-000000000007",
+        "task_id": null,
+        "action_id": null,
+        "sequence_number": 2,
+        "timestamp": "2026-10-03T03:00:01.123Z",
+        "nonce": "AAAAAAAAAAAAAAAAAAAABw",
+        "type": "ARTIFACT_RESULT",
+        "correlation_id": "c13a0000-0000-4000-8000-000000000005",
+        "status": "ERROR",
+        "error": {
+          "code": "CANDIDATE_UNAVAILABLE",
+          "message": "Candidate unavailable",
+          "retryable": false,
+          "recommended_next_step": null
+        },
+        "payload": {
+          "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+          "upload_id": "u_MidtermDemo_20261003_01",
+          "transfer": "FAILED",
+          "bytes_sent": 0
+        }
+      }
+    },
+    {
+      "name": "ARTIFACT_BUSY",
+      "message": {
+        "version": "1.0",
+        "session_id": "SES-demo",
+        "runtime_id": "RT-demo",
+        "generation": 1,
+        "connection_id": "CTL-demo",
+        "message_id": "c13a0000-0000-4000-8000-000000000008",
+        "task_id": null,
+        "action_id": null,
+        "sequence_number": 2,
+        "timestamp": "2026-10-03T03:00:01.123Z",
+        "nonce": "AAAAAAAAAAAAAAAAAAAACA",
+        "type": "ARTIFACT_RESULT",
+        "correlation_id": "c13a0000-0000-4000-8000-000000000005",
+        "status": "ERROR",
+        "error": {
+          "code": "ARTIFACT_BUSY",
+          "message": "Artifact transfer stopped",
+          "retryable": false,
+          "recommended_next_step": null
+        },
+        "payload": {
+          "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+          "upload_id": "u_MidtermDemo_20261003_01",
+          "transfer": "FAILED",
+          "bytes_sent": 0
+        }
+      }
+    },
+    {
+      "name": "ARTIFACT_BLOCKED",
+      "message": {
+        "version": "1.0",
+        "session_id": "SES-demo",
+        "runtime_id": "RT-demo",
+        "generation": 1,
+        "connection_id": "CTL-demo",
+        "message_id": "c13a0000-0000-4000-8000-000000000009",
+        "task_id": null,
+        "action_id": null,
+        "sequence_number": 2,
+        "timestamp": "2026-10-03T03:00:01.123Z",
+        "nonce": "AAAAAAAAAAAAAAAAAAAACQ",
+        "type": "ARTIFACT_RESULT",
+        "correlation_id": "c13a0000-0000-4000-8000-000000000005",
+        "status": "ERROR",
+        "error": {
+          "code": "ARTIFACT_BLOCKED",
+          "message": "Artifact transfer stopped",
+          "retryable": false,
+          "recommended_next_step": null
+        },
+        "payload": {
+          "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+          "upload_id": "u_MidtermDemo_20261003_01",
+          "transfer": "FAILED",
+          "bytes_sent": 0
+        }
+      }
+    },
+    {
+      "name": "UPLOAD_FAILED",
+      "message": {
+        "version": "1.0",
+        "session_id": "SES-demo",
+        "runtime_id": "RT-demo",
+        "generation": 1,
+        "connection_id": "CTL-demo",
+        "message_id": "c13a0000-0000-4000-8000-000000000010",
+        "task_id": null,
+        "action_id": null,
+        "sequence_number": 2,
+        "timestamp": "2026-10-03T03:00:01.123Z",
+        "nonce": "AAAAAAAAAAAAAAAAAAAACg",
+        "type": "ARTIFACT_RESULT",
+        "correlation_id": "c13a0000-0000-4000-8000-000000000005",
+        "status": "ERROR",
+        "error": {
+          "code": "UPLOAD_FAILED",
+          "message": "Artifact transfer stopped",
+          "retryable": false,
+          "recommended_next_step": null
+        },
+        "payload": {
+          "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+          "upload_id": "u_MidtermDemo_20261003_01",
+          "transfer": "FAILED",
+          "bytes_sent": 0
+        }
+      }
+    },
+    {
+      "name": "UPLOAD_EXPIRED",
+      "message": {
+        "version": "1.0",
+        "session_id": "SES-demo",
+        "runtime_id": "RT-demo",
+        "generation": 1,
+        "connection_id": "CTL-demo",
+        "message_id": "c13a0000-0000-4000-8000-000000000011",
+        "task_id": null,
+        "action_id": null,
+        "sequence_number": 2,
+        "timestamp": "2026-10-03T03:00:01.123Z",
+        "nonce": "AAAAAAAAAAAAAAAAAAAACw",
+        "type": "ARTIFACT_RESULT",
+        "correlation_id": "c13a0000-0000-4000-8000-000000000005",
+        "status": "ERROR",
+        "error": {
+          "code": "UPLOAD_EXPIRED",
+          "message": "Artifact transfer stopped",
+          "retryable": false,
+          "recommended_next_step": null
+        },
+        "payload": {
+          "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+          "upload_id": "u_MidtermDemo_20261003_01",
+          "transfer": "EXPIRED",
+          "bytes_sent": 0
+        }
+      }
+    },
+    {
+      "name": "SESSION_TERMINATED",
+      "message": {
+        "version": "1.0",
+        "session_id": "SES-demo",
+        "runtime_id": "RT-demo",
+        "generation": 1,
+        "connection_id": "CTL-demo",
+        "message_id": "c13a0000-0000-4000-8000-000000000012",
+        "task_id": null,
+        "action_id": null,
+        "sequence_number": 2,
+        "timestamp": "2026-10-03T03:00:01.123Z",
+        "nonce": "AAAAAAAAAAAAAAAAAAAADA",
+        "type": "ARTIFACT_RESULT",
+        "correlation_id": "c13a0000-0000-4000-8000-000000000005",
+        "status": "ERROR",
+        "error": {
+          "code": "SESSION_TERMINATED",
+          "message": "Artifact transfer stopped",
+          "retryable": false,
+          "recommended_next_step": null
+        },
+        "payload": {
+          "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+          "upload_id": "u_MidtermDemo_20261003_01",
+          "transfer": "FAILED",
+          "bytes_sent": 0
+        }
+      }
+    },
+    {
+      "name": "INTERNAL",
+      "message": {
+        "version": "1.0",
+        "session_id": "SES-demo",
+        "runtime_id": "RT-demo",
+        "generation": 1,
+        "connection_id": "CTL-demo",
+        "message_id": "c13a0000-0000-4000-8000-000000000013",
+        "task_id": null,
+        "action_id": null,
+        "sequence_number": 2,
+        "timestamp": "2026-10-03T03:00:01.123Z",
+        "nonce": "AAAAAAAAAAAAAAAAAAAADQ",
+        "type": "ARTIFACT_RESULT",
+        "correlation_id": "c13a0000-0000-4000-8000-000000000005",
+        "status": "ERROR",
+        "error": {
+          "code": "INTERNAL",
+          "message": "Artifact transfer stopped",
+          "retryable": false,
+          "recommended_next_step": null
+        },
+        "payload": {
+          "candidate_event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101",
+          "upload_id": "u_MidtermDemo_20261003_01",
+          "transfer": "FAILED",
+          "bytes_sent": 0
+        }
+      }
+    },
+    {
+      "name": "EVENT_STORAGE_REJECTED",
+      "message": {
+        "version": "1.0",
+        "session_id": "SES-demo",
+        "runtime_id": "RT-demo",
+        "generation": 1,
+        "connection_id": "TEL-demo",
+        "message_id": "c13a0000-0000-4000-8000-000000000014",
+        "task_id": null,
+        "action_id": null,
+        "sequence_number": 2,
+        "timestamp": "2026-10-03T03:00:01.123Z",
+        "nonce": "AAAAAAAAAAAAAAAAAAAADg",
+        "type": "EVENT_ACK",
+        "correlation_id": "c13a0000-0000-4000-8000-000000000003",
+        "status": "REJECTED",
+        "error": {
+          "code": "STORAGE_REJECTED"
+        },
+        "payload": {
+          "event_id": "b64fbf52-4f4e-4c99-994c-e7f0e8d29101"
+        }
+      }
+    }
+  ]
+}
