@@ -1,0 +1,51 @@
+{
+  "name": "computer_click",
+  "description": "Click at pixel coordinates (x, y) of the most recent computer_observe result. Returns whether the input was delivered to the runtime, which is not the same as the click achieving your goal: observe again to confirm what changed.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "x",
+      "y"
+    ],
+    "properties": {
+      "x": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16383,
+        "description": "Pixels from the left edge of the last observation."
+      },
+      "y": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16383,
+        "description": "Pixels from the top edge of the last observation."
+      },
+      "button": {
+        "type": "string",
+        "enum": [
+          "left",
+          "right",
+          "middle"
+        ],
+        "default": "left"
+      },
+      "click_count": {
+        "type": "integer",
+        "enum": [
+          1,
+          2
+        ],
+        "default": 1,
+        "description": "1 single, 2 double click (the protocol has no triple click)."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Click",
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

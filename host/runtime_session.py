@@ -117,6 +117,7 @@ class RuntimeSession:
         self.health = HealthTracker(identity, on_health)
         self.actions: dict[str, str] = {}      # action_id -> SENT / UNKNOWN / final status
         self.last_observation: dict | None = None
+        self.granted_capabilities: set[str] = set()   # from the latest HELLO_ACK
         self.last_action_id: str | None = None
         self.heartbeat_interval_s = heartbeat_interval_s
         self.alive_timeout_s = alive_timeout_s
@@ -340,39 +341,47 @@ class RuntimeSession:
             raise
 
     # -- operations (what the Broker will call) -------------------------------
-    async def _observe(self, conn: Connection, timeout: float = 5.0) -> dict:
+    async def _observe(self, conn: Connection, timeout: float = 5.0, *,
+                       task_id: str | None = None, action_id: str | None = None) -> dict:
         upload_id = uuid.uuid4().hex + uuid.uuid4().hex[:8]   # one-time, >=16 chars
         msg = conn.me.envelope("OBSERVE", {
             "display_id": "primary", "capture_format": "png", "upload_id": upload_id,
-        }, task_id=self.next_task(), action_id=self.next_action())
+        }, task_id=task_id or self.next_task(), action_id=action_id or self.next_action())
         result = await conn.request(msg, ("OBSERVE_RESULT",), timeout=timeout)
         p = result["payload"]
         self.last_observation = p
         log.info("  observation %s %sx%s sha256=%s…", p["observation_id"], p["width"], p["height"], p["sha256"][:12])
         return p
 
-    async def observe(self) -> dict:
-        return await self._observe(self._live())
+    async def observe(self, *, task_id: str | None = None, action_id: str | None = None) -> dict:
+        return await self._observe(self._live(), task_id=task_id, action_id=action_id)
 
     async def action(self, operation: str, arguments: dict, observation_id: str | None = None,
-                     timeout_ms: int = 10000) -> dict:
+                     timeout_ms: int = 10000, *, task_id: str | None = None,
+                     action_id: str | None = None, policy_version: str = POLICY_VERSION) -> dict:
+        """Returns the ACTION_RESULT, or the ACK itself if the Runner rejected the action."""
         conn = self._live()
         if observation_id is None:
             if self.last_observation is None:
                 raise ProtocolError("STALE_OBSERVATION", "observe before acting")
             observation_id = self.last_observation["observation_id"]
-        action_id = self.next_action()
+        action_id = action_id or self.next_action()
         msg = conn.me.envelope("ACTION_REQUEST", {
             "operation": operation, "arguments": arguments, "observation_id": observation_id,
-            "policy_version": POLICY_VERSION, "timeout_ms": timeout_ms,
-        }, task_id=self.next_task(), action_id=action_id)
+            "policy_version": policy_version, "timeout_ms": timeout_ms,
+        }, task_id=task_id or self.next_task(), action_id=action_id)
         self.actions[action_id] = "SENT"
         self.last_action_id = action_id
         try:
-            result = await conn.request(msg, ("ACK", "ACTION_RESULT"), timeout=timeout_ms / 1000)
+            result = await conn.request(msg, ("ACK", "ACTION_RESULT"), timeout=timeout_ms / 1000,
+                                        final_if=lambda m: m["type"] == "ACK" and m["status"] == "REJECTED")
         except ProtocolError:
             self.actions[action_id] = "UNKNOWN"      # §7: find out with STATE_REQUEST, never re-send
             raise
+        if result["type"] == "ACK":                   # REJECTED: never queued, nothing ran
+            self.actions[action_id] = "REJECTED"
+            log.warning("  %s %s rejected by Runner: %s", action_id, operation, result["payload"]["reject_reason"])
+            return result
         self.actions[action_id] = result["status"]
         log.info("  %s %s -> %s %s", action_id, operation, result["status"], result["payload"]["result"])
         return result

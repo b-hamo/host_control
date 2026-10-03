@@ -1,0 +1,51 @@
+{
+  "name": "computer_scroll",
+  "description": "Scroll at pixel coordinates (x, y) of the most recent computer_observe result. One step equals a single mouse wheel notch. Observe again afterwards: the page may have moved by a different amount than you expect.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "x",
+      "y",
+      "direction"
+    ],
+    "properties": {
+      "x": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16383,
+        "description": "Pixels from the left edge of the last observation."
+      },
+      "y": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16383,
+        "description": "Pixels from the top edge of the last observation."
+      },
+      "direction": {
+        "type": "string",
+        "enum": [
+          "up",
+          "down",
+          "left",
+          "right"
+        ],
+        "description": "Direction the content moves toward."
+      },
+      "steps": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 3,
+        "description": "Wheel notches; 1 step is one notch."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Scroll",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

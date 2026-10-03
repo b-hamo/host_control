@@ -26,8 +26,9 @@ capture, a heartbeat). Only then do actions flow. If that does not happen
 within 120 s of registration the session fails. See host/startup.py.
 
 Run:
-  python host/sender.py            # wait for a Runner, run the demo sequence
-  python host/sender.py --no-demo  # handshake and heartbeats only
+  python host/sender.py                # wait for a Runner, run the protocol demo
+  python host/sender.py --demo broker  # same, but as MCP tool calls through the Broker (WBS 5.6)
+  python host/sender.py --no-demo      # handshake and heartbeats only
 """
 
 from __future__ import annotations
@@ -47,6 +48,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # run as `pytho
 from websockets.asyncio.server import serve
 
 from host import tls
+from host.audit import AuditLog
+from host.broker import Broker
 from host.bootstrap import CONTROL_PATH, write_bootstrap
 from host.connection import Connection
 from host.runtime_session import (ALIVE_TIMEOUT_S, HEARTBEAT_INTERVAL_S, RECONNECT_GRACE_S,
@@ -76,6 +79,7 @@ HOST, PORT = "0.0.0.0", 17443
 HOST_DIR = Path(__file__).resolve().parent
 CERT_DIR = HOST_DIR / ".certs"
 BOOTSTRAP_FILE = HOST_DIR / ".bootstrap" / "bootstrap.json"
+AUDIT_DIR = HOST_DIR / ".audit"
 RESUME_WAIT_S = 60.0        # how long the demo waits for a dropped Runner to come back
 
 # W1 PoC default values; the real Lifecycle Manager will issue these per session.
@@ -117,6 +121,38 @@ async def demo(session: RuntimeSession) -> None:
             log.error("demo stopped at %s: %s", name, e)
             return
     log.info("--- demo complete --- actions: %s", session.actions)
+
+
+async def broker_demo(session: RuntimeSession) -> None:
+    """What Codex will do in 6.1, scripted: tool calls go through the Broker, which
+    checks each one and only then turns it into SCRP messages. Three calls are
+    meant to be refused and never reach the Runner."""
+    broker = Broker(session, audit=AuditLog(AUDIT_DIR / f"{session.identity[0]}.jsonl"))
+    await session.wait_ready(RESUME_WAIT_S)
+    log.info("--- broker demo: %d tools available: %s ---", len(broker.tools()),
+             ", ".join(t["name"] for t in broker.tools()))
+    calls = [
+        ("computer_observe", {}),                                          # refused: no task yet
+        ("task_submit", {"goal": "메모장에 인사말 입력"}),
+        ("computer_observe", {}),
+        ("computer_click", {"x": 640, "y": 420}),                          # defaults: left, single
+        ("computer_click", {"x": 5000, "y": 100}),                         # refused: outside the screen
+        ("computer_hotkey", {"keys": ["win", "r"]}),                       # refused: policy (Run dialog)
+        ("computer_type", {"text": "안녕하세요"}),
+        ("runtime_get_state", {}),
+        ("session_stop", {"reason": "TASK_COMPLETE"}),
+    ]
+    last_action = None
+    for tool, args in calls:
+        if tool == "runtime_get_state":
+            args = {"action_id": last_action}
+        result = await broker.call(tool, args)
+        if result.ok and result.action_id:
+            last_action = result.action_id
+        await asyncio.sleep(0.25)                  # stay under the 5/s input rate limit
+    ok = sum(1 for r in broker.audit.records if r["result"]["ok"])
+    log.info("--- broker demo complete --- %d calls, %d ok, %d refused; audit: %s",
+             len(broker.audit.records), ok, len(broker.audit.records) - ok, broker.audit.path)
 
 
 class Sessions:
@@ -161,7 +197,7 @@ def make_process_request(registry: SessionRegistry):
     return process_request
 
 
-async def handle(ws, run_demo: bool, sessions: Sessions, limits: dict) -> None:
+async def handle(ws, run_demo: str | None, sessions: Sessions, limits: dict) -> None:
     registry = sessions.registry
     peer = ws.remote_address
     log.info("CONNECTED from %s path=%s (TLS)", peer, ws.request.path)
@@ -191,6 +227,7 @@ async def handle(ws, run_demo: bool, sessions: Sessions, limits: dict) -> None:
     conn = Connection(ws, hello, rec.identity())
     reconnect = registry.issue_reconnect(rec.identity())
     granted = [c for c in hello["payload"]["capabilities"] if c in ALLOWED_CAPABILITIES]
+    session.granted_capabilities = set(granted)       # the Broker's tool catalog follows this (B-11)
     await conn.send(conn.me.reply(hello, "HELLO_ACK", {
         "selected_version": "1.0",
         "allowed_capabilities": granted,
@@ -211,7 +248,8 @@ async def handle(ws, run_demo: bool, sessions: Sessions, limits: dict) -> None:
         await session.attach(conn)
         heartbeat = asyncio.create_task(session.heartbeat_loop(conn))
         if run_demo and session.connections == 1:
-            session.demo_task = asyncio.create_task(demo(session))   # outlives this connection
+            demo_fn = broker_demo if run_demo == "broker" else demo
+            session.demo_task = asyncio.create_task(demo_fn(session))   # outlives this connection
         await conn.closed.wait()
     except ProtocolError as e:
         log.error("connection %s aborted: %s", conn.id, e)
@@ -222,7 +260,8 @@ async def handle(ws, run_demo: bool, sessions: Sessions, limits: dict) -> None:
                 t.cancel()
 
 
-def make_handler(run_demo: bool, sessions: Sessions, limits: dict):
+def make_handler(run_demo: str | bool | None, sessions: Sessions, limits: dict):
+    run_demo = "protocol" if run_demo is True else (run_demo or None)
     async def handler(ws):
         try:
             await handle(ws, run_demo, sessions, limits)
@@ -236,7 +275,7 @@ def make_handler(run_demo: bool, sessions: Sessions, limits: dict):
 
 
 def start_server(registry: SessionRegistry, cert_path: Path, key_path: Path,
-                 run_demo: bool = True, host: str = HOST, port: int = PORT, *,
+                 run_demo: str | bool | None = True, host: str = HOST, port: int = PORT, *,
                  sessions: Sessions | None = None,
                  heartbeat_interval_s: float = HEARTBEAT_INTERVAL_S,
                  alive_timeout_s: float = ALIVE_TIMEOUT_S,
@@ -259,7 +298,7 @@ def start_server(registry: SessionRegistry, cert_path: Path, key_path: Path,
                  max_size=64 * 1024)
 
 
-async def main(run_demo: bool, session: tuple[str, str, int], bootstrap_file: Path,
+async def main(run_demo: str | None, session: tuple[str, str, int], bootstrap_file: Path,
                startup_timeout_s: float = STARTUP_TIMEOUT_S) -> None:
     cert_path, key_path = tls.ensure_dev_cert(CERT_DIR)
     cert_pem = cert_path.read_text(encoding="ascii")
@@ -281,8 +320,10 @@ async def main(run_demo: bool, session: tuple[str, str, int], bootstrap_file: Pa
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="SCRP Host sender (WBS 3.4, 4.4, 4.5, 4.6)")
+    ap = argparse.ArgumentParser(description="SCRP Host sender (WBS 3.4, 4.4, 4.5, 4.6, 5.6)")
     ap.add_argument("--no-demo", action="store_true", help="handshake and heartbeats only")
+    ap.add_argument("--demo", choices=["protocol", "broker"], default="protocol",
+                    help="protocol: SCRP messages directly; broker: MCP tool calls through the Broker")
     ap.add_argument("--session", default="SES-001")
     ap.add_argument("--runtime", default="RT-SBX-001")
     ap.add_argument("--generation", type=int, default=1)
@@ -293,7 +334,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-5s %(message)s")
     try:
-        asyncio.run(main(not args.no_demo, (args.session, args.runtime, args.generation),
+        asyncio.run(main(None if args.no_demo else args.demo, (args.session, args.runtime, args.generation),
                          args.bootstrap_out, args.startup_timeout))
     except KeyboardInterrupt:
         pass

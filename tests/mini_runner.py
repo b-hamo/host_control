@@ -39,7 +39,8 @@ class MiniRunner:
     def __init__(self, port: int, cert_pem: str, identity: tuple[str, str, int], *,
                  answer_heartbeats: bool = True, drop_after_first_ack: bool = False,
                  worker_alive: bool = True, answer_observe: bool = True,
-                 capabilities: list[str] | None = None, coverage: dict | None = None):
+                 capabilities: list[str] | None = None, coverage: dict | None = None,
+                 reject_actions: bool = False, action_status: str = "SUCCESS"):
         self.url = f"wss://127.0.0.1:{port}{CONTROL_PATH}"
         self.cert_pem = cert_pem
         self.identity = identity
@@ -49,6 +50,9 @@ class MiniRunner:
         self.answer_observe = answer_observe
         self.capabilities = capabilities
         self.coverage = coverage
+        self.reject_actions = reject_actions
+        self.action_status = action_status
+        self.requests: list[dict] = []          # every ACTION_REQUEST as received
         self.executed: list[str] = []          # action_ids, in order
         self.state_requests: list[str | None] = []
         self.heartbeats = 0
@@ -91,6 +95,12 @@ class MiniRunner:
                         "captured_at": msg["timestamp"], "sha256": "0" * 64,
                         "upload_id": msg["payload"]["upload_id"]}))
                 elif t == "ACTION_REQUEST":
+                    self.requests.append(msg)
+                    if self.reject_actions:
+                        await self._send(self.me.reply(msg, "ACK", {"queue_position": None,
+                                                                    "reject_reason": "queue full"},
+                                                       status="REJECTED"))
+                        continue
                     self.executed.append(msg["action_id"])
                     await self._send(self.me.reply(msg, "ACK", {"queue_position": 0, "reject_reason": None},
                                                    status="ACCEPTED"))
@@ -98,8 +108,11 @@ class MiniRunner:
                         self.drop_after_first_ack = False
                         self.ws.transport.abort()          # the result never reaches the Host
                         return "dropped"
+                    result = {"input_delivered": self.action_status == "SUCCESS"}
+                    if self.action_status != "SUCCESS":
+                        result["detail"] = "element not found"
                     await self._send(self.me.reply(msg, "ACTION_RESULT", {
-                        "execution_time_ms": 1, "result": {"input_delivered": True}}, status="SUCCESS"))
+                        "execution_time_ms": 1, "result": result}, status=self.action_status))
                 elif t == "STATE_REQUEST":
                     target = msg["payload"]["action_id"]
                     self.state_requests.append(target)
