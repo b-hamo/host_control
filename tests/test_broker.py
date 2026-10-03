@@ -78,6 +78,9 @@ def _variants(tool: str):
             choices[k] = [p["minimum"], p["maximum"]]
         elif p.get("type") == "string":
             choices[k] = ["a", "가" * p.get("maxLength", 8)]
+        elif p.get("type") == "array" and tool == "computer_hotkey":
+            # smallest and largest combinations the rule allows: 1..3 modifiers + exactly 1 key
+            choices[k] = [["ctrl", "c"], ["ctrl", "alt", "shift", "f4"], ["win", "slash"]]
         elif p.get("type") == "array":
             items = p["items"]["enum"]
             choices[k] = [items[:p["minItems"]], items[-p["maxItems"]:]]
@@ -216,12 +219,24 @@ def test_click_without_observation_is_stale(certs):
 def test_old_observation_is_stale(certs):
     async def body(b, r):
         await started(b)
-        old = (datetime.now(timezone.utc) - timedelta(seconds=11)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        b.session.last_observation = {**b.session.last_observation, "captured_at": old}
+        b.session.last_observation_at -= 11            # received 11 s ago, on the Host clock
         return await b.call("computer_click", {"x": 1, "y": 1})
 
     res, _, r = run(with_broker(certs, body))
     assert res.error["error"] == "STALE_OBSERVATION" and r.requests == []
+
+
+def test_runner_clock_skew_does_not_make_a_fresh_capture_stale(certs):
+    """The Runner's clock may be up to 60 s off (allowed at HELLO). A capture it
+    stamps 30 s in the past but that just arrived is fresh."""
+    async def body(b, r):
+        await started(b)
+        behind = (datetime.now(timezone.utc) - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        b.session.last_observation = {**b.session.last_observation, "captured_at": behind}
+        return await b.call("computer_click", {"x": 1, "y": 1})
+
+    res, _, r = run(with_broker(certs, body))
+    assert res.ok and len(r.requests) == 1
 
 
 def test_denied_hotkey_is_audited_with_its_rule(certs):
@@ -391,3 +406,75 @@ def test_disconnect_while_waiting_is_reported_not_hung(certs):
 
     res, _, _ = run(with_broker(certs, body))
     assert res.error["error"] == "RUNTIME_UNAVAILABLE" and res.error["retryable"] is True
+
+
+# --------------------------------------------------------------------- Runner failure reasons (review of the Runner control layer)
+STALE = {"code": "STALE_OBSERVATION", "message": "observation is older than the allowed age",
+         "retryable": True, "recommended_next_step": "computer_observe"}
+
+
+def test_blocked_without_a_reason_is_not_reported_as_a_security_block(certs):
+    """A stopping Runner answers BLOCKED for actions it never started."""
+    async def body(b, r):
+        await started(b)
+        return await b.call("computer_click", {"x": 1, "y": 1})
+
+    res, _, _ = run(with_broker(certs, body, runner_kwargs={"action_status": "BLOCKED"}))
+    assert res.error["error"] == "ACTION_FAILED" and res.error["recommended_next_step"] == "computer_observe"
+
+
+def test_blocked_with_a_security_reason_is_a_security_block(certs):
+    async def body(b, r):
+        await started(b)
+        return await b.call("computer_click", {"x": 1, "y": 1})
+
+    sec = {"code": "SECURITY_BLOCKED", "message": "input to a secure desktop", "retryable": False,
+           "recommended_next_step": None}
+    res, _, _ = run(with_broker(certs, body, runner_kwargs={"action_status": "BLOCKED", "action_error": sec}))
+    assert res.error["error"] == "SECURITY_BLOCKED"
+
+
+def test_runner_reason_on_a_failed_action_reaches_the_agent(certs):
+    """The Runner re-checks the observation right before executing; if that fails the
+    Agent must be told to observe again, not just 'failed'."""
+    async def body(b, r):
+        await started(b)
+        return await b.call("computer_click", {"x": 1, "y": 1})
+
+    res, _, _ = run(with_broker(certs, body, runner_kwargs={"action_status": "FAILED", "action_error": STALE}))
+    assert res.error["error"] == "STALE_OBSERVATION" and res.error["recommended_next_step"] == "computer_observe"
+
+
+def test_runner_reason_on_a_rejected_ack_reaches_the_agent(certs):
+    async def body(b, r):
+        await started(b)
+        return await b.call("computer_click", {"x": 1, "y": 1})
+
+    res, b, _ = run(with_broker(certs, body, runner_kwargs={"reject_actions": True, "action_error": STALE}))
+    assert res.error["error"] == "STALE_OBSERVATION"
+    assert b.session.actions[res.action_id] == "REJECTED"
+
+
+def test_runner_error_reply_to_observe_is_passed_on(certs):
+    async def body(b, r):
+        await b.call("task_submit", {"goal": "g"})
+        r.observe_error = {"code": "ACTION_FAILED", "message": "capture failed: BitBlt returned 0"}
+        return await b.call("computer_observe", {})
+
+    res, _, _ = run(with_broker(certs, body))
+    assert res.error["error"] == "ACTION_FAILED" and "BitBlt" in res.error["message"]
+
+
+# --------------------------------------------------------------------- key rules matched to the Runner's input layer
+@pytest.mark.parametrize("keys", [["a", "b"], ["ctrl", "a", "b"], ["ctrl", "shift"], ["ctrl", "alt", "shift", "win"]])
+def test_hotkeys_the_runner_cannot_press_are_refused_before_it(keys):
+    """The Runner's input layer takes modifiers + exactly one key (control_types.h)."""
+    with pytest.raises(ToolError) as e:
+        CATALOG.validate("computer_hotkey", {"keys": keys})
+    assert e.value.code == "INVALID_ARGUMENT"
+
+
+@pytest.mark.parametrize("key", ["ctrl", "alt", "shift", "win"])
+def test_a_modifier_alone_is_not_a_keypress(key):
+    with pytest.raises(ToolError):
+        CATALOG.validate("computer_keypress", {"key": key})

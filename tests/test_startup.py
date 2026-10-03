@@ -240,3 +240,20 @@ def test_demo_still_completes_after_verification(certs):
 
     r, session, _ = run(served(certs, body, run_demo=True))
     assert len(r.executed) == 2 and session.terminated and session.startup.ok
+
+
+def test_runner_clock_skew_within_the_allowed_range_still_verifies(certs):
+    """captured_at is on the Runner's clock; 30 s off is within the 60 s allowed at HELLO."""
+    async def body(port, sessions, rec):
+        r = MiniRunner(port, certs[2], SES, capture_clock_offset_s=-30)
+        await r.connect(rec.token)
+        serving = asyncio.create_task(r.serve())
+        session = sessions.get(SES)
+        await until(lambda: session.ready.is_set() or session.terminated)
+        ok = session.startup.ok
+        r.drop()
+        await serving
+        return ok
+
+    ok, session, _ = run(served(certs, body))
+    assert ok is True, session.startup.reason

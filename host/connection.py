@@ -73,6 +73,9 @@ class Connection:
                     raise ProtocolError("ACTION_TIMEOUT", f"no {wanted} for {msg['type']} within {timeout}s") from None
                 if reply is None:
                     raise ProtocolError("RUNTIME_UNAVAILABLE", f"connection closed while waiting for {wanted}")
+                if reply["type"] == "ERROR":           # the Runner refused this request, with a reason
+                    err = reply["error"]
+                    raise ProtocolError(err["code"], err["message"])
                 if reply["type"] != wanted:
                     raise ProtocolError("PROTOCOL_DENIED", f"expected {wanted}, got {reply['type']}")
                 if final_if is not None and final_if(reply):
