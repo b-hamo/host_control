@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from host.session_registry import SessionRecord
+from host.tls import fingerprint
 
 BOOTSTRAP_VERSION = "1.0"
 CONTROL_PATH = "/scrp/v1/control"
@@ -24,12 +25,14 @@ def write_bootstrap(path: Path, rec: SessionRecord, cert_pem: str, port: int,
         "session_id": rec.session_id,
         "runtime_id": rec.runtime_id,
         "generation": rec.generation,
-        "host": host,                  # null: Runner uses its default gateway (Windows Sandbox)
+        "host": host,                  # the address the Runner connects to; null: its default gateway
         "port": port,
         "path": CONTROL_PATH,
         "token": rec.token,            # goes in the Authorization header, never in the URL or logs
         "token_expires_at": rec.expires_utc,
         "host_certificate_pem": cert_pem,
+        # SHA-256 of the certificate's DER bytes: what a pinning Runner compares
+        "host_certificate_sha256": fingerprint(cert_pem),
     }
     if upload_port is not None:
         # Screenshot uploads (protocol doc §8): PUT https://<host>:<upload_port><path><upload_id>,

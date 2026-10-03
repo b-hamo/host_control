@@ -39,7 +39,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 
 ## 실행
 
-Python 3.11 이상.
+Python 3.13 (팀 공통 3.13.15).
 
 ```bash
 python -m venv .venv
@@ -55,6 +55,10 @@ python -m venv .venv
 4. `listening on wss://0.0.0.0:17443/scrp/v1/control` → Runner 접속 대기
    (스크린샷 업로드는 `https://0.0.0.0:17444/scrp/v1/observations/`, 아래 참고)
 5. Runner가 접속하면 **Startup Verification**을 한 뒤에만 READY (아래). 등록 후 120초(`--startup-timeout`) 안에 READY가 안 되면 세션 실패
+
+Runner가 Host에 접속할 주소(Windows Sandbox가 보는 Host 주소, Sandbox Manager의 `start()`가 돌려주는 값)를 알면
+`--advertise-address 192.168.208.1`처럼 넘긴다. 그 주소가 bootstrap의 `host`에 들어가고, 인증서 SAN에도 들어간다.
+주소가 바뀌면 인증서를 새로 만든다 (재부팅하면 바뀐다). `sender.py`와 `mcp_server.py` 둘 다 같은 옵션이 있다.
 
 Runner가 접속해 HELLO를 보내면 데모 순서(화면 관찰 → 클릭 → 입력 → 생존 확인 → 상태 조회 → 종료)를
 실행하고 결과를 출력한다. `--no-demo`는 핸드셰이크와 Heartbeat만 하고 대기한다.
@@ -114,7 +118,7 @@ codex -s read-only `
 ```
 
 1. 위 명령으로 Codex를 켠다 → MCP Server가 켜지면서 `host/.bootstrap/bootstrap.json`이 새로 생긴다
-2. **5분 안에** Sandbox를 켜서 Runner가 접속하게 한다 (bootstrap token 유효시간). 로그에 `STARTUP OK`가 뜨면 준비 완료
+2. **2분(120초) 안에** Sandbox를 켜서 Runner가 READY가 되게 한다 (Startup 제한시간, 프로토콜 §7). 로그에 `STARTUP OK`가 뜨면 준비 완료
 3. Codex에 명령한다. 예: `scrp 도구만 써서 작업을 등록하고, 준비될 때까지 기다린 다음, 화면을 보고 (640, 420)을 클릭하고 '안녕하세요'를 입력해줘`
 
 주의:
@@ -131,15 +135,26 @@ codex -s read-only `
    | 필드 | 뜻 |
    |---|---|
    | `session_id`, `runtime_id`, `generation` | HELLO에 그대로 넣을 값. 다르면 Host가 거부 |
-   | `host` | Host 주소. `null`이면 기본 게이트웨이(Windows Sandbox에서는 Host) |
+   | `host` | 접속할 Host 주소 (`--advertise-address`로 준 값). `null`이면 기본 게이트웨이(Windows Sandbox에서는 Host) |
    | `port`, `path` | `17443`, `/scrp/v1/control` |
    | `token` | 1회용 접속 token (256-bit, 5분 유효). **로그에 남기지 말 것** |
    | `token_expires_at` | token 만료 시각 (UTC) |
    | `host_certificate_pem` | 신뢰할 Host 인증서. **이 인증서만 신뢰** |
+   | `host_certificate_sha256` | 그 인증서의 SHA-256 지문 (DER 바이트, 소문자 16진수). pinning할 때 이 값과 비교 |
    | `observation_upload` | 스크린샷 업로드 주소 `{"port": 17444, "path": "/scrp/v1/observations/"}`. host는 위와 같은 규칙 |
 
 2. `wss://<host>:<port><path>`로 접속한다. TLS 1.2 이상. 인증서는 `host_certificate_pem` 하나만 신뢰하고,
    주소가 부팅마다 바뀌므로 호스트명 검사는 끈다. 인증서가 다르면 접속하지 않는다. **평문 ws://로 재시도하지 않는다**
+
+   **Host 인증서를 Windows 인증서 저장소에 설치하지 않는다.** 신뢰 루트에 넣으려고 하면 Sandbox를 켤 때마다
+   "CA 인증서를 설치하시겠습니까?" 창이 뜨고 (Sandbox는 매번 초기화되므로), 자동 실행이 막힌다.
+   대신 연결할 때 직접 비교한다 (pinning). WinHTTP 기준:
+   1. 발급 기관 검사만 끈다: `WINHTTP_OPTION_SECURITY_FLAGS`에 `SECURITY_FLAG_IGNORE_UNKNOWN_CA`
+   2. 연결된 뒤 서버 인증서를 꺼낸다: `WINHTTP_OPTION_SERVER_CERT_CONTEXT`
+   3. 그 인증서 DER 바이트의 SHA-256이 `host_certificate_sha256`과 같은지 비교하고, 다르면 **바로 끊는다**
+
+   1번만 하고 2·3번을 빼면 아무 서버나 믿게 되므로 셋 다 해야 한다. 호스트명 검사를 계속 쓰는 Runner라면
+   `--advertise-address`로 준 주소가 인증서 SAN에 들어 있으므로 통과한다 (이때도 인증서를 신뢰시키는 방법이 필요해서 pinning을 권장)
 3. WebSocket 업그레이드 요청에 `Authorization: Bearer <token>` 헤더를 넣는다 (URL에 넣지 않는다)
 4. 첫 메시지로 HELLO를 보낸다
 5. HELLO_ACK의 `channel_credentials.reconnect.token`을 **메모리에만** 보관한다 (재연결용, 1회용)
