@@ -16,6 +16,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 |---|---|---|
 | `host/sender.py` | Host 송신기. Runner 접속 수락, 인증, 데모 실행 | 3.4, 4.6 |
 | `host/mcp_server.py` | MCP Server: Codex가 자식 프로세스로 켜고 stdio로 도구를 부르는 창구 | 5.7 |
+| `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
 | `host/tool_catalog.py` | 도구 13개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
@@ -126,6 +127,42 @@ codex -s read-only `
 - `default_tools_approval_mode='approve'`는 시험용으로 모든 도구 호출을 자동 승인한다. 도구마다 `annotations`(읽기 전용·파괴적)가 있으므로 `auto`/`prompt`로 바꾸면 Codex가 입력 도구 호출 전에 사용자에게 묻는다
 - 켤 때마다 새 세션(`SES-<날짜>-<시각>`)과 새 token이 만들어진다
 
+### Sandbox 자동 시작 (Sandbox Manager 연동)
+
+`--runner-exe`를 주면 Sandbox를 손으로 켤 필요가 없다. Codex가 `task_submit`을 부르는 순간
+Lifecycle 담당의 Sandbox Manager(`b-hamo/sandbox_manager`)로 Windows Sandbox를 켜고, 세션이 끝나면 끈다.
+
+```powershell
+codex -s read-only `
+  -c "mcp_servers.scrp.command='$py'" `
+  -c "mcp_servers.scrp.args=['$server', '--runner-exe', 'C:/path/to/sandbox_runner.exe']" `
+  -c "mcp_servers.scrp.default_tools_approval_mode='approve'" `
+  -c "mcp_servers.scrp.startup_timeout_sec=60"
+```
+
+| 언제 | Host가 하는 일 |
+|---|---|
+| Codex가 켜질 때 | wss·업로드 서버만 연다. Sandbox는 아직 켜지 않는다 |
+| `task_submit` | Sandbox 켜기를 **백그라운드로 시작하고 바로** `PREPARING`으로 답한다 (Codex를 붙잡아 두지 않음) |
+| Sandbox가 켜지면 | Sandbox가 보는 Host 주소로 인증서(SAN)·token·bootstrap을 만들어 `publish_bootstrap` → Guest 안 시작 스크립트가 Runner 실행 |
+| Runner가 검사 통과(READY) | `mark_ready`: 다 쓴 token 파일을 지운다. READY는 Host의 Startup Verification만 정한다 |
+| `session_stop` | Runner에게 TERMINATE → 답을 받고 Runner가 끊으면 `stop`(`wsb list`로 꺼졌는지 확인) → `cleanup` |
+| 켜기 실패·120초 안에 READY 안 됨 | 세션 실패(`RUNTIME_START_FAILED`), Sandbox 비상 종료 후 정리 |
+| Codex 종료 (stdin 닫힘) | READY면 TERMINATE(USER_STOP) 후 끄고 정리, 아니면 바로 끄고 정리 |
+
+- Codex에게는 "켜지는 데 20~60초, `computer_observe`를 `wait_ms=10000`으로 부르면 기다린다"고 알려준다.
+  켜지는 중에 `wait_ms`를 준 `computer_observe`는 READY까지 기다렸다가 바로 캡처한다
+- `runtime_get_state`에 `sandbox` 항목(`LAUNCHING`/`PUBLISHED`/`READY`/`STOPPED`/`FAILED`, 오류)이 붙는다
+- `task_submit`을 여러 번 불러도 Sandbox는 한 번만 켠다 (MCP Server 1개 = 세션 1개)
+- `--runner-exe`를 쓰면 bootstrap 위치와 Host 주소는 Sandbox Manager가 정하므로 `--advertise-address`, `--bootstrap-out`은 같이 못 쓴다
+- 작업 폴더는 `%LOCALAPPDATA%\SecureCUA\sandbox-manager` (`--sandbox-root`로 변경). OneDrive 안이면 거부된다 (token이 동기화되므로)
+
+먼저 준비할 것 (한 번만):
+- `pip install -r requirements.txt` (Sandbox Manager 포함, Python 3.13)
+- **방화벽 규칙**: Sandbox Manager가 켤 때 `SCRP PoC*` 규칙(17443·17444 허용, 나머지 차단, Sandbox 스위치에 연결)을 확인하고,
+  없으면 `firewall not ready`로 거부한다. Lifecycle 저장소의 `tools/install_firewall.ps1`을 **관리자 권한으로** 한 번 실행한다
+- Windows Sandbox는 PC당 1개. 이미 켜져 있으면 `a Windows Sandbox is already running`으로 거부된다
+
 ## Runner가 접속하는 방법
 
 프로토콜 문서 §4의 Host 측 구현이다. Runner(C++)는 같은 방식으로 접속해야 한다.
@@ -233,4 +270,7 @@ Host가 거부하는 경우:
 - 스크린샷은 원본 크기 그대로 Agent에게 간다 (Sandbox 화면 2048×1232 기준 약 2.5 MB). AI 비용이 문제가 되면 줄여서 보내고 좌표를 원본으로 환산하는 기능을 넣는다
 - Artifact(파일) 업로드 경로 `/scrp/v1/artifacts/`는 아직 없다
 - MCP Server 1개 = 세션 1개. Codex를 다시 켜면 새 세션이 만들어지고 Sandbox도 다시 접속해야 한다
+- Codex가 MCP Server를 강제로 죽이면(stdin을 닫지 않고) Sandbox가 남을 수 있다. 창을 닫거나 `wsb stop`으로 끈다.
+  남아 있으면 다음 `task_submit`이 `a Windows Sandbox is already running`으로 실패한다
+- Sandbox 켜기에 실패한 세션은 다시 켜지 않는다. Codex를 다시 켜서 새 세션으로 시작한다
 - 승인 Workflow(B-8)는 `approver` 콜백 자리만 있다. 사용자에게 묻는 UI는 없으므로 승인 필요 도구는 지금은 거부된다
