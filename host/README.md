@@ -1,0 +1,128 @@
+# host/ — Host 쪽 코드 안내
+
+Agent(Codex)의 요청을 받아 검사하고, 격리된 Sandbox 안의 Runner로 전달하는 Host 프로그램이다.
+파일 14개가 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.
+
+```
+Codex (AI)
+   │  MCP (stdin/stdout)
+   ▼
+┌─ ① Codex와 대화하는 층 ─────────────────────────────────┐
+│  mcp_server.py   tool_availability.py   tool_catalog.py   │
+└───────────────────────────────────────────────────────────┘
+   ▼
+┌─ ② 요청을 검사하는 층 (Broker) ─────────────────────────┐
+│  broker.py   policy.py   audit.py                          │
+└───────────────────────────────────────────────────────────┘
+   ▼
+┌─ ③ 세션을 관리하는 층 ───────────────────────────────────┐
+│  runtime_session.py   startup.py                           │
+└───────────────────────────────────────────────────────────┘
+   ▼
+┌─ ④ Sandbox와 통신하는 층 ────────────────────────────────┐
+│  sender.py   connection.py   session_registry.py           │
+│  tls.py      bootstrap.py                                  │
+└───────────────────────────────────────────────────────────┘
+   │  wss (TLS 1.2+, 1회용 token)
+   ▼
+Sandbox 안 Runner
+```
+
+## ① Codex와 대화하는 층
+
+| 파일 | 하는 일 | WBS |
+|---|---|---|
+| `mcp_server.py` | Codex가 자식 프로세스로 켜는 MCP Server. `tools/list`에 도구 목록을 주고, `tools/call`을 Broker에 넘겨 결과를 돌려준다. 켜질 때 ④층(wss 서버, 세션 등록, bootstrap 파일)도 함께 시작한다 | 5.7 |
+| `tool_availability.py` | 이 세션에서 보여줄 도구를 정하는 규칙. Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 빼버리므로, 무거운 라이브러리 없이 쓸 수 있게 따로 뺐다 | 5.7 |
+| `tool_catalog.py` | `schema/mcp-tools/`의 도구 13개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
+
+## ② 요청을 검사하는 층 (Broker)
+
+| 파일 | 하는 일 | WBS |
+|---|---|---|
+| `broker.py` | **모든 도구 호출의 입구 `Broker.call()`.** 도구 확인 → 입력 검사 → 세션 상태 → 호출 빈도 → 정책 → 좌표·화면 신선도 → Action ID 발급 → SCRP 메시지로 번역·전송 → 오류 정리 → 감사 로그. 하나라도 걸리면 Runner로 보내지 않는다. 입력은 절대 재전송하지 않는다 | 5.6 |
+| `policy.py` | 보안 규칙. 요청마다 ALLOW / REQUIRE_APPROVAL / DENY와 규칙 ID를 정한다 (예: Win+R 거부 `P-DENY-HOTKEY`). 나중에 Translator의 판단이 들어올 자리 | 5.6 |
+| `audit.py` | 호출마다 JSON 한 줄 기록 (`host/.audit/<session>.jsonl`). `computer_type`의 글자는 길이와 SHA-256만 남긴다 | 5.6 |
+
+## ③ 세션을 관리하는 층
+
+| 파일 | 하는 일 | WBS |
+|---|---|---|
+| `runtime_session.py` | 연결이 끊겨도 이어지는 세션. 5초마다 HEARTBEAT, 연속 2회 누락 DEGRADED · 3회 UNRESPONSIVE. 끊길 때 결과를 못 받은 Action은 재전송하지 않고 재접속 후 STATE_REQUEST로 확인. task_id·action_id 발급, 마지막 화면과 받은 시각 보관, `status()`로 상태 조회 | 4.4, 4.5 |
+| `startup.py` | Startup Verification. Runner가 "준비됐다"고 해도 Host가 7가지(버전·Capability·Monitor·시계 / Worker 생존·첫 캡처·Heartbeat)를 확인한 뒤에만 READY. 등록 후 120초 안에 안 되면 실패 | 4.5 |
+
+## ④ Sandbox와 통신하는 층
+
+| 파일 | 하는 일 | WBS |
+|---|---|---|
+| `sender.py` | wss 서버를 열고 Runner 접속을 받는다. 업그레이드 전에 token 확인(401/404), HELLO를 받으면 token을 사용 처리하고 세션에 연결. 시험용 데모(`--demo protocol` / `--demo broker`)도 여기 있다 | 3.4, 4.6 |
+| `connection.py` | 연결 1개. 받은 메시지를 검사(세션 신원, connection_id, sequence, message_id·nonce 중복, 시계 오차)하고 요청·응답을 짝 맞춘다. 끊기면 버리고 새로 만든다 | 3.4 |
+| `session_registry.py` | 1회용 token 발급·확인·폐기. 처음 접속용(bootstrap, 5분)과 재접속용(reconnect, 새로 받으면 이전 것 폐기). TERMINATE 시 전부 폐기 | 4.6, 4.4 |
+| `tls.py` | TLS 설정(최소 1.2)과 개발용 자체 서명 인증서 생성 (`host/.certs/`) | 4.6 |
+| `bootstrap.py` | Runner가 읽을 접속 안내서 `host/.bootstrap/bootstrap.json` 생성 (세션 값, 포트·경로, token, Host 인증서) | 4.6 |
+| `__init__.py` | 비어 있음. `host`를 Python 패키지로 인식시키는 표시 | - |
+
+같이 쓰는 저장소의 다른 곳:
+- `scrp/validate.py`: 모든 메시지를 크기·인코딩·스키마로 검사
+- `scrp/envelope.py`: 메시지 봉투(ID·sequence·nonce·timestamp) 생성
+- `schema/`: Host ↔ Runner 메시지 규격, `schema/mcp-tools/`: Codex 도구 규격
+
+## 요청 하나가 지나가는 길
+
+Codex가 `computer_click(x=640, y=420)`을 부르면:
+
+```
+1. mcp_server.py        tools/call 수신 → Broker.call()
+2. broker.py            검사
+   ├ tool_catalog.py      입력값 규격 검사, button·click_count 기본값 채움
+   ├ broker.py            세션 READY? task_submit 했나? 초당 5회 이하?
+   ├ policy.py            DENY 규칙에 걸리나?
+   └ broker.py            좌표가 마지막 화면 안인가? 화면을 받은 지 10초 이내인가?
+                          → ACT-000003 발급, computer_click → mouse.click 번역
+3. runtime_session.py   READY 확인, Action 기록 "SENT"
+4. connection.py        ACTION_REQUEST 전송 → ACK → ACTION_RESULT 대기
+5. (Runner가 Sandbox 안에서 클릭하고 응답)
+6. connection.py        응답 검사 (sequence, 중복, 시각)
+7. broker.py            결과 정리 (SUCCESS / Runner가 보낸 오류 이유)
+   └ audit.py             한 줄 기록
+8. mcp_server.py        Codex에게 결과 반환
+```
+
+## 무엇을 고치려면 어디를 보나
+
+| 하고 싶은 것 | 볼 파일 |
+|---|---|
+| 새 도구 추가, 도구 입력 규칙 변경 | `schema/mcp-tools/*.json` → `broker.py`의 `OPERATIONS`·`translate()` |
+| 보안 규칙 추가 (차단할 요청) | `policy.py` |
+| 호출 빈도 제한 변경 | `broker.py`의 `RATE_LIMITS` |
+| 오류별로 Agent에게 안내할 다음 행동 | `broker.py`의 `ERROR_HINTS` |
+| READY 전에 확인할 항목 | `startup.py`의 `StartupProfile`, `check_hello()`, `verify_runtime()` |
+| Heartbeat 간격, 이상 판정 기준 | `runtime_session.py` 위쪽 상수 |
+| token 유효시간 | `session_registry.py`의 `TOKEN_TTL_S`, `RECONNECT_TTL_S` |
+| Runner에게서 받는 메시지 검사 | `connection.py`의 `check()`, `scrp/validate.py` |
+
+## 테스트
+
+| 테스트 파일 | 확인하는 것 |
+|---|---|
+| `tests/test_auth.py` | TLS, token(없음·틀림·만료·재사용·다른 세션), nonce 재사용, 로그에 token 노출 |
+| `tests/test_heartbeat_reconnect.py` | Health 전이, 재접속 token, 연결 교체, 끊긴 Action 재동기화 |
+| `tests/test_startup.py` | 정상 승격, 고장 Runner 거부, 시간 초과, 시계 오차 |
+| `tests/test_broker.py` | 검사별 거부, 정책, 빈도 제한, 감사 로그 마스킹, 도구 규격 ↔ 프로토콜 교차 검사 |
+| `tests/test_mcp_server.py` | 실제 자식 프로세스로 기동, 도구 목록 속도, Codex → Runner 전 구간 |
+| `tests/mini_runner.py` | 테스트용 최소 Runner (테스트가 아니라 도구) |
+
+```bash
+.venv/Scripts/python.exe -m pytest -q tests
+```
+
+## Git에 올리지 않는 폴더
+
+실행하면 생기지만 `.gitignore`로 제외된다. 개인 키와 token이 들어 있으므로 공유하지 않는다.
+
+| 폴더 | 내용 |
+|---|---|
+| `host/.certs/` | 개발용 인증서와 **개인 키** |
+| `host/.bootstrap/` | bootstrap 파일 (**1회용 token** 포함) |
+| `host/.audit/` | 감사 로그 |
+| `host/.logs/` | MCP Server 로그 |
