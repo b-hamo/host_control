@@ -162,7 +162,9 @@ class Broker:
                  policy: Policy | None = None, audit: AuditLog | None = None,
                  approver: Approver | None = None, rates: dict[str, float] | None = None,
                  clock=time.monotonic, launcher=None):
-        self.session = session                       # B-3: bound for the Broker's lifetime
+        # B-3: bound to one session. Only a new generation of that same session replaces it
+        # (switch_session), when the Runner or the Sandbox had to be restarted.
+        self.session = session
         # host/lifecycle.py SandboxLauncher: task_submit starts the Sandbox. None: the
         # Runtime is started some other way (by hand, run_demo.ps1).
         self.launcher = launcher
@@ -175,6 +177,13 @@ class Broker:
         self.goal: str | None = None
         self._pending_image: bytes | None = None
         self._waited_s = 0.0
+        self.notice: str | None = None               # told to the Agent once, with the next result
+
+    def switch_session(self, session: RuntimeSession, notice: str) -> None:
+        """Continue with the next generation of the same session (host/lifecycle.py recovery)."""
+        assert session.identity[:2] == self.session.identity[:2], "only a new generation of this session"
+        self.session = session
+        self.notice = notice
 
     # -- B-11 ----------------------------------------------------------------
     def tools(self) -> list[dict]:
@@ -208,6 +217,8 @@ class Broker:
                 action_id = self.session.next_action()
             self._pending_image = None
             data = await self._dispatch(tool, args, action_id)
+            if self.notice:
+                data, self.notice = {**data, "notice": self.notice}, None
             result = ToolResult(True, data, action_id=action_id, image=self._pending_image)
         except BrokerError as e:
             result = ToolResult(False, error=e.as_dict(), action_id=action_id)
@@ -240,7 +251,9 @@ class Broker:
             raise BrokerError("POLICY_DENIED", "call task_submit with your goal before using computer_* tools",
                               next_step="task_submit")
         if tool in RUNTIME_TOOLS and not s.ready.is_set():
-            raise BrokerError("RUNTIME_UNAVAILABLE", f"runtime is {s.runtime_state}, not READY")
+            hint = self.launcher.hint() if self.launcher is not None else None
+            raise BrokerError("RUNTIME_UNAVAILABLE",
+                              f"runtime is {s.runtime_state}, not READY" + (f"; {hint}" if hint else ""))
 
     async def _enforce(self, tool: str, args: dict, decision: Decision) -> None:
         if decision.result == "DENY":

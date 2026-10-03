@@ -129,7 +129,10 @@ class HostBackend(threading.Thread):
         uploads = ObservationUploads()
         sessions = Sessions(registry, profile=StartupProfile(timeout_s=a.startup_timeout), uploads=uploads,
                             on_end=lambda ident: self.launcher and self.launcher.session_ended(ident),
-                            on_startup=lambda ident, rep: self.launcher and self.launcher.on_startup(ident, rep))
+                            on_startup=lambda ident, rep: self.launcher and self.launcher.on_startup(ident, rep),
+                            on_health=lambda *change: self.launcher and self.launcher.on_health(*change),
+                            # tests shorten heartbeat / reconnect timing; the CLI never sets this
+                            **getattr(a, "session_tuning", {}))
         identity = (a.session or datetime.now().strftime("SES-%Y%m%d-%H%M%S"), a.runtime, a.generation)
         upload_server = await start_upload_server(uploads, ssl_contexts[1], a.host, a.upload_port)
         self._stop = asyncio.Event()
@@ -143,21 +146,28 @@ class HostBackend(threading.Thread):
             if sandboxed:
                 from host.lifecycle import SandboxLauncher
 
-                def publish(address: str, bootstrap_path: Path) -> str:
-                    """The Host part of the launch: certificate for this address, token, bootstrap."""
+                def publish(address: str, bootstrap_path: Path, ident: tuple[str, str, int]) -> str:
+                    """The Host part of a launch or recovery: certificate for this address, token, bootstrap."""
                     cert, key = tls.ensure_dev_cert(a.cert_dir, addresses=[address])
                     for ctx in ssl_contexts:
                         ctx.load_cert_chain(cert, key)     # new connections get the new certificate
                     pem = cert.read_text(encoding="ascii")
-                    rec = registry.issue(*identity)        # 5 min from now, not from MCP start
+                    rec = registry.issue(*ident)           # 5 min from now, for this generation
                     write_bootstrap(bootstrap_path, rec, pem, port, host=address, upload_port=upload_port)
-                    log.info("bootstrap for %s written (token valid until %s)", identity[0], rec.expires_utc)
+                    log.info("bootstrap for %s generation %d written (token valid until %s)",
+                             ident[0], ident[2], rec.expires_utc)
                     return pem
 
                 manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root)
                 self.session = sessions.get(identity)      # startup clock starts at task_submit
+                def switch(new_session, notice: str) -> None:
+                    self.session = new_session             # recovery: next generation of the same session
+                    self.broker.switch_session(new_session, notice)
+
                 self.launcher = SandboxLauncher(manager, a.runner_exe or Path("sandbox_runner.exe"),
-                                                self.session, publish)
+                                                self.session, publish, new_session=sessions.get,
+                                                on_switch=switch,
+                                                auto_recover=not getattr(a, "no_auto_restart", False))
                 self.broker = Broker(self.session, audit=audit, launcher=self.launcher)
                 log.info("Host ready: wss://%s:%d%s, session %s; the Sandbox starts at task_submit (Runner %s)",
                          a.host, port, CONTROL_PATH, identity[0], a.runner_exe)
@@ -289,6 +299,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="where to write bootstrap.json (default host/.bootstrap/bootstrap.json)")
     ap.add_argument("--runner-exe", type=Path, default=None,
                     help="start the Windows Sandbox with this Runner at task_submit (Sandbox Manager)")
+    ap.add_argument("--no-auto-restart", action="store_true",
+                    help="with --runner-exe: end the session instead of restarting a Runner or Sandbox that stopped answering")
     ap.add_argument("--sandbox-root", type=Path, default=None,
                     help="Sandbox Manager workspace (default %%LOCALAPPDATA%%/SecureCUA/sandbox-manager)")
     ap.add_argument("--cert-dir", type=Path, default=HOST_DIR / ".certs")

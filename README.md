@@ -150,9 +150,29 @@ codex -s read-only `
 | 켜기 실패·120초 안에 READY 안 됨 | 세션 실패(`RUNTIME_START_FAILED`), Sandbox 비상 종료 후 정리 |
 | Codex 종료 (stdin 닫힘) | READY면 TERMINATE(USER_STOP) 후 끄고 정리, 아니면 바로 끄고 정리 |
 
+#### 끊겼을 때 자동 복구
+
+Host가 언제 할지 정하고, 실제로 끄고 켜는 건 Sandbox Manager(`restart_runner`, `reset_sandbox`)가 한다.
+
+| 상황 | Host가 하는 일 |
+|---|---|
+| 연결이 끊기고 30초(재접속 유예) 안에 Runner가 안 돌아옴, **Sandbox는 켜져 있음** | `restart_runner`: 같은 Sandbox 안에서 Runner만 다시 켬 (열린 창 등은 그대로) |
+| 연결이 끊기고 30초 안에 안 돌아옴, **Sandbox가 사라짐** | **다시 켜지 않음**: 사용자가 창을 닫은 것으로 보고 세션 종료(`RUNTIME_GONE`) |
+| 연결은 있는데 Heartbeat에 3번 연속 무응답 (Sandbox 먹통) | `reset_sandbox`: Sandbox를 새로 켬 |
+| `restart_runner` 실패 | `reset_sandbox`로 넘어감 |
+| `reset_sandbox`도 실패, 또는 재시작 횟수 초과(세션당 3번) | 세션 실패, Sandbox 비상 종료 후 정리 |
+| 보안 문제로 끝난 세션(재접속 때 권한·감시 기능 감소 등), 첫 Startup Verification 실패 | 다시 켜지 않음 |
+
+- 복구할 때마다 **같은 세션의 다음 세대(generation 2, 3…)**가 된다. 새 token·새 bootstrap으로 처음처럼 Startup Verification을 거쳐야 READY. 옛 세대의 token과 메시지는 전부 거부
+- 끊길 때 결과를 몰랐던 클릭·입력은 `UNKNOWN`으로 남기고 **다시 보내지 않는다**. task_id·action_id 번호는 이어서 쓴다
+- 복구 중 `computer_*`는 "준비 중, 다시 시도"(`RUNTIME_UNAVAILABLE`)로 답하고, `computer_observe(wait_ms)`는 READY까지 기다린다
+- 복구 뒤 첫 성공 결과에 `notice`가 한 번 붙는다: 다시 켜졌으니 화면부터 다시 보라는 안내와 `UNKNOWN`으로 남은 Action 목록
+- `runtime_get_state`의 `sandbox`에 `generation`, `recoveries`(한 일 목록)가 붙는다
+- `--no-auto-restart`: 다시 켜지 않고 세션을 끝낸다 (Sandbox는 끄고 정리)
+
 - Codex에게는 "켜지는 데 20~60초, `computer_observe`를 `wait_ms=10000`으로 부르면 기다린다"고 알려준다.
   켜지는 중에 `wait_ms`를 준 `computer_observe`는 READY까지 기다렸다가 바로 캡처한다
-- `runtime_get_state`에 `sandbox` 항목(`LAUNCHING`/`PUBLISHED`/`READY`/`STOPPED`/`FAILED`, 오류)이 붙는다
+- `runtime_get_state`에 `sandbox` 항목(`LAUNCHING`/`PUBLISHED`/`READY`/`RECOVERING`/`STOPPED`/`FAILED`, 오류)이 붙는다
 - `task_submit`을 여러 번 불러도 Sandbox는 한 번만 켠다 (MCP Server 1개 = 세션 1개)
 - `--runner-exe`를 쓰면 bootstrap 위치와 Host 주소는 Sandbox Manager가 정하므로 `--advertise-address`, `--bootstrap-out`은 같이 못 쓴다
 - 작업 폴더는 `%LOCALAPPDATA%\SecureCUA\sandbox-manager` (`--sandbox-root`로 변경). OneDrive 안이면 거부된다 (token이 동기화되므로)
@@ -270,7 +290,9 @@ Host가 거부하는 경우:
 - 스크린샷은 원본 크기 그대로 Agent에게 간다 (Sandbox 화면 2048×1232 기준 약 2.5 MB). AI 비용이 문제가 되면 줄여서 보내고 좌표를 원본으로 환산하는 기능을 넣는다
 - Artifact(파일) 업로드 경로 `/scrp/v1/artifacts/`는 아직 없다
 - MCP Server 1개 = 세션 1개. Codex를 다시 켜면 새 세션이 만들어지고 Sandbox도 다시 접속해야 한다
-- Codex가 MCP Server를 강제로 죽이면(stdin을 닫지 않고) Sandbox가 남을 수 있다. 창을 닫거나 `wsb stop`으로 끈다.
-  남아 있으면 다음 `task_submit`이 `a Windows Sandbox is already running`으로 실패한다
+- Codex가 MCP Server를 강제로 죽이면(stdin을 닫지 않고) Sandbox가 남는다. 다음 `task_submit` 때 Sandbox Manager가
+  켠 Host가 죽은 세션의 Sandbox를 먼저 정리하고 시작한다 (손으로 켠 Sandbox는 건드리지 않고 거부)
+- 실제 Runner는 아직 재접속(재접속 token으로 다시 붙기)을 하지 않는다. 그래서 잠깐 끊겨도 30초 뒤 Runner를 다시 켜고,
+  그 Sandbox에서 하던 작업 상태는 화면에 남은 것만 이어진다
 - Sandbox 켜기에 실패한 세션은 다시 켜지 않는다. Codex를 다시 켜서 새 세션으로 시작한다
 - 승인 Workflow(B-8)는 `approver` 콜백 자리만 있다. 사용자에게 묻는 UI는 없으므로 승인 필요 도구는 지금은 거부된다
