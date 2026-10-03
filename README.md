@@ -6,7 +6,7 @@ AI Agent(Codex)의 요청을 검사해서 격리된 Sandbox 안의 Runner(`b-ham
 
 ```
 Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ RuntimeSession ] ──WSS──▶ [ Runner ]
-                  5.7 예정        host/broker.py   host/runtime_session.py      sandbox_runner
+               host/mcp_server.py host/broker.py   host/runtime_session.py      sandbox_runner
                                   (도구 호출 검사)  (연결·재연결·READY 관리)      Sandbox 안
 ```
 
@@ -15,10 +15,12 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | 경로 | 내용 | WBS |
 |---|---|---|
 | `host/sender.py` | Host 송신기. Runner 접속 수락, 인증, 데모 실행 | 3.4, 4.6 |
+| `host/mcp_server.py` | MCP Server: Codex가 자식 프로세스로 켜고 stdio로 도구를 부르는 창구 | 5.7 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
 | `host/tool_catalog.py` | 도구 13개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
 | `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
+| `host/tool_availability.py` | 도구 노출 규칙 (표준 라이브러리만 사용, MCP Server가 빠르게 뜨도록) | 5.7 |
 | `host/connection.py` | 연결 1개: 수신 메시지 검증, 요청·응답 짝 맞춤 | 3.4 |
 | `host/runtime_session.py` | 재연결해도 이어지는 세션: Heartbeat·Health, 재연결 후 재동기화, 상태 조회 | 4.4, 4.5 |
 | `host/startup.py` | Startup Verification: Host가 확인한 뒤에만 READY | 4.5 |
@@ -84,6 +86,38 @@ Agent의 도구 호출은 모두 `Broker.call(tool, arguments)` 하나로 들어
 - Broker는 입력을 **절대 다시 보내지 않는다.** `ACTION_TIMEOUT`이면 `recommended_next_step: runtime_get_state`로 Agent가 먼저 확인하게 한다
 - Agent는 `session_id`를 넘기지 않는다. Broker 하나가 세션 하나에 묶인다 (다른 세션 조작 불가)
 - 데모: `python host/sender.py --demo broker` — 도구 호출 9개 중 3개(작업 등록 전 관찰, 화면 밖 클릭, Win+R)가 거부되고 Runner에는 2개만 도착한다. 감사 로그는 `host/.audit/<session>.jsonl`
+
+## MCP Server와 Codex 연결 (WBS 5.7)
+
+Codex가 `host/mcp_server.py`를 자식 프로세스로 켜고 stdin/stdout으로 MCP(JSON-RPC)를 주고받는다.
+켜지면 Host(wss 서버, 세션 등록, bootstrap 파일 생성)도 함께 시작하므로 `host/sender.py`를 따로 켜지 않는다.
+
+- Codex는 켠 뒤 약 0.5초 안에 도구 목록을 받지 못하면 그 서버의 도구를 빼버린다. 그래서 도구 목록은 표준 라이브러리만으로 즉시 답하고, 무거운 부분(Broker, TLS, wss 서버)은 백그라운드에서 뒤이어 띄운다
+- stdout은 MCP 전용이다. 로그는 stderr와 `host/.logs/mcp_server.log`에 남는다
+- 오류는 MCP 도구 오류(`isError: true`)로 돌려주고, 내용은 Broker의 표준 오류 JSON이다
+
+### Codex에 연결하기
+
+`~/.codex/config.toml`을 고치지 않고 실행할 때만 붙이는 방법 (PowerShell, 경로는 본인 환경에 맞게):
+
+```powershell
+$py = "C:/path/to/host_control/.venv/Scripts/python.exe"
+$server = "C:/path/to/host_control/host/mcp_server.py"
+codex -s read-only `
+  -c "mcp_servers.scrp.command='$py'" `
+  -c "mcp_servers.scrp.args=['$server']" `
+  -c "mcp_servers.scrp.default_tools_approval_mode='approve'" `
+  -c "mcp_servers.scrp.startup_timeout_sec=60"
+```
+
+1. 위 명령으로 Codex를 켠다 → MCP Server가 켜지면서 `host/.bootstrap/bootstrap.json`이 새로 생긴다
+2. **5분 안에** Sandbox를 켜서 Runner가 접속하게 한다 (bootstrap token 유효시간). 로그에 `STARTUP OK`가 뜨면 준비 완료
+3. Codex에 명령한다. 예: `scrp 도구만 써서 작업을 등록하고, 준비될 때까지 기다린 다음, 화면을 보고 (640, 420)을 클릭하고 '안녕하세요'를 입력해줘`
+
+주의:
+- Codex에 기본으로 들어 있는 화면 제어 기능이 대신 나설 수 있으니 명령에 "scrp 도구만 써서"를 넣는다
+- `default_tools_approval_mode='approve'`는 시험용으로 모든 도구 호출을 자동 승인한다. 도구마다 `annotations`(읽기 전용·파괴적)가 있으므로 `auto`/`prompt`로 바꾸면 Codex가 입력 도구 호출 전에 사용자에게 묻는다
+- 켤 때마다 새 세션(`SES-<날짜>-<시각>`)과 새 token이 만들어진다
 
 ## Runner가 접속하는 방법
 
@@ -152,5 +186,6 @@ Host가 거부하는 경우:
 - Action timeout(연속 Timeout → Health 저하, 명세서 E-6)은 아직 Health에 반영하지 않는다. Heartbeat 누락만 반영
 - 데모(`--demo protocol`)는 Broker를 거치지 않고 세션을 직접 부른다. `--demo broker`가 실제 경로다
 - Broker의 정책 규칙은 초기값이다. FORCE_SANDBOX·FORCE_VM 같은 실행 위치 결정은 Translator(WBS 7.x, 8.8) 몫이라 아직 없다
-- `computer_observe`는 화면 메타데이터(크기·해시)만 돌려준다. PNG 자체를 받는 업로드 경로(프로토콜 §8)는 아직 없다
+- `computer_observe`는 화면 메타데이터(크기·해시)만 돌려준다. PNG 자체를 받는 업로드 경로(프로토콜 §8)는 아직 없어서 Codex가 화면을 보지 못한다
+- MCP Server 1개 = 세션 1개. Codex를 다시 켜면 새 세션이 만들어지고 Sandbox도 다시 접속해야 한다
 - 승인 Workflow(B-8)는 `approver` 콜백 자리만 있다. 사용자에게 묻는 UI는 없으므로 승인 필요 도구는 지금은 거부된다

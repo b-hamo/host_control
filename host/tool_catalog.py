@@ -15,26 +15,10 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
+from host.tool_availability import unavailable_reason
 from scrp.validate import SCHEMA_DIR
 
 TOOLS_DIR = SCHEMA_DIR / "mcp-tools"
-
-# Which runtime capability (from HELLO, granted in HELLO_ACK) each tool needs.
-REQUIRED_CAPABILITY = {
-    "computer_observe": "gui.observe",
-    "computer_move": "gui.input",
-    "computer_click": "gui.input",
-    "computer_scroll": "gui.input",
-    "computer_type": "gui.input",
-    "computer_keypress": "gui.input",
-    "computer_hotkey": "gui.input",
-    "computer_click_element": "ui.automation",
-}
-# Tools whose backend is not built yet. Hidden rather than failing late (B-11).
-NOT_YET_AVAILABLE = {
-    "artifact_list": "Artifact Broker is not connected yet (WBS 5.8)",
-    "artifact_export": "Artifact Broker is not connected yet (WBS 5.8)",
-}
 
 
 class ToolError(Exception):
@@ -74,12 +58,7 @@ class ToolCatalog:
         return self._tools[name]
 
     def unavailable_reason(self, name: str, granted: set[str]) -> str | None:
-        if name in NOT_YET_AVAILABLE:
-            return NOT_YET_AVAILABLE[name]
-        need = REQUIRED_CAPABILITY.get(name)
-        if need and need not in granted:
-            return f"this runtime was not granted {need}"
-        return None
+        return unavailable_reason(name, granted)
 
     def available(self, granted: set[str]) -> list[ToolDef]:
         return [t for n, t in self._tools.items() if self.unavailable_reason(n, granted) is None]

@@ -4,3 +4,4 @@ __pycache__/
 host/.certs/
 host/.bootstrap/
 host/.audit/
+host/.logs/
