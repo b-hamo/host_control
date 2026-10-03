@@ -95,6 +95,7 @@ class MiniRunner:
         self.reconnect_token: str | None = None
         self.ws = None
         self.me: Endpoint | None = None
+        self.profile: str | None = None           # artifact-export-v1 runners set this (artifact_runner.py)
 
     async def connect(self, token: str) -> dict:
         """HELLO → HELLO_ACK. Raises ConnectionClosed if the Host refuses at HELLO."""
@@ -116,7 +117,7 @@ class MiniRunner:
         """Answer until the connection ends. Returns "terminated", "dropped" or "closed"."""
         try:
             async for raw in self.ws:
-                msg = parse_and_validate(raw.encode() if isinstance(raw, str) else raw)
+                msg = parse_and_validate(raw.encode() if isinstance(raw, str) else raw, self.profile)
                 t = msg["type"]
                 if t == "HEARTBEAT":
                     self.heartbeats += 1
@@ -174,6 +175,8 @@ class MiniRunner:
                         "runtime_state": "READY", "worker_alive": self.worker_alive, "queue_depth": 0,
                         "action_state": {"action_id": target, "status": "SUCCESS"}
                         if target in self.executed else None}))
+                elif t == "ARTIFACT_REQUEST":
+                    await self.on_artifact_request(msg)
                 elif t == "TERMINATE":
                     await self._send(self.me.reply(msg, "TERMINATE_RESULT", {
                         "worker_stopped": True, "pending_actions_dropped": 0}))
@@ -182,6 +185,10 @@ class MiniRunner:
         except ConnectionClosed:
             pass
         return "closed"
+
+    async def on_artifact_request(self, msg: dict) -> None:
+        """Overridden by ArtifactRunner; a plain MiniRunner never gets one."""
+        raise AssertionError("unexpected ARTIFACT_REQUEST")
 
     def drop(self) -> None:
         self.ws.transport.abort()

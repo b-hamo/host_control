@@ -132,4 +132,13 @@ async def verify_runtime(session: RuntimeSession, conn: Connection,
         await session._heartbeat(conn, timeout=t)
     except ProtocolError as e:
         return report.add("heartbeat", False, f"no ALIVE ({e.code})")
-    return report.add("heartbeat", True, "ALIVE received")
+    if not report.add("heartbeat", True, "ALIVE received"):
+        return False
+
+    # Profile-specific steps, e.g. artifact-export-v1: the Telemetry channel must be up
+    # before work starts, because the Runner reports only files created after that.
+    for step in session.startup_checks:
+        name, ok, detail = await step(session)
+        if not report.add(name, ok, detail):
+            return False
+    return True

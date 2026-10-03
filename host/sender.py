@@ -58,9 +58,9 @@ from host.observation_store import ObservationUploads
 from host.upload_server import UPLOAD_PATH, UPLOAD_PORT, start_upload_server
 from host.runtime_session import (ALIVE_TIMEOUT_S, HEARTBEAT_INTERVAL_S, RECONNECT_GRACE_S,
                                   RuntimeSession)
-from host.session_registry import AuthError, SessionRegistry, bearer_token
+from host.session_registry import TELEMETRY_KINDS, AuthError, SessionRegistry, bearer_token
 from host.startup import STARTUP_TIMEOUT_S, StartupProfile
-from scrp.validate import ProtocolError, parse_and_validate
+from scrp.validate import ARTIFACT_EXPORT_V1, ProtocolError, parse_and_validate
 
 log = logging.getLogger("host-sender")
 
@@ -91,9 +91,17 @@ ALLOWED_CAPABILITIES = ["gui.observe", "gui.input", "ui.automation"]
 TELEMETRY_CREDENTIAL_TTL_S = 300
 
 
-def _telemetry_credential() -> dict:
-    # The telemetry channel is not served yet; the token is already a real
-    # random value so nothing guessable is ever handed out.
+ARTIFACT_CAPABILITY = "artifact.export.v1"      # only for sessions that selected artifact-export-v1
+TELEMETRY_PATH = "/scrp/v1/telemetry"
+
+
+def _telemetry_credential(registry: SessionRegistry, session: RuntimeSession) -> dict:
+    if session.contract == ARTIFACT_EXPORT_V1:
+        # A real, registered credential: it opens only this session's Telemetry channel, once.
+        rec = registry.issue_telemetry(session.identity)
+        return {"token": rec.token, "expires_at": rec.expires_utc}
+    # No Telemetry channel is served for this session; still a random value so
+    # nothing guessable is ever handed out, and the registry does not know it.
     expires = datetime.now(timezone.utc) + timedelta(seconds=TELEMETRY_CREDENTIAL_TTL_S)
     return {"token": secrets.token_urlsafe(32), "expires_at": expires.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
@@ -166,6 +174,7 @@ class Sessions:
                  on_end: Callable[[tuple[str, str, int]], None] | None = None, **session_kwargs):
         self.registry = registry
         self._on_end = on_end                        # e.g. stop the Sandbox (host/lifecycle.py)
+        self.artifacts = None                        # host/artifacts.py ArtifactBroker: serves /scrp/v1/telemetry
         self._kwargs = session_kwargs
         self._by_id: dict[tuple[str, str, int], RuntimeSession] = {}
 
@@ -186,20 +195,27 @@ class Sessions:
             self._on_end(identity)
 
 
-def make_process_request(registry: SessionRegistry):
+def make_process_request(registry: SessionRegistry, telemetry: bool = False):
     """Reject before the WebSocket upgrade: wrong path, or no valid token.
 
     The token is only checked here, not used up; that happens when HELLO
-    arrives. The client gets a bare 401 whatever the reason, so it learns
-    nothing about which tokens exist; the reason goes to our log.
+    (or CHANNEL_HELLO) arrives. The client gets a bare 401 whatever the reason,
+    so it learns nothing about which tokens exist; the reason goes to our log.
+    Each path accepts only its own token kinds: a Telemetry token never opens
+    the Control channel, and the reverse.
     """
     def process_request(connection, request):
         peer = connection.remote_address
-        if request.path != CONTROL_PATH:
+        if request.path == CONTROL_PATH:
+            kinds = None
+        elif telemetry and request.path == TELEMETRY_PATH:
+            kinds = TELEMETRY_KINDS
+        else:
             log.warning("REFUSED %s: path %s", peer, request.path)
             return connection.respond(http.HTTPStatus.NOT_FOUND, "Not Found\n")
         try:
-            registry.check(bearer_token(request.headers.get("Authorization")))
+            token = bearer_token(request.headers.get("Authorization"))
+            registry.check(token) if kinds is None else registry.check(token, kinds)
         except AuthError as e:
             log.warning("REFUSED %s: %s", peer, e)
             return connection.respond(http.HTTPStatus.UNAUTHORIZED, "Unauthorized\n")
@@ -211,6 +227,9 @@ async def handle(ws, run_demo: str | None, sessions: Sessions, limits: dict) -> 
     registry = sessions.registry
     peer = ws.remote_address
     log.info("CONNECTED from %s path=%s (TLS)", peer, ws.request.path)
+    if ws.request.path == TELEMETRY_PATH and sessions.artifacts is not None:
+        from host.telemetry import handle_telemetry
+        return await handle_telemetry(ws, registry, sessions, sessions.artifacts)
 
     raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
     hello = parse_and_validate(raw if isinstance(raw, bytes) else raw.encode("utf-8"))
@@ -234,16 +253,17 @@ async def handle(ws, run_demo: str | None, sessions: Sessions, limits: dict) -> 
     log.info("RECV %-16s runner=%s caps=%s session=%s (%s token accepted)", "HELLO",
              hello["payload"]["runner_version"], hello["payload"]["capabilities"], rec.session_id, rec.kind)
 
-    conn = Connection(ws, hello, rec.identity())
+    conn = Connection(ws, hello, rec.identity(), profile=session.contract)
     reconnect = registry.issue_reconnect(rec.identity())
-    granted = [c for c in hello["payload"]["capabilities"] if c in ALLOWED_CAPABILITIES]
+    allowed = ALLOWED_CAPABILITIES + ([ARTIFACT_CAPABILITY] if session.contract == ARTIFACT_EXPORT_V1 else [])
+    granted = [c for c in hello["payload"]["capabilities"] if c in allowed]
     session.granted_capabilities = set(granted)       # the Broker's tool catalog follows this (B-11)
     await conn.send(conn.me.reply(hello, "HELLO_ACK", {
         "selected_version": "1.0",
         "allowed_capabilities": granted,
         "limits": limits,
         "channel_credentials": {
-            "telemetry": _telemetry_credential(),
+            "telemetry": _telemetry_credential(registry, session),
             "reconnect": {"token": reconnect.token, "expires_at": reconnect.expires_utc},
         },
     }))
@@ -308,7 +328,7 @@ def start_server(registry: SessionRegistry, cert_path: Path, key_path: Path,
     }
     return serve(make_handler(run_demo, sessions, limits), host, port,
                  ssl=ssl_context or tls.server_context(cert_path, key_path),
-                 process_request=make_process_request(registry),
+                 process_request=make_process_request(registry, telemetry=sessions.artifacts is not None),
                  max_size=64 * 1024)
 
 
