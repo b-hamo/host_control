@@ -340,3 +340,54 @@ def test_artifact_tools_are_refused_before_the_runtime(certs):
     res, b, _ = run(with_broker(certs, body))
     assert res.error["error"] == "POLICY_DENIED" and "Artifact Broker" in res.error["message"]
     assert "artifact_export" not in {t["name"] for t in b.tools()}
+
+
+# --------------------------------------------------------------------- observe wait_ms
+def test_observe_waits_by_default_zero_and_caps_at_ten_seconds():
+    assert CATALOG.validate("computer_observe", {}) == {"display_id": "primary", "wait_ms": 0}
+    assert CATALOG.validate("computer_observe", {"wait_ms": 10000})["wait_ms"] == 10000
+    with pytest.raises(ToolError) as e:
+        CATALOG.validate("computer_observe", {"wait_ms": 10001})
+    assert e.value.code == "INVALID_ARGUMENT" and e.value.message.startswith("wait_ms")
+    with pytest.raises(ToolError):
+        CATALOG.validate("computer_observe", {"wait_ms": -1})
+
+
+def test_observe_captures_after_the_requested_delay(certs):
+    async def body(b, r):
+        assert (await b.call("task_submit", {"goal": "g"})).ok
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        res = await b.call("computer_observe", {"wait_ms": 400})
+        return res, loop.time() - t0
+
+    (res, elapsed), _, _ = run(with_broker(certs, body))
+    assert res.ok and elapsed >= 0.4
+
+
+def test_waiting_observes_do_not_hit_the_rate_limit(certs):
+    """Polling a loading screen with a delay stays under 2 observes per second;
+    polling without one does not."""
+    async def body(b, r):
+        await b.call("task_submit", {"goal": "g"})
+        waited = [await b.call("computer_observe", {"wait_ms": 600}) for _ in range(4)]
+        rushed = [await b.call("computer_observe", {}) for _ in range(4)]
+        return waited, rushed
+
+    (waited, rushed), b, _ = run(with_broker(certs, body))
+    assert all(x.ok for x in waited)
+    assert any(x.error and x.error["error"] == "RATE_LIMITED" for x in rushed)
+    recs = [x for x in b.audit.records if x["tool"] == "computer_observe" and x["arguments"]["wait_ms"] == 600]
+    assert len(recs) == 4 and all(x["latency_ms"] >= 600 for x in recs)
+
+
+def test_disconnect_while_waiting_is_reported_not_hung(certs):
+    async def body(b, r):
+        await started(b)
+        pending = asyncio.create_task(b.call("computer_observe", {"wait_ms": 1000}))
+        await asyncio.sleep(0.2)
+        r.drop()
+        return await pending
+
+    res, _, _ = run(with_broker(certs, body))
+    assert res.error["error"] == "RUNTIME_UNAVAILABLE" and res.error["retryable"] is True

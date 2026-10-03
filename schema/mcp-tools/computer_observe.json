@@ -1,15 +1,24 @@
 {
   "name": "computer_observe",
-  "description": "Capture the current screen of the session's runtime and return it as a PNG image. Call this before any coordinate-based action: x/y for click, move and scroll are pixels in the image this returns, origin at the top-left. A capture older than 10 seconds, or one taken before the screen resolution changed, is rejected as stale and must be retaken.",
+  "description": "Capture the current screen of the session's runtime and return it as a PNG image. Call this before any coordinate-based action: x/y for click, move and scroll are pixels in the image this returns, origin at the top-left. A capture older than 10 seconds, or one taken before the screen resolution changed, is rejected as stale and must be retaken. If the last capture showed something still loading or changing, call this again with wait_ms instead of calling it repeatedly: the capture is taken after that delay.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "display_id": {
         "type": "string",
-        "enum": ["primary"],
+        "enum": [
+          "primary"
+        ],
         "default": "primary",
         "description": "Which display to capture. v1 supports the primary display only."
+      },
+      "wait_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 10000,
+        "default": 0,
+        "description": "Milliseconds to wait before capturing, up to 10000. Use it when the previous capture was still loading: typically 500-1000 for a menu or dialog, 2000-3000 for an application starting, 3000-5000 for a web page. If it is still loading afterwards, wait again; for work longer than about a minute, check runtime_get_state."
       }
     }
   },
