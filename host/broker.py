@@ -223,24 +223,35 @@ class Broker:
         except BrokerError as e:
             result = ToolResult(False, error=e.as_dict(), action_id=action_id)
         except ProtocolError as e:
-            result = ToolResult(False, error=BrokerError(_normalize(e.code), e.detail).as_dict(),
-                                action_id=action_id)
+            code, detail = _normalize(e.code), e.detail
+            hint = self.launcher.hint() if code == "RUNTIME_UNAVAILABLE" and self.launcher is not None else None
+            if hint:
+                detail = f"{detail}; {hint}"             # the connection dropped just now
+            result = ToolResult(False, error=BrokerError(code, detail).as_dict(), action_id=action_id)
         self._audit(tool, args, decision, result, started)
         return result
 
     # -- steps ---------------------------------------------------------------
     async def _wait_for_start(self, tool: str, args: dict) -> float:
-        """computer_observe with wait_ms while the runtime is still starting waits for
-        READY instead of failing at once, so the Agent has one way to wait after
-        task_submit. Returns the seconds spent; the capture then follows without the extra delay."""
-        s = self.session
-        if tool != "computer_observe" or not args.get("wait_ms") or self.task_id is None                 or s.terminated or s.verified or s.ready.is_set():
+        """computer_observe with wait_ms while the runtime is not READY (starting, reconnecting
+        or being restarted) waits for READY instead of failing at once, so the Agent has one
+        way to wait. Returns the seconds spent; the capture then follows without the extra delay.
+
+        A restart swaps self.session for the next generation meanwhile, so whichever session
+        is current is checked again every half second."""
+        if tool != "computer_observe" or not args.get("wait_ms") or self.task_id is None \
+                or self.session.terminated or self.session.ready.is_set():
             return 0.0
         started = time.monotonic()
-        try:
-            await asyncio.wait_for(s.ready.wait(), args["wait_ms"] / 1000)
-        except asyncio.TimeoutError:
-            pass                                     # _check_session reports RUNTIME_UNAVAILABLE
+        deadline = started + args["wait_ms"] / 1000
+        while not self.session.terminated and not self.session.ready.is_set():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break                                # _check_session reports RUNTIME_UNAVAILABLE
+            try:
+                await asyncio.wait_for(self.session.ready.wait(), min(left, 0.5))
+            except asyncio.TimeoutError:
+                pass
         return time.monotonic() - started
 
     def _check_session(self, tool: str) -> None:

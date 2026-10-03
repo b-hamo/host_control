@@ -317,3 +317,56 @@ def test_runner_restart_with_the_lifecycle_sandbox_manager(tmp_path):
     kinds = [e["kind"] for e in state["events"]]
     assert "RUNNER_RESTARTED" in kinds and state["generation"] == 2 and state["restarts"] == 1
     assert state["state"] == "TERMINATED" and kinds[-1] == "CLEANUP" and not wsb.live
+
+
+def test_observe_with_wait_ms_right_after_the_drop_waits_through_the_restart(tmp_path):
+    """Found in the real-Sandbox QA: during the reconnect grace period computer_observe(wait_ms)
+    failed at once instead of waiting, so an Agent gave up before the restart even began."""
+    fake = RecoveringManager(tmp_path / "sbx")
+
+    async def body():
+        host = RecoveringHost(tmp_path, fake)
+        r1, _, serving1 = await start_ready(host, fake, tmp_path)
+        r1.drop()
+        await serving1
+        hinted = await host.call("computer_observe")         # no wait: the hint says what to do
+
+        async def new_guest():
+            await wait_republished(tmp_path)
+            return await guest(*paths(tmp_path / "sbx"))
+
+        g = asyncio.create_task(new_guest())
+        t0 = time.monotonic()
+        waited = await host.call("computer_observe", {"wait_ms": 10000})   # grace 1 s + restart, one call
+        took = time.monotonic() - t0
+        r2, _, serving2 = await g
+        await asyncio.to_thread(host.backend.shutdown)
+        await serving2
+        return hinted, waited, took
+
+    hinted, waited, took = run(body())
+    assert hinted["error"] == "RUNTIME_UNAVAILABLE" and "connection to the Runner was lost" in hinted["message"]
+    assert waited["ok"] and "notice" in waited, waited
+    assert took < 9.5                                        # returned once READY, not after 10 s
+
+
+def test_closed_window_that_looks_like_a_silent_connection_is_not_reset(tmp_path):
+    """Found in the real-Sandbox QA: closing the window sends no TCP close, so the Host saw
+    "connected but 3 heartbeats missed" and started a new Sandbox. Presence is checked first now."""
+    fake = RecoveringManager(tmp_path / "sbx")
+
+    async def body():
+        host = RecoveringHost(tmp_path, fake)
+        r, _, serving = await start_ready(host, fake, tmp_path)
+        fake.sandbox_up = False                              # window closed ...
+        r.answer_heartbeats = False                          # ... and the connection just goes quiet
+        ended = await host.wait_state("SESSION_TERMINATED")
+        await asyncio.sleep(0.3)
+        await asyncio.to_thread(host.backend.shutdown)
+        await asyncio.wait_for(serving, 10)
+        return ended, host.backend.launcher.status()
+
+    ended, status = run(body())
+    assert "RUNTIME_GONE" in ended["message"]
+    assert "reset_sandbox" not in fake.names() and "restart_runner" not in fake.names()
+    assert ("stop", "USER_STOP", True) in fake.calls and status["generation"] == 1

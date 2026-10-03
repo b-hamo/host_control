@@ -90,6 +90,7 @@ class SandboxLauncher:
         self.host_address: str | None = None
         self.sandbox = None                          # SandboxSession once prepared
         self.recoveries: list[str] = []              # what was done, in order
+        self._first_generation = session.identity[2]
         self.cleanup_result: dict | None = None
         self._launch: asyncio.Task | None = None
         self._recovery: asyncio.Task | None = None
@@ -102,10 +103,14 @@ class SandboxLauncher:
 
     def hint(self) -> str | None:
         """What the Agent should do while the runtime is not READY."""
-        if self.state == RECOVERING:
+        if self.state == RECOVERING or (self.state == PUBLISHED and not self.session.verified
+                                        and self.session.identity[2] > self._first_generation):
             return f"it is being restarted after it stopped answering; {WAIT_HINT}"
         if self.state in (LAUNCHING, PUBLISHED) and not self.session.verified:
             return f"the Sandbox is starting; {WAIT_HINT}"
+        if self.session.verified and self.session.disconnected() and self.auto_recover:
+            return ("the connection to the Runner was lost; if it does not come back it is restarted "
+                    f"automatically; {WAIT_HINT}")
         return None
 
     # -- start -----------------------------------------------------------------
@@ -202,6 +207,20 @@ class SandboxLauncher:
         old = self.session
         self.state = RECOVERING
         log.warning("SANDBOX %s recovering (%s): %s", old.identity[0], kind, why)
+        # First: is the Sandbox still there? A closed window also looks like "connected but
+        # silent" (no TCP close arrives when the virtual adapter vanishes), so this check
+        # decides before anything is restarted. Gone = closed by the user: never restarted.
+        try:
+            gone = not await self._call(self.manager.is_running, self.sandbox)
+        except _Aborted:
+            return
+        except Exception as e:  # noqa: BLE001 - cannot tell; do not restart blindly
+            log.error("SANDBOX %s is_running failed: %s", old.identity[0], _describe(e))
+            gone = False
+        if gone:
+            log.warning("SANDBOX %s is gone (closed); not restarting", old.identity[0])
+            await old._end("RUNTIME_GONE: the Sandbox was closed")
+            return
         new = self._next_generation(why)
         await old._end(f"REPLACED: {why}")          # its tokens are revoked; it is not current any more
         new.start_watchdog()                         # READY again within profile.timeout_s
