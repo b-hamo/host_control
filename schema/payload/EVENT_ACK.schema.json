@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/EVENT_ACK.schema.json",
+  "title": "EVENT_ACK payload",
+  "description": "Host -> Runtime after the events are durably stored. Runner may drop them from its buffer; unacked events are re-sent in a new envelope after reconnect.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_ids"],
+  "properties": {
+    "event_ids": {
+      "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" }
+    }
+  }
+}

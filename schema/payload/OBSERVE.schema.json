@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/OBSERVE.schema.json",
+  "title": "OBSERVE payload",
+  "description": "Host -> Runtime. Host issues a one-time upload_id; the Runner PUTs the PNG to https://<host>:17443/scrp/v1/observations/<upload_id> and answers with OBSERVE_RESULT metadata only (no inline image).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["display_id", "capture_format", "upload_id"],
+  "properties": {
+    "display_id": { "enum": ["primary"], "description": "v1 supports the primary display only." },
+    "capture_format": { "const": "png" },
+    "upload_id": { "type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$" }
+  }
+}

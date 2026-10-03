@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/ERROR.schema.json",
+  "title": "ERROR payload",
+  "description": "Either direction. The structured error lives in the envelope's error field (required non-null for this type); payload stays empty so there is one place to read the error.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {}
+}

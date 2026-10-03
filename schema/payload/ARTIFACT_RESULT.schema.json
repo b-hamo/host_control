@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/ARTIFACT_RESULT.schema.json",
+  "title": "ARTIFACT_RESULT payload",
+  "description": "Runtime -> Host. Transfer metadata only. Host recomputes size/hash and runs its own scan; guest-reported values are never the verdict.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidate_id", "upload_id", "transfer", "bytes_sent", "sha256"],
+  "properties": {
+    "candidate_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "upload_id": { "type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$" },
+    "transfer": { "enum": ["UPLOADED", "FAILED", "EXPIRED"] },
+    "bytes_sent": { "type": "integer", "minimum": 0 },
+    "sha256": { "oneOf": [ { "type": "string", "pattern": "^[0-9a-f]{64}$" }, { "type": "null" } ] }
+  }
+}
