@@ -1,2 +1,3 @@
 jsonschema>=4.26
 websockets>=17
+cryptography>=42
