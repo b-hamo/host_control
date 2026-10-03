@@ -1,7 +1,7 @@
 # host/ — Host 쪽 코드 안내
 
 Agent(Codex)의 요청을 받아 검사하고, 격리된 Sandbox 안의 Runner로 전달하는 Host 프로그램이다.
-파일 14개가 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.
+파일 16개가 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.
 
 ```
 Codex (AI)
@@ -22,8 +22,9 @@ Codex (AI)
 ┌─ ④ Sandbox와 통신하는 층 ────────────────────────────────┐
 │  sender.py   connection.py   session_registry.py           │
 │  tls.py      bootstrap.py                                  │
+│  upload_server.py   observation_store.py                   │
 └───────────────────────────────────────────────────────────┘
-   │  wss (TLS 1.2+, 1회용 token)
+   │  wss (TLS 1.2+, 1회용 token) + https PUT (스크린샷)
    ▼
 Sandbox 안 Runner
 ```
@@ -59,7 +60,9 @@ Sandbox 안 Runner
 | `connection.py` | 연결 1개. 받은 메시지를 검사(세션 신원, connection_id, sequence, message_id·nonce 중복, 시계 오차)하고 요청·응답을 짝 맞춘다. 끊기면 버리고 새로 만든다 | 3.4 |
 | `session_registry.py` | 1회용 token 발급·확인·폐기. 처음 접속용(bootstrap, 5분)과 재접속용(reconnect, 새로 받으면 이전 것 폐기). TERMINATE 시 전부 폐기 | 4.6, 4.4 |
 | `tls.py` | TLS 설정(최소 1.2)과 개발용 자체 서명 인증서 생성 (`host/.certs/`) | 4.6 |
-| `bootstrap.py` | Runner가 읽을 접속 안내서 `host/.bootstrap/bootstrap.json` 생성 (세션 값, 포트·경로, token, Host 인증서) | 4.6 |
+| `bootstrap.py` | Runner가 읽을 접속 안내서 `host/.bootstrap/bootstrap.json` 생성 (세션 값, 포트·경로, token, Host 인증서, 스크린샷 업로드 주소) | 4.6 |
+| `upload_server.py` | 스크린샷을 받는 작은 HTTPS 서버 (17444, `PUT /scrp/v1/observations/<upload_id>`). 제어 채널과 같은 인증서. 크기 제한·시간 제한을 본문을 읽기 전에 건다. WebSocket 라이브러리가 요청 본문을 못 받아서 포트를 따로 쓴다 | 5.6 |
+| `observation_store.py` | 1회용 upload_id 발급(30초), 받은 PNG 검사(구조·16 MP·sha256), OBSERVE_RESULT와 맞는지 대조. 맞은 화면만 메모리에 두고(세션당 8장) 세션이 끝나면 지운다 | 5.6 |
 | `__init__.py` | 비어 있음. `host`를 Python 패키지로 인식시키는 표시 | - |
 
 같이 쓰는 저장소의 다른 곳:
@@ -109,7 +112,8 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_heartbeat_reconnect.py` | Health 전이, 재접속 token, 연결 교체, 끊긴 Action 재동기화 |
 | `tests/test_startup.py` | 정상 승격, 고장 Runner 거부, 시간 초과, 시계 오차 |
 | `tests/test_broker.py` | 검사별 거부, 정책, 빈도 제한, 감사 로그 마스킹, 도구 규격 ↔ 프로토콜 교차 검사 |
-| `tests/test_mcp_server.py` | 실제 자식 프로세스로 기동, 도구 목록 속도, Codex → Runner 전 구간 |
+| `tests/test_mcp_server.py` | 실제 자식 프로세스로 기동, 도구 목록 속도, Codex → Runner 전 구간, 스크린샷이 MCP image로 전달 |
+| `tests/test_observation_upload.py` | upload_id(1회용·만료), PNG 검사, HTTPS 수신 거부 코드, 해시·크기 대조, 조작된 업로드 차단, 세션 종료 시 삭제 |
 | `tests/mini_runner.py` | 테스트용 최소 Runner (테스트가 아니라 도구) |
 
 ```bash

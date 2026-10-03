@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scrp.local/schema/payload/OBSERVE.schema.json",
   "title": "OBSERVE payload",
-  "description": "Host -> Runtime. Host issues a one-time upload_id; the Runner PUTs the PNG to https://<host>:17443/scrp/v1/observations/<upload_id> and answers with OBSERVE_RESULT metadata only (no inline image).",
+  "description": "Host -> Runtime. Host issues a one-time upload_id; the Runner PUTs the PNG to https://<host>:<observation_upload.port>/scrp/v1/observations/<upload_id> (bootstrap config; default port 17444) and answers with OBSERVE_RESULT metadata only (no inline image).",
   "type": "object",
   "additionalProperties": false,
   "required": ["display_id", "capture_format", "upload_id"],
