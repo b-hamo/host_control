@@ -70,11 +70,14 @@ INSTRUCTIONS = (
 )
 
 
-def load_tool_list() -> list[dict]:
+ARTIFACT_CAPABILITY = "artifact.export.v1"
+
+
+def load_tool_list(extra_capabilities: set[str] = frozenset()) -> list[dict]:
     tools = []
     for path in sorted(TOOLS_DIR.glob("*.json")):
         d = json.loads(path.read_text(encoding="utf-8"))
-        if unavailable_reason(d["name"], START_CAPABILITIES) is None:
+        if unavailable_reason(d["name"], START_CAPABILITIES | set(extra_capabilities)) is None:
             tools.append({k: d[k] for k in ("name", "description", "inputSchema", "annotations")})
     return tools
 
@@ -82,7 +85,7 @@ def load_tool_list() -> list[dict]:
 class HostBackend(threading.Thread):
     """The Host stack on its own event loop, started after the MCP handshake."""
 
-    def __init__(self, args: argparse.Namespace, sandbox_manager=None):
+    def __init__(self, args: argparse.Namespace, sandbox_manager=None, *, approver=None, scanner=None):
         super().__init__(name="scrp-host", daemon=True)
         self.args = args
         self.ready = threading.Event()
@@ -92,6 +95,9 @@ class HostBackend(threading.Thread):
         self.session = None
         self.launcher = None
         self._sandbox_manager = sandbox_manager      # tests pass a fake; otherwise built from --runner-exe
+        self._approver = approver                    # tests pass one; otherwise from --approval
+        self._scanner = scanner                      # tests pass one; otherwise from --artifact-scanner
+        self.artifacts = None
         self._stop = None
 
     def run(self) -> None:
@@ -104,6 +110,14 @@ class HostBackend(threading.Thread):
             self.error = f"{type(e).__name__}: {e}"
             log.exception("Host backend failed")
             self.ready.set()
+        finally:
+            # Timers still waiting (reconnect grace, startup deadline, ...) end with the Host.
+            pending = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self.loop.close()
 
     async def _main(self) -> None:
         import asyncio
@@ -127,14 +141,44 @@ class HostBackend(threading.Thread):
         ssl_contexts = (tls.server_context(cert_path, key_path), tls.server_context(cert_path, key_path))
         registry = SessionRegistry()
         uploads = ObservationUploads()
-        sessions = Sessions(registry, profile=StartupProfile(timeout_s=a.startup_timeout), uploads=uploads,
-                            on_end=lambda ident: self.launcher and self.launcher.session_ended(ident),
+
+        # artifact-export-v1 (Runner contract): only when asked for; otherwise nothing changes.
+        artifact_mode = bool(getattr(a, "artifact_export", False))
+        grants = approver = None
+        contract_kwargs: dict = {}
+        required = ("gui.observe", "gui.input")
+        if artifact_mode:
+            from host.approval import DialogApprover, deny_all
+            from host.artifact_scan import make_scanner
+            from host.artifacts import ArtifactBroker, ArtifactGrants
+            from scrp.validate import ARTIFACT_EXPORT_V1
+            grants = ArtifactGrants(Path(a.artifact_dir) / "incoming")
+            grants.purge_leftovers()               # a crashed run never publishes its partial files
+            self.artifacts = ArtifactBroker(grants, Path(a.export_dir),
+                                            self._scanner or make_scanner(a.artifact_scanner),
+                                            max_bytes=a.artifact_max_bytes,
+                                            **getattr(a, "artifact_tuning", {}))   # tests only
+            approver = self._approver or (DialogApprover() if a.approval == "dialog" else deny_all)
+            contract_kwargs = {"contract": ARTIFACT_EXPORT_V1, "startup_checks": [self.artifacts.startup_check]}
+            required = (*required, ARTIFACT_CAPABILITY)
+
+        def ended(ident) -> None:
+            if self.artifacts is not None:
+                self.artifacts.cancel_identity(ident, "session ended")   # nothing unexported survives it
+            if self.launcher is not None:
+                self.launcher.session_ended(ident)
+
+        sessions = Sessions(registry, profile=StartupProfile(required_capabilities=required,
+                                                             timeout_s=a.startup_timeout), uploads=uploads,
+                            on_end=ended,
                             on_startup=lambda ident, rep: self.launcher and self.launcher.on_startup(ident, rep),
                             on_health=lambda *change: self.launcher and self.launcher.on_health(*change),
                             # tests shorten heartbeat / reconnect timing; the CLI never sets this
+                            **contract_kwargs,
                             **getattr(a, "session_tuning", {}))
+        sessions.artifacts = self.artifacts        # serves /scrp/v1/telemetry
         identity = (a.session or datetime.now().strftime("SES-%Y%m%d-%H%M%S"), a.runtime, a.generation)
-        upload_server = await start_upload_server(uploads, ssl_contexts[1], a.host, a.upload_port)
+        upload_server = await start_upload_server(uploads, ssl_contexts[1], a.host, a.upload_port, grants=grants)
         self._stop = asyncio.Event()
         async with upload_server, start_server(registry, cert_path, key_path, run_demo=None, host=a.host,
                                                port=a.port, sessions=sessions,
@@ -142,6 +186,8 @@ class HostBackend(threading.Thread):
             port = server.sockets[0].getsockname()[1]
             upload_port = upload_server.sockets[0].getsockname()[1]
             audit = AuditLog(a.audit_dir / f"{identity[0]}.jsonl")
+            artifact_fields = {"control_contract": contract_kwargs["contract"], "artifact_upload_port": upload_port} \
+                if artifact_mode else {}
 
             if sandboxed:
                 from host.lifecycle import SandboxLauncher
@@ -153,7 +199,8 @@ class HostBackend(threading.Thread):
                         ctx.load_cert_chain(cert, key)     # new connections get the new certificate
                     pem = cert.read_text(encoding="ascii")
                     rec = registry.issue(*ident)           # 5 min from now, for this generation
-                    write_bootstrap(bootstrap_path, rec, pem, port, host=address, upload_port=upload_port)
+                    write_bootstrap(bootstrap_path, rec, pem, port, host=address, upload_port=upload_port,
+                                    **artifact_fields)
                     log.info("bootstrap for %s generation %d written (token valid until %s)",
                              ident[0], ident[2], rec.expires_utc)
                     return pem
@@ -168,18 +215,25 @@ class HostBackend(threading.Thread):
                                                 self.session, publish, new_session=sessions.get,
                                                 on_switch=switch,
                                                 auto_recover=not getattr(a, "no_auto_restart", False))
-                self.broker = Broker(self.session, audit=audit, launcher=self.launcher)
+                self.broker = Broker(self.session, audit=audit, launcher=self.launcher,
+                                     artifacts=self.artifacts, approver=approver)
                 log.info("Host ready: wss://%s:%d%s, session %s; the Sandbox starts at task_submit (Runner %s)",
                          a.host, port, CONTROL_PATH, identity[0], a.runner_exe)
             else:
                 rec = registry.issue(*identity)
-                write_bootstrap(a.bootstrap_out, rec, cert_pem, port, host=advertise, upload_port=upload_port)
+                write_bootstrap(a.bootstrap_out, rec, cert_pem, port, host=advertise, upload_port=upload_port,
+                                **artifact_fields)
                 self.session = sessions.register(identity)
-                self.broker = Broker(self.session, audit=audit)
+                self.broker = Broker(self.session, audit=audit, artifacts=self.artifacts, approver=approver)
                 log.info("Host ready: wss://%s:%d%s, session %s, bootstrap %s (token valid until %s)",
                          a.host, port, CONTROL_PATH, identity[0], a.bootstrap_out, rec.expires_utc)
                 log.info("start the Sandbox now; the Runner must be READY within %.0fs", a.startup_timeout)
             log.info("screenshot uploads on https://%s:%d%s<upload_id>", a.host, upload_port, UPLOAD_PATH)
+            if artifact_mode:
+                log.info("artifact export ON (artifact-export-v1): uploads on https://%s:%d/scrp/v1/artifacts/, "
+                         "telemetry on wss://%s:%d/scrp/v1/telemetry, approval %s, scanner %s, exports in %s",
+                         a.host, upload_port, a.host, port, a.approval if self._approver is None else "injected",
+                         self.artifacts.scanner.name, a.export_dir)
             self.ready.set()
             await self._stop.wait()
             if self.launcher is not None:
@@ -301,6 +355,18 @@ def main(argv: list[str] | None = None) -> None:
                     help="start the Windows Sandbox with this Runner at task_submit (Sandbox Manager)")
     ap.add_argument("--no-auto-restart", action="store_true",
                     help="with --runner-exe: end the session instead of restarting a Runner or Sandbox that stopped answering")
+    ap.add_argument("--artifact-export", action="store_true",
+                    help="select the artifact-export-v1 contract: Telemetry candidates, approved file export")
+    ap.add_argument("--approval", choices=["dialog", "deny"], default="dialog",
+                    help="who approves artifact_export: a dialog on this computer, or nobody (deny)")
+    ap.add_argument("--artifact-scanner", choices=["none", "amsi"], default="none",
+                    help="antivirus for exported files; none = every export is BLOCKED (SCANNER_UNAVAILABLE)")
+    ap.add_argument("--artifact-max-bytes", type=int, default=1024 * 1024,
+                    help="largest file one export may upload (1..52428800)")
+    ap.add_argument("--artifact-dir", type=Path, default=HOST_DIR / ".artifacts",
+                    help="private quarantine for received files")
+    ap.add_argument("--export-dir", type=Path, default=HOST_DIR / ".exports",
+                    help="where files that passed inspection are saved")
     ap.add_argument("--sandbox-root", type=Path, default=None,
                     help="Sandbox Manager workspace (default %%LOCALAPPDATA%%/SecureCUA/sandbox-manager)")
     ap.add_argument("--cert-dir", type=Path, default=HOST_DIR / ".certs")
@@ -317,7 +383,7 @@ def main(argv: list[str] | None = None) -> None:
         args.bootstrap_out = HOST_DIR / ".bootstrap" / "bootstrap.json"
     _setup_logging(args.log_file)
 
-    server = McpServer(HostBackend(args), load_tool_list())
+    server = McpServer(HostBackend(args), load_tool_list({ARTIFACT_CAPABILITY} if args.artifact_export else set()))
     log.info("MCP server up (pid %s), %d tools", __import__("os").getpid(), len(server.tools))
     out = sys.stdout.buffer
     for line in sys.stdin.buffer:

@@ -44,7 +44,7 @@ payload/<TYPE>.schema.json  type별 payload 20종 (정의에 없는 필드는 �
 | Envelope, ACK·ERROR, OBSERVE*, ACTION_REQUEST·RESULT 구조, STATE*, HEARTBEAT·ALIVE, TERMINATE*, ARTIFACT_REQUEST·RESULT | Host 통신 담당 (2.2, 2.3) | 초안 |
 | ACTION_REQUEST의 operation별 인자 한계값 (키 목록, 좌표 상한, text 길이 단위) | Runner 담당 (2.3) | **확정 필요** |
 | HELLO, HELLO_ACK, CHANNEL_HELLO·ACK — Capability 어휘, limits, 자격 구조 | Runner 담당 (2.5) | Host 통신 담당 초안, **확정 필요** |
-| SECURITY_EVENT(ARTIFACT_CANDIDATE) evidence | Artifact 담당 (2.6) | Host 통신 담당 초안, **확정 필요** |
+| SECURITY_EVENT(ARTIFACT_CANDIDATE) evidence | Artifact 담당 (2.6) | Host 통신 담당 초안, **확정 필요**. 파일 반출은 `profiles/artifact-export-v1/`(Runner 계약)을 선택한 세션에서 그 규격을 쓴다 |
 
 ## 동결 (M2)
 

@@ -9,6 +9,10 @@ is meant to reuse these records.
 Two kinds of token open the control channel: the bootstrap token from the
 bootstrap file, and a reconnect token handed out in each HELLO_ACK (§4). Only
 the newest reconnect token of a session is valid, and TERMINATE revokes all.
+
+A third kind, telemetry, opens only the Telemetry channel of an
+artifact-export-v1 session (handed out in HELLO_ACK, single use). Each channel
+accepts only its own kinds, so no token opens a channel it was not issued for.
 """
 
 from __future__ import annotations
@@ -23,6 +27,9 @@ TOKEN_TTL_S = 300.0
 # is no message to refresh it mid-connection yet, so it lives longer than the
 # bootstrap token. It is still single use and superseded on every reconnect.
 RECONNECT_TTL_S = 3600.0
+TELEMETRY_TTL_S = 300.0
+CONTROL_KINDS = ("bootstrap", "reconnect")
+TELEMETRY_KINDS = ("telemetry",)
 
 
 class AuthError(Exception):
@@ -38,7 +45,7 @@ class SessionRecord:
     expires_at: float = field(repr=False)          # time.monotonic() deadline
     expires_utc: str = ""                          # same deadline, for the bootstrap file
     consumed: bool = False
-    kind: str = "bootstrap"                        # "bootstrap" or "reconnect"
+    kind: str = "bootstrap"                        # "bootstrap", "reconnect" or "telemetry"
     revoked: bool = False
 
     def identity(self) -> tuple[str, str, int]:
@@ -71,18 +78,26 @@ class SessionRegistry:
         self.revoke(identity, kind="reconnect")
         return self.issue(*identity, kind="reconnect", ttl_s=ttl_s)
 
+    def issue_telemetry(self, identity: tuple[str, str, int],
+                        ttl_s: float = TELEMETRY_TTL_S) -> SessionRecord:
+        """Telemetry channel token for this session; any older one stops working."""
+        self.revoke(identity, kind="telemetry")
+        return self.issue(*identity, kind="telemetry", ttl_s=ttl_s)
+
     def revoke(self, identity: tuple[str, str, int], kind: str | None = None) -> None:
         for rec in self._by_token.values():
             if rec.identity() == identity and (kind is None or rec.kind == kind):
                 rec.revoked = True
 
-    def check(self, token: str | None) -> SessionRecord:
+    def check(self, token: str | None, kinds: tuple[str, ...] = CONTROL_KINDS) -> SessionRecord:
         """Validate without using the token; for the pre-upgrade check."""
         if not token:
             raise AuthError("missing token")
         rec = self._by_token.get(token)
         if rec is None:
             raise AuthError("unknown token")
+        if rec.kind not in kinds:
+            raise AuthError(f"{rec.kind} token is not valid on this channel")
         if rec.consumed:
             raise AuthError(f"{rec.kind} token for {rec.session_id} already used")
         if rec.revoked:
@@ -91,11 +106,11 @@ class SessionRegistry:
             raise AuthError(f"{rec.kind} token for {rec.session_id} expired")
         return rec
 
-    def consume(self, token: str | None) -> SessionRecord:
+    def consume(self, token: str | None, kinds: tuple[str, ...] = CONTROL_KINDS) -> SessionRecord:
         """Validate and mark used. There is no await between the two, so on the
         event loop this is atomic: of two connections racing with one token,
         exactly one gets the record."""
-        rec = self.check(token)
+        rec = self.check(token, kinds)
         rec.consumed = True
         return rec
 

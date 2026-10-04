@@ -9,6 +9,11 @@ answer with a well-formed ERROR message.
 The Host uses this module. The Runner is written in C++ and validates the same
 schema/ JSON files with its own validator, so those files, not this code, are
 the single source of truth for what a message may look like.
+
+Profiles: a session that selected `artifact-export-v1` validates the six
+Artifact/Telemetry message types against the Runner's contract schema
+(schema/profiles/artifact-export-v1/) instead of the base schema. Every other
+type, and every session without the profile, uses the base schema unchanged.
 """
 
 from __future__ import annotations
@@ -25,6 +30,12 @@ _BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 SCHEMA_DIR = _BASE / "schema"
 MAX_MESSAGE_BYTES = 64 * 1024
 MAX_DEPTH = 16
+
+ARTIFACT_EXPORT_V1 = "artifact-export-v1"
+PROFILE_TYPES = {
+    ARTIFACT_EXPORT_V1: frozenset({"CHANNEL_HELLO", "CHANNEL_ACK", "SECURITY_EVENT", "EVENT_ACK",
+                                   "ARTIFACT_REQUEST", "ARTIFACT_RESULT"}),
+}
 
 
 class ProtocolError(Exception):
@@ -43,6 +54,17 @@ def _load(path: Path) -> Draft202012Validator:
 _envelope = _load(SCHEMA_DIR / "envelope.schema.json")
 _payloads: dict[str, Draft202012Validator] = {}
 MESSAGE_TYPES: frozenset[str] = frozenset(_envelope.schema["$defs"]["message_type"]["enum"])
+
+
+_profiles: dict[str, Draft202012Validator] = {}
+
+
+def _profile_validator(profile: str) -> Draft202012Validator:
+    if profile not in _profiles:
+        if profile not in PROFILE_TYPES:
+            raise ValueError(f"unknown profile {profile!r}")
+        _profiles[profile] = _load(SCHEMA_DIR / "profiles" / profile / "messages.schema.json")
+    return _profiles[profile]
 
 
 def _payload_validator(msg_type: str) -> Draft202012Validator:
@@ -75,11 +97,11 @@ def _depth(obj: object, level: int = 1) -> int:
     return level
 
 
-def parse(raw: bytes | str) -> dict:
+def parse(raw: bytes | str, max_bytes: int = MAX_MESSAGE_BYTES) -> dict:
     """Bytes/str of one WebSocket text frame -> dict, or ProtocolError."""
     data = raw.encode("utf-8") if isinstance(raw, str) else raw
-    if len(data) > MAX_MESSAGE_BYTES:
-        raise ProtocolError("MESSAGE_TOO_LARGE", f"{len(data)} bytes > {MAX_MESSAGE_BYTES}")
+    if len(data) > max_bytes:
+        raise ProtocolError("MESSAGE_TOO_LARGE", f"{len(data)} bytes > {max_bytes}")
     try:
         text = data.decode("utf-8", errors="strict")
     except UnicodeDecodeError as e:
@@ -95,8 +117,18 @@ def parse(raw: bytes | str) -> dict:
     return obj
 
 
-def validate(msg: dict) -> None:
-    """Envelope schema, then the payload schema for msg['type']."""
+def validate(msg: dict, profile: str | None = None) -> None:
+    """Envelope schema, then the payload schema for msg['type'].
+
+    With a profile, that profile's message types are checked against its own
+    full-envelope schema instead."""
+    if profile is not None and isinstance(msg.get("type"), str) and msg["type"] in PROFILE_TYPES[profile]:
+        err = best_match(_profile_validator(profile).iter_errors(msg))
+        if err is not None:
+            where = "/".join(str(p) for p in err.absolute_path) or "<root>"
+            code = "INVALID_ARGUMENT" if where.startswith("payload") else "PROTOCOL_DENIED"
+            raise ProtocolError(code, f"{msg['type']} ({profile}) {where}: {err.message}")
+        return
     err = best_match(_envelope.iter_errors(msg))
     if err is not None:
         where = "/".join(str(p) for p in err.absolute_path) or "<root>"
@@ -108,7 +140,8 @@ def validate(msg: dict) -> None:
         raise ProtocolError("INVALID_ARGUMENT", f"{msg_type} payload {where}: {err.message}")
 
 
-def parse_and_validate(raw: bytes | str) -> dict:
-    msg = parse(raw)
-    validate(msg)
+def parse_and_validate(raw: bytes | str, profile: str | None = None,
+                       max_bytes: int = MAX_MESSAGE_BYTES) -> dict:
+    msg = parse(raw, max_bytes)
+    validate(msg, profile)
     return msg

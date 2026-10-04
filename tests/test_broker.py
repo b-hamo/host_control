@@ -348,12 +348,13 @@ def test_session_stop_ends_everything(certs):
     assert after.error["error"] == "SESSION_TERMINATED"
 
 
-def test_artifact_tools_are_refused_before_the_runtime(certs):
+def test_artifact_tools_are_refused_without_the_artifact_export_profile(certs):
+    """Only a session that selected artifact-export-v1 is granted artifact.export.v1."""
     async def body(b, r):
         return await b.call("artifact_export", {"artifact_id": "ART-1"})
 
     res, b, _ = run(with_broker(certs, body))
-    assert res.error["error"] == "POLICY_DENIED" and "Artifact Broker" in res.error["message"]
+    assert res.error["error"] == "POLICY_DENIED" and "artifact.export.v1" in res.error["message"]
     assert "artifact_export" not in {t["name"] for t in b.tools()}
 
 

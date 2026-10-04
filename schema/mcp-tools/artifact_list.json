@@ -1,6 +1,6 @@
 {
   "name": "artifact_list",
-  "description": "List the files this session produced that are candidates for export, with their size, type, hash and inspection status. This reads the Host's registry; it does not browse the runtime's filesystem. A file is only downloadable once its status is SAFE, and artifact_export is what delivers it.",
+  "description": "List the files this session's runtime reported as export candidates, with their status: PENDING (reported, or being transferred), QUARANTINED (received, waiting), SCANNING, EXPORTED (export_path is the file on this computer) or BLOCKED (result.code says why). Size and hash are unknown until the Host has received the file. This reads the Host's registry of reported files; it is not a live directory listing, so a file changed or deleted after it was reported is refused when exported.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -17,7 +17,7 @@
           "EXPORTED"
         ],
         "default": "ANY",
-        "description": "Filter by inspection status."
+        "description": "Filter by status."
       },
       "limit": {
         "type": "integer",
