@@ -456,6 +456,9 @@ class RuntimeSession:
         self.end_reason = reason
         self.ready.clear()
         self._forget_screenshots()
+        for t in (self._watchdog, self._grace):    # timers of a finished session (same as _end)
+            if t and t is not asyncio.current_task():
+                t.cancel()
         if self._on_terminated:
             self._on_terminated(self.identity)
         return await conn.request(msg, ("TERMINATE_RESULT",), timeout=5.0)

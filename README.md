@@ -206,7 +206,7 @@ codex ... -c "mcp_servers.scrp.args=['$server', '--runner-exe', '<sandbox_runner
 | Telemetry | Runner → Host | HELLO_ACK의 telemetry token으로 `wss://…/scrp/v1/telemetry` 접속 (그 채널 전용, 1회용). CHANNEL_HELLO/ACK |
 | 시작 검사 | Host | 기존 Startup Verification + **Telemetry 채널이 붙어야 READY** (Runner는 채널이 붙은 뒤에 생긴 파일만 보고) |
 | 후보 | Runner → Host | SECURITY_EVENT 4필드(`event_id/observed_at/category/relative_path`) → EVENT_ACK `STORED` (같은 id·같은 내용 재전송도 STORED, 같은 id·다른 내용은 `REJECTED`). Host가 `ART-000001` 같은 artifact_id 발급. 크기·해시·형식은 아직 모름 |
-| 요청 | Agent → Host | `artifact_export(artifact_id, reason)`: READY·task_submit 필요 → 정책 `REQUIRE_APPROVAL` → **Host 화면 확인 창** (2분, 무응답 = 거부) |
+| 요청 | Agent → Host | `artifact_export(artifact_id, reason)`: READY·task_submit 필요 → 정책 `REQUIRE_APPROVAL` → **Host 화면 확인 창** (45초, 무응답 = 거부) |
 | 권한 | Host | 새 `upload_id`(192-bit)·token(256-bit, 43자)·기한(120초)·상한(기본 1 MiB)을 **먼저 등록**한 뒤 ARTIFACT_REQUEST. token은 Agent·로그에 안 나감 |
 | 수신 | Runner → Host | `PUT /scrp/v1/artifacts/<upload_id>` + Bearer token. 디스크로 스트리밍, 크기·SHA-256 확정 후 **본문 없는 201** |
 | 결과 | Runner → Host | ARTIFACT_RESULT가 원 요청과 짝이 맞고, candidate·upload_id·bytes_sent가 **실제 수신 기록과 같을 때만** 검사 |
@@ -230,7 +230,11 @@ codex ... -c "mcp_servers.scrp.args=['$server', '--runner-exe', '<sandbox_runner
   예: 개발 PC의 McAfee AMSI 제공자는 EICAR를 "탐지 안 됨"으로 답했다 → 그 PC에서는 `amsi`도 `SCANNER_UNAVAILABLE`
 
 **승인 (`--approval`):** `dialog`(기본) Host 화면에 확인 창. Sandbox가 보고한 경로와 AI가 적은 이유를 "확인되지 않은 내용"으로 표시.
-`deny` 모두 거부.
+`deny` 모두 거부. 창은 **45초** 기다린다: MCP 도구 호출 제한(60초, Codex 기본도 60초) 안에 답이 돌아가야 하기 때문이다.
+그 호출이 먼저 끝나면(시간 초과·Host 종료) 열린 창에 "아니요"를 눌러 닫고, 늦은 "예"는 권한을 만들지 않는다.
+
+**공개 순서:** 받은 파일을 다른 프로그램이 쓰지 못하게 잠근 채 해시를 다시 확인하고, 같을 때만 결과 폴더로 옮기며 동시에 `EXPORTED`가 된다.
+그 전까지 `artifact_list`는 `SCANNING`이고 결과 폴더에도 파일이 없다.
 
 ## Runner가 접속하는 방법
 
@@ -249,18 +253,16 @@ codex ... -c "mcp_servers.scrp.args=['$server', '--runner-exe', '<sandbox_runner
    | `host_certificate_sha256` | 그 인증서의 SHA-256 지문 (DER 바이트, 소문자 16진수). pinning할 때 이 값과 비교 |
    | `observation_upload` | 스크린샷 업로드 주소 `{"port": 17444, "path": "/scrp/v1/observations/"}`. host는 위와 같은 규칙 |
 
-2. `wss://<host>:<port><path>`로 접속한다. TLS 1.2 이상. 인증서는 `host_certificate_pem` 하나만 신뢰하고,
-   주소가 부팅마다 바뀌므로 호스트명 검사는 끈다. 인증서가 다르면 접속하지 않는다. **평문 ws://로 재시도하지 않는다**
+2. `wss://<host>:<port><path>`로 접속한다. TLS 1.2 이상. 인증서가 다르면 접속하지 않는다. **평문 ws://로 재시도하지 않는다**
 
-   **Host 인증서를 Windows 인증서 저장소에 설치하지 않는다.** 신뢰 루트에 넣으려고 하면 Sandbox를 켤 때마다
-   "CA 인증서를 설치하시겠습니까?" 창이 뜨고 (Sandbox는 매번 초기화되므로), 자동 실행이 막힌다.
-   대신 연결할 때 직접 비교한다 (pinning). WinHTTP 기준:
-   1. 발급 기관 검사만 끈다: `WINHTTP_OPTION_SECURITY_FLAGS`에 `SECURITY_FLAG_IGNORE_UNKNOWN_CA`
-   2. 연결된 뒤 서버 인증서를 꺼낸다: `WINHTTP_OPTION_SERVER_CERT_CONTEXT`
-   3. 그 인증서 DER 바이트의 SHA-256이 `host_certificate_sha256`과 같은지 비교하고, 다르면 **바로 끊는다**
+   **현재 Runner(`sandbox_runner` 3270091)의 방식**: Windows 기본 검증(인증서 체인 + 호스트명)을 **켜 둔 채**
+   bootstrap의 `host_certificate_sha256`과 서버 인증서 지문을 추가로 비교한다(leaf pin). 이 방식이 동작하려면 두 가지가 필요하다.
+   - 접속 주소가 인증서 SAN에 있어야 한다: Host가 Sandbox Manager의 `start()` 주소(또는 `--advertise-address`)를 SAN에 넣는다
+   - Guest가 Host 인증서를 신뢰해야 한다: Sandbox Manager의 Guest 시작 스크립트가 Runner 실행 전에
+     `certutil -addstore -f Root`로 창 없이 등록한다(Sandbox는 매번 초기화되므로 매번 등록)
 
-   1번만 하고 2·3번을 빼면 아무 서버나 믿게 되므로 셋 다 해야 한다. 호스트명 검사를 계속 쓰는 Runner라면
-   `--advertise-address`로 준 주소가 인증서 SAN에 들어 있으므로 통과한다 (이때도 인증서를 신뢰시키는 방법이 필요해서 pinning을 권장)
+   검증을 끄는 방식(`SECURITY_FLAG_IGNORE_UNKNOWN_CA` + 지문 비교만)은 쓰지 않는다. 다른 Runner를 붙일 때도
+   인증서 검증을 임의로 끄지 말고 위 두 조건을 맞춘다
 3. WebSocket 업그레이드 요청에 `Authorization: Bearer <token>` 헤더를 넣는다 (URL에 넣지 않는다)
 4. 첫 메시지로 HELLO를 보낸다
 5. HELLO_ACK의 `channel_credentials.reconnect.token`을 **메모리에만** 보관한다 (재연결용, 1회용)
@@ -293,7 +295,7 @@ Startup Verification (WBS 4.5): HELLO_ACK를 받았다고 READY가 아니다. Ho
 1. Host가 OBSERVE에 1회용 `upload_id`를 넣어 보낸다 (256-bit, 30초 유효, 세션·Action에 묶임)
 2. Runner는 캡처한 PNG를 `PUT https://<host>:<observation_upload.port><path><upload_id>`로 올린다
    - 헤더: `Content-Type: image/png`, `Content-Length` 필수 (chunked 안 됨), 8 MiB 이하
-   - TLS·인증서는 제어 채널과 같다 (`host_certificate_pem` 하나만 신뢰, 호스트명 검사 끔, 평문 http로 재시도하지 않음)
+   - TLS·인증서는 제어 채널과 같다 (같은 인증서, 같은 검증 방식, 평문 http로 재시도하지 않음)
    - 성공하면 `201`. 본문은 Host가 계산한 sha256
 3. **업로드가 끝난 뒤** OBSERVE_RESULT(`sha256`, `width`, `height`, `upload_id`)를 보낸다
 4. Host가 PNG를 직접 다시 검사한다: PNG 구조(시그니처·IHDR·IEND), 16 MP 이하, sha256·크기가 OBSERVE_RESULT와 같은지.

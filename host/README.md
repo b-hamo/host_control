@@ -53,7 +53,7 @@ Sandbox 안 Runner
 | `runtime_session.py` | 연결이 끊겨도 이어지는 세션. 5초마다 HEARTBEAT, 연속 2회 누락 DEGRADED · 3회 UNRESPONSIVE. 끊길 때 결과를 못 받은 Action은 재전송하지 않고 재접속 후 STATE_REQUEST로 확인. task_id·action_id 발급, 마지막 화면과 받은 시각 보관, `status()`로 상태 조회 | 4.4, 4.5 |
 | `artifacts.py` | 파일 반출 본체 (artifact-export-v1). 후보 등록·artifact_id, 승인 뒤 업로드 권한(upload_id·token·기한·상한) 먼저 등록 → ARTIFACT_REQUEST → 수신 기록과 ARTIFACT_RESULT 대조 → 검사 → 같은 바이트만 공개. 세션 종료·세대 변경·채널 끊김 시 취소 | 5.8 |
 | `artifact_scan.py` | 반출 전 검사. 형식 정책(UTF-8 `.txt`) + 백신. 기본은 검사기 없음 = 차단. AMSI는 EICAR 자체 시험을 통과해야만 사용 | 5.8 |
-| `approval.py` | 사용자 승인 창. Host 화면에 뜨고 AI는 답할 수 없음. 2분 무응답 = 거부 | 5.6 |
+| `approval.py` | 사용자 승인 창. Host 화면에 뜨고 AI는 답할 수 없음. 45초 무응답 = 거부 (MCP 호출 제한 60초 안), 호출이 취소되면 창도 닫음 | 5.6 |
 | `lifecycle.py` | Sandbox 켜고 끄기 (Lifecycle 담당의 Sandbox Manager 호출). `task_submit` 때 백그라운드로 켜기 시작 → Sandbox가 보는 Host 주소로 인증서·bootstrap 작성 → READY면 token 파일 삭제 → 세션이 끝나면(정상·실패·Codex 종료) 끄고 치운다. Runner가 응답이 없으면 같은 Sandbox에서 Runner만 다시 켜거나 Sandbox를 새로 켠다(다음 세대). `mcp_server.py --runner-exe`일 때만 쓴다 | 5.9 |
 | `startup.py` | Startup Verification. Runner가 "준비됐다"고 해도 Host가 7가지(버전·Capability·Monitor·시계 / Worker 생존·첫 캡처·Heartbeat)를 확인한 뒤에만 READY. 등록 후 120초 안에 안 되면 실패 | 4.5 |
 

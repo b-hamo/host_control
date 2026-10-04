@@ -30,6 +30,7 @@ import logging
 import os
 import secrets
 import stat
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -419,7 +420,13 @@ class ArtifactBroker:
         await self._publish(art, grant, verdict)
 
     async def _publish(self, art: Artifact, grant: Grant, verdict: Verdict) -> None:
-        """Move the inspected file out of quarantine. Only those bytes, never a copy made later."""
+        """Move the inspected file out of quarantine. Only those bytes, never a copy made later.
+
+        Order: lock the quarantined file against writers, re-hash it through that handle,
+        and only if it is still the inspected bytes move it into the export folder and mark
+        it EXPORTED, with no await in between. Until then artifact_list shows SCANNING and
+        nothing exists under the final name (Host integration review, 2026-10-04).
+        """
         session_id = art.identity[0]
         name = _safe_name(art.relative_path)
         dest_dir = self.export_dir / session_id / art.artifact_id
@@ -431,22 +438,32 @@ class ArtifactBroker:
             return
         if art.stage != SCANNING or grant.path is None:
             return
-        # No await between this check, the move and the state change: cancel cannot slip in.
         try:
-            os.rename(grant.path, dest)
+            locked = _open_locked(grant.path)          # writers are refused until it is closed
         except OSError as e:
-            self._end(art, FAILED, "PUBLISH_FAILED", f"move into the export folder failed: {e}", retry=False)
+            self._end(art, BLOCKED, "CONTENT_CHANGED", f"received file could not be locked for publishing ({e})")
             return
-        self.grants.release(grant)
-        art.stage, art.export_path = EXPORTED, dest
-        art.result = {"code": "EXPORTED", "detail": verdict.detail, "engine": verdict.engine}
-        if await asyncio.to_thread(_sha_file, dest) != grant.sha256:     # same bytes as inspected
-            os.chmod(dest, stat.S_IWRITE)
-            dest.unlink(missing_ok=True)
-            art.stage, art.export_path = BLOCKED, None
-            art.result = {"code": "CONTENT_CHANGED", "detail": "file changed while it was published"}
-            log.error("ARTIFACT %s withdrawn: content changed during publish", art.artifact_id)
-            return
+        try:
+            digest = await asyncio.to_thread(_sha_stream, locked)
+            # From here to the end: no await. The check, the move and the state change happen
+            # together, so a cancel cannot slip in and nothing is visible before the check.
+            if art.stage != SCANNING or grant.path is None:
+                return
+            if digest != grant.sha256:
+                locked.close()
+                self._end(art, BLOCKED, "CONTENT_CHANGED", "received file changed before it was published")
+                return
+            try:
+                os.rename(grant.path, dest)            # same file object: the bytes just hashed
+            except OSError as e:
+                locked.close()
+                self._end(art, FAILED, "PUBLISH_FAILED", f"move into the export folder failed: {e}", retry=False)
+                return
+            self.grants.release(grant)
+            art.stage, art.export_path = EXPORTED, dest
+            art.result = {"code": "EXPORTED", "detail": verdict.detail, "engine": verdict.engine}
+        finally:
+            locked.close()
         log.info("ARTIFACT %s EXPORTED to %s (%d bytes, %s)", art.artifact_id, dest, art.size, verdict.detail)
 
     def _end(self, art: Artifact, stage: str, code: str, detail: str, *, retry: bool = False,
@@ -532,11 +549,33 @@ def _safe_name(relative_path: str) -> str:
     return name[:200]
 
 
-def _sha_file(path: Path) -> str:
+def _open_locked(path: Path):
+    """Open for reading while refusing other writers (Windows share mode: read + delete only).
+
+    Delete sharing stays on so the file can still be moved (renamed) or discarded
+    while this handle is open; writing to it is refused until the handle is closed.
+    """
+    if sys.platform != "win32":
+        return open(path, "rb")
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    GENERIC_READ, FILE_SHARE_READ, FILE_SHARE_DELETE, OPEN_EXISTING = 0x80000000, 0x1, 0x4, 3
+    handle = k32.CreateFileW(str(path), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, None,
+                             OPEN_EXISTING, 0, None)
+    if handle in (None, wintypes.HANDLE(-1).value):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return os.fdopen(msvcrt.open_osfhandle(handle, os.O_RDONLY), "rb")
+
+
+def _sha_stream(f) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
     return h.hexdigest()
 
 

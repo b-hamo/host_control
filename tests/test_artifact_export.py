@@ -546,3 +546,125 @@ def test_approval_dialog_text_marks_untrusted_parts():
                      "arguments": {"artifact_id": "ART-1", "reason": "줄\n바꿈\x07" + "가" * 500}})
     assert "보고서\결과.txt" in text and "확인되지 않은 내용" in text
     assert "\x07" not in text and "줄 바꿈" in text and len(text) < 1200
+
+
+# --------------------------------------------------------------------- review 2026-10-04
+def test_nothing_is_shown_as_exported_before_the_final_check(tmp_path, monkeypatch):
+    """Review finding 1: EXPORTED and export_path were visible while the final hash was still
+    being computed. Now the final check runs first; until then: SCANNING, no file, no path."""
+    import host.artifacts as artifacts_mod
+    real = artifacts_mod._sha_stream
+
+    def slow(f):
+        time.sleep(1.5)                                    # the final check takes a while
+        return real(f)
+    monkeypatch.setattr(artifacts_mod, "_sha_stream", slow)
+
+    async def body():
+        host = Host(tmp_path, approver=Approver(), scanner=Scanner())
+        r, serving = await host.start()
+        await r.report("a.txt", b"hello\n")
+        aid = candidate_id(await host.call("artifact_list", {}), "a.txt")
+        await host.call("artifact_export", {"artifact_id": aid})
+        seen = []
+        for _ in range(12):
+            art = (await host.call("artifact_list", {}))["artifacts"][0]
+            files = [p for p in (tmp_path / "exp").rglob("*") if p.is_file()]
+            seen.append((art["status"], art["export_path"], len(files)))
+            if art["status"] == "EXPORTED":
+                break
+        await host.close(serving)
+        return seen
+
+    seen = run(body())
+    assert seen[-1][0] == "EXPORTED" and seen[-1][1] and seen[-1][2] == 1
+    before = seen[:-1]
+    assert before and all(s != "EXPORTED" and p is None and n == 0 for s, p, n in before), seen
+
+
+def test_a_file_that_changed_before_publishing_is_never_shown(tmp_path, monkeypatch):
+    import host.artifacts as artifacts_mod
+    monkeypatch.setattr(artifacts_mod, "_sha_stream", lambda f: "0" * 64)      # bytes no longer match
+
+    async def body():
+        host = Host(tmp_path, approver=Approver(), scanner=Scanner())
+        r, serving = await host.start()
+        await r.report("a.txt", b"hello\n")
+        aid = candidate_id(await host.call("artifact_list", {}), "a.txt")
+        await host.call("artifact_export", {"artifact_id": aid})
+        final = await host.wait_artifact(aid)
+        await host.close(serving)
+        return final
+
+    final = run(body())
+    assert final["status"] == "BLOCKED" and final["result"]["code"] == "CONTENT_CHANGED"
+    assert final["export_path"] is None and not any(p.is_file() for p in (tmp_path / "exp").rglob("*"))
+    assert not list((tmp_path / "art" / "incoming").glob("*"))
+
+
+def test_publish_lock_refuses_writers(tmp_path):
+    import os
+    import stat
+    import sys
+    from host.artifacts import _open_locked, _sha_stream
+    f = tmp_path / "x.part"
+    f.write_bytes(b"hello")
+    os.chmod(f, stat.S_IREAD)
+    locked = _open_locked(f)
+    try:
+        if sys.platform == "win32":
+            os.chmod(f, stat.S_IWRITE)                      # even with the read-only flag cleared
+            with pytest.raises(PermissionError):
+                open(f, "r+b")
+        assert _sha_stream(locked) == hashlib.sha256(b"hello").hexdigest()
+        os.rename(f, tmp_path / "final.txt")               # moving it stays possible
+    finally:
+        locked.close()
+    assert (tmp_path / "final.txt").read_bytes() == b"hello"
+
+
+def test_approval_wait_fits_inside_the_mcp_call_limit():
+    """Review finding 2: the dialog waited 120 s while the MCP call gave up after 60 s."""
+    from host import approval, mcp_server
+    assert approval.APPROVAL_TIMEOUT_S < mcp_server.CALL_TIMEOUT_S
+    assert approval.DialogApprover().timeout_s == approval.APPROVAL_TIMEOUT_S
+
+
+def test_a_cancelled_approval_closes_its_dialog_and_a_late_yes_issues_nothing(tmp_path, monkeypatch):
+    import threading
+    from host import mcp_server
+    from host.approval import DialogApprover
+
+    class FakeDialog(DialogApprover):
+        """The real DialogApprover flow; only the native window is replaced."""
+        def __init__(self):
+            super().__init__(timeout_s=30)
+            self.release, self.dismissed = threading.Event(), []
+
+        def _ask(self, text, title=""):
+            self.release.wait(10)                          # the user answers late ...
+            return True                                    # ... with Yes
+
+        def _dismiss(self, title):
+            self.dismissed.append(title)
+            self.release.set()
+
+    dialog = FakeDialog()
+    monkeypatch.setattr(mcp_server, "CALL_TIMEOUT_S", 1.0)   # the MCP call gives up first
+
+    async def body():
+        host = Host(tmp_path, approver=dialog, scanner=Scanner())
+        r, serving = await host.start()
+        await r.report("a.txt", b"x")
+        aid = candidate_id(await host.call("artifact_list", {}), "a.txt")
+        res = await host.call("artifact_export", {"artifact_id": aid})
+        await asyncio.sleep(1.0)
+        lst = await host.call("artifact_list", {})
+        await host.close(serving)
+        return res, lst, r
+
+    res, lst, r = run(body())
+    assert res["error"] == "ACTION_TIMEOUT"
+    assert dialog.dismissed and dialog.dismissed[0].startswith("SCRP 파일 반출 승인 #")
+    assert r.artifact_requests == []                        # the late Yes did not issue a grant
+    assert lst["artifacts"][0]["status"] == "PENDING" and lst["artifacts"][0]["can_export"]

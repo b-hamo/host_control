@@ -110,6 +110,14 @@ class HostBackend(threading.Thread):
             self.error = f"{type(e).__name__}: {e}"
             log.exception("Host backend failed")
             self.ready.set()
+        finally:
+            # Timers still waiting (reconnect grace, startup deadline, ...) end with the Host.
+            pending = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self.loop.close()
 
     async def _main(self) -> None:
         import asyncio

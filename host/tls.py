@@ -78,9 +78,9 @@ def ensure_dev_cert(directory: Path, days: int = 90, addresses=()) -> tuple[Path
 
     `addresses` are the names the Runner uses to reach the Host, e.g. the
     Host address Windows Sandbox sees (it changes between boots, 172.20.x →
-    192.168.x). They go into the SAN next to 127.0.0.1 and scrp-host, for a
-    Runner that checks the host name. A pinning Runner (the recommended way,
-    see the README) does not need them.
+    192.168.x). They go into the SAN next to 127.0.0.1 and scrp-host. The
+    current Runner keeps Windows chain and host name checks and adds a leaf
+    pin, so it needs the address here (see the README).
 
     A new certificate (and key) is made when there is none, when it has less
     than a day left, or when the requested addresses differ from the SAN.
