@@ -64,6 +64,19 @@ class InputBoundManager:
         self.bindings = bindings
         self._register_input = register_input
         self._prepared = None
+        self._transport = ()
+
+    def configure_transport(self, inputs):
+        """Trusted driver helper/manifest, never Agent-selected additional files."""
+        from host.router_command_bundle import TransportInput
+        if self._prepared is not None or self._transport:
+            raise ValueError("transport already bound")
+        if type(inputs) is not tuple or any(not isinstance(i, TransportInput) for i in inputs):
+            raise ValueError("immutable transport inputs required")
+        names = [b.host_path.name.casefold() for b in self.bindings] + [i.path.name.casefold() for i in inputs]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate transport filename")
+        self._transport = inputs
 
     def __getattr__(self, name):
         # Preserve the Manager lifecycle contract, including stop/cleanup/recovery.
@@ -100,13 +113,21 @@ class InputBoundManager:
             if entry.sha256 != source.sha256:
                 raise ValueError("input content changed since Host validation")
             registered.append(entry)
+        for item in self._transport:
+            self._plain_file(item.path)
+            entry = register(item.path, source="router-transport:" + item.sha256)
+            if entry.sha256 != item.sha256:
+                raise ValueError("command transport changed before copying")
+            registered.append(entry)
         self._authorize()
         session = self.manager.prepare(session_id, runtime_id, generation, runner_exe,
                                        input_files=registered)
         try:
             # Detect incompatible Manager versions rather than silently executing
             # against a different location or a writable/custom mapping.
-            if list(session.guest_input_paths) != [b.guest_path for b in self.bindings]:
+            expected = [b.guest_path for b in self.bindings] + [
+                str(PureWindowsPath(r"C:\UserFiles") / i.path.name) for i in self._transport]
+            if list(session.guest_input_paths) != expected:
                 raise ValueError("Manager Guest input paths do not match the approved command")
             self._authorize()
         except BaseException:
@@ -117,15 +138,20 @@ class InputBoundManager:
         return session
 
     def start(self, session):
+        self.validate_prepared(session)
+        return self.manager.start(session)
+
+    def validate_prepared(self, session):
         if session is not self._prepared:
             raise ValueError("session was not prepared for this execution")
         self._authorize()
         sources = {s.source_id: s for s in self.action.sources}
-        for binding in self.bindings:
-            copied = session.input_dir / binding.host_path.name
+        checks = [(b.host_path.name, sources[b.source_id].sha256) for b in self.bindings]
+        checks += [(i.path.name, i.sha256) for i in self._transport]
+        for name, expected in checks:
+            copied = session.input_dir / name
             self._plain_file(copied)
             with copied.open("rb") as stream:
                 actual = hashlib.file_digest(stream, "sha256").hexdigest()
-            if actual != sources[binding.source_id].sha256:
+            if actual != expected:
                 raise ValueError("prepared input changed before Sandbox start")
-        return self.manager.start(session)

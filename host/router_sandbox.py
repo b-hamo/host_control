@@ -1,8 +1,8 @@
 """Reuse Broker lifecycle/artifacts; never mistake keyboard ACK for command exit.
 
 A Host-configured driver must bind exact commands, resources and evidence to
-requests. Current SCRP does not supply this contract. No driver means HELD before
-Sandbox startup; no shell/GUI fallback is invented here.
+requests. GuiCommandDriver supplies that binding over existing SCRP GUI tools
+and inspected artifacts. No driver means HELD before Sandbox startup.
 """
 
 from typing import Protocol
@@ -34,6 +34,9 @@ class BrokerSandbox:
         if self._started and scope != self._scope:
             raise ValueError("separate Sandbox session required")
         if not self._started:
+            prepare = getattr(self.driver, "prepare", None)
+            if prepare is not None:
+                await prepare(self.broker, request)
             result = await self.broker.call("task_submit", {
                 "goal": "Run the Host-validated Router request in Windows Sandbox",
                 "required_capabilities": ["gui.observe", "gui.input", "process.execute"],
