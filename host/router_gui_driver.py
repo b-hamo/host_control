@@ -73,7 +73,19 @@ class GuiCommandDriver:
 
     async def _launch(self, broker):
         try:
-            await asyncio.wait_for(broker.session.ready.wait(), self.startup_timeout)
+            deadline = asyncio.get_running_loop().time() + self.startup_timeout
+            while not broker.session.ready.is_set():
+                if getattr(broker.session, "terminated", False) or getattr(broker.launcher, "state", "") == "FAILED":
+                    self._set(State.FAILED, "SANDBOX_START_FAILED")
+                    return
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    self._set(State.FAILED, "SANDBOX_START_TIMEOUT")
+                    return
+                try:
+                    await asyncio.wait_for(broker.session.ready.wait(), min(1, remaining))
+                except TimeoutError:
+                    pass
             if broker.session.identity != self.bundle.identity:
                 self._set(State.UNKNOWN, "RUNTIME_CHANGED")
                 return

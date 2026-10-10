@@ -74,6 +74,18 @@ class RouterRuntime:
     async def read_result(self, receipt):
         return await self._on_host(self.gateway.read_result(receipt))
 
+    async def stop_sandbox(self):
+        """Retire this provisioned session after consuming its results."""
+        async def stop():
+            await self.driver.close()
+            launcher = self.backend.launcher
+            await launcher.shutdown()
+            if launcher.sandbox is not None:
+                if (launcher.cleanup_result is None or launcher.cleanup_result.get("failed")
+                        or await asyncio.to_thread(launcher.manager.is_running, launcher.sandbox)):
+                    raise RuntimeError("Sandbox cleanup unconfirmed")
+        await self._on_host(stop())
+
     async def close(self):
         if self.backend.loop is not None and self.backend.loop.is_running():
             async def finish():
