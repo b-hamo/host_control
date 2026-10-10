@@ -255,3 +255,23 @@ def test_export_delegation_is_limited_to_current_command(bound, tmp_path, change
             del bound.authority.delegations[request.action.delegation_ref]
         assert not await driver.approve_export(summary)
     asyncio.run(check())
+
+
+@pytest.mark.parametrize("failure", ["terminated", "launcher", "timeout"])
+def test_failed_start_stops_without_any_input(bound, tmp_path, failure):
+    async def check():
+        driver, broker, request = await configured(bound, tmp_path)
+        broker.session.ready.clear()
+        if failure == "terminated":
+            broker.session.terminated = True
+        elif failure == "launcher":
+            broker.launcher.state = "FAILED"
+        else:
+            driver.startup_timeout = 0
+        await driver.submit(broker, request)
+        await driver._launch_task
+        assert driver.receipt.state == State.FAILED
+        assert broker.inputs == []
+        await driver.submit(broker, request)
+        assert broker.inputs == []
+    asyncio.run(check())
