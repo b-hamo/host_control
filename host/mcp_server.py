@@ -291,10 +291,11 @@ def _error_result(code: str, message: str, retryable: bool, next_step: str | Non
 
 
 class McpServer:
-    def __init__(self, backend: HostBackend, tools: list[dict]):
+    def __init__(self, backend: HostBackend, tools: list[dict], *, instructions=INSTRUCTIONS, strict_tools=False):
         self.backend = backend
         self.tools = tools
         self.tool_names = {t["name"] for t in tools}
+        self.instructions, self.strict_tools = instructions, strict_tools
 
     def handle(self, msg: dict) -> dict | None:
         method, msg_id, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
@@ -303,7 +304,7 @@ class McpServer:
                 "protocolVersion": params.get("protocolVersion", DEFAULT_PROTOCOL),
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-                "instructions": INSTRUCTIONS,
+                "instructions": self.instructions,
             }
             if not self.backend.is_alive() and self.backend.ident is None:
                 self.backend.start()                 # heavy imports begin only now
@@ -314,8 +315,12 @@ class McpServer:
         elif method == "tools/call":
             name, args = params.get("name", ""), params.get("arguments") or {}
             started = time.monotonic()
-            result = self.backend.call(name, args)
-            log.info("MCP tools/call %s -> %s (%.0f ms)", name, "error" if result["isError"] else "ok",
+            if self.strict_tools and (not isinstance(name, str) or name not in self.tool_names):
+                result = _error_result("TOOL_NOT_EXPOSED", "Tool is not exposed in this mode", False, None)
+            else:
+                result = self.backend.call(name, args)
+            logged_name = name if not self.strict_tools or (isinstance(name, str) and name in self.tool_names) else "UNEXPOSED"
+            log.info("MCP tools/call %s -> %s (%.0f ms)", logged_name, "error" if result["isError"] else "ok",
                      (time.monotonic() - started) * 1000)
         elif msg_id is None:
             return None                              # notifications, e.g. notifications/initialized

@@ -1,0 +1,248 @@
+{
+  "name": "router_plan",
+  "description": "Register or append immutable tasks/actions. Claims do not grant authority. Existing definitions cannot change.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "plan_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+      },
+      "tasks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+            },
+            "location": {
+              "enum": [
+                "LOCAL",
+                "SANDBOX"
+              ]
+            },
+            "depends_on": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+              },
+              "maxItems": 128
+            }
+          },
+          "required": [
+            "task_id",
+            "location"
+          ]
+        },
+        "maxItems": 128
+      },
+      "actions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "action_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+            },
+            "task_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+            },
+            "operation": {
+              "enum": [
+                "read_text",
+                "write_text",
+                "search",
+                "browse",
+                "execute",
+                "build",
+                "test"
+              ]
+            },
+            "scope": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "reads": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  "maxItems": 128
+                },
+                "writes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  "maxItems": 128
+                },
+                "network": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  "maxItems": 128
+                },
+                "capabilities": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  "maxItems": 128
+                }
+              },
+              "required": []
+            },
+            "delegation_ref": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "source_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+                  },
+                  "reference": {
+                    "type": "string",
+                    "maxLength": 8192,
+                    "minLength": 1
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "origin": {
+                    "enum": [
+                      "external",
+                      "local",
+                      "generated",
+                      "unknown"
+                    ]
+                  },
+                  "parents": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+                    },
+                    "maxItems": 128
+                  }
+                },
+                "required": [
+                  "source_id",
+                  "reference",
+                  "sha256",
+                  "origin"
+                ]
+              },
+              "maxItems": 128
+            },
+            "command": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "executable": {
+                  "type": "string",
+                  "maxLength": 8192
+                },
+                "argv": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  "maxItems": 128
+                },
+                "cwd": {
+                  "type": "string",
+                  "maxLength": 8192
+                },
+                "target_source": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+                }
+              },
+              "required": [
+                "executable",
+                "argv",
+                "cwd",
+                "target_source"
+              ]
+            },
+            "locator": {
+              "type": "string",
+              "maxLength": 8192
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 1048576
+            },
+            "inputs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+              },
+              "maxItems": 128
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+              },
+              "maxItems": 128
+            },
+            "depends_on": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+              },
+              "maxItems": 128
+            }
+          },
+          "required": [
+            "action_id",
+            "task_id",
+            "operation",
+            "scope",
+            "delegation_ref"
+          ]
+        },
+        "maxItems": 128
+      }
+    },
+    "required": [
+      "plan_id",
+      "tasks",
+      "actions"
+    ]
+  },
+  "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}
