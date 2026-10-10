@@ -43,7 +43,7 @@ Sandbox 안 Runner
 | 파일 | 하는 일 | WBS |
 |---|---|---|
 | `broker.py` | **모든 도구 호출의 입구 `Broker.call()`.** 도구 확인 → 입력 검사 → 세션 상태 → 호출 빈도 → 정책 → 좌표·화면 신선도 → Action ID 발급 → SCRP 메시지로 번역·전송 → 오류 정리 → 감사 로그. 하나라도 걸리면 Runner로 보내지 않는다. 입력은 절대 재전송하지 않는다 | 5.6 |
-| `policy.py` | 보안 규칙. 요청마다 ALLOW / REQUIRE_APPROVAL / DENY와 규칙 ID를 정한다 (예: Win+R 거부 `P-DENY-HOTKEY`). 나중에 Translator의 판단이 들어올 자리 | 5.6 |
+| `policy.py` | 보안 규칙. 요청마다 ALLOW / REQUIRE_APPROVAL / DENY와 규칙 ID를 정한다 (예: Win+X 거부 `P-DENY-HOTKEY`, Win+R 허용). 나중에 Translator의 판단이 들어올 자리 | 5.6 |
 | `audit.py` | 호출마다 JSON 한 줄 기록 (`host/.audit/<session>.jsonl`). `computer_type`의 글자는 길이와 SHA-256만 남긴다 | 5.6 |
 
 ## ③ 세션을 관리하는 층

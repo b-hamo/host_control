@@ -89,7 +89,7 @@ Agent의 도구 호출은 모두 `Broker.call(tool, arguments)` 하나로 들어
 | 2 | 입력 스키마 (타입·필수·enum·길이·범위, 모르는 필드 거부). 생략한 선택 인자는 기본값으로 채움 | `INVALID_ARGUMENT` | B-2 |
 | 3 | 세션: 종료됐나, READY인가, `task_submit`을 먼저 했나 | `SESSION_TERMINATED` / `RUNTIME_UNAVAILABLE` / `POLICY_DENIED` | B-3 |
 | 4 | 호출 빈도: 관찰 초당 2회, 입력 초당 5회, 제어 초당 5회. 기다리게 하지 않고 바로 거절 | `RATE_LIMITED` (+`retry_after`) | B-7 |
-| 5 | 정책: DENY 규칙(예: Win+R 등 명령 실행 창을 여는 단축키), 승인 필요 도구 | `POLICY_DENIED` (+`rule_id`) | B-5, B-8 |
+| 5 | 정책: DENY 규칙(Win+X, Ctrl+Alt+Delete, Ctrl+Shift+Escape), 승인 필요 도구. Win+R은 허용 | `POLICY_DENIED` (+`rule_id`) | B-5, B-8 |
 | 6 | 좌표가 마지막 화면 안인가, 화면이 10초 이내인가, 글자가 4 KiB 이하인가 | `INVALID_ARGUMENT` / `STALE_OBSERVATION` | 프로토콜 §6 |
 | 7 | Action ID 발급 → SCRP 메시지로 변환해 전송 (`computer_click` → `mouse.click`) | | B-4 |
 | 8 | 결과·오류를 표준 형식으로: `error`, `message`, `retryable`, `retry_after`, `recommended_next_step` | | B-10 |
@@ -97,7 +97,8 @@ Agent의 도구 호출은 모두 `Broker.call(tool, arguments)` 하나로 들어
 
 - Broker는 입력을 **절대 다시 보내지 않는다.** `ACTION_TIMEOUT`이면 `recommended_next_step: runtime_get_state`로 Agent가 먼저 확인하게 한다
 - Agent는 `session_id`를 넘기지 않는다. Broker 하나가 세션 하나에 묶인다 (다른 세션 조작 불가)
-- 데모: `python host/sender.py --demo broker` — 도구 호출 9개 중 3개(작업 등록 전 관찰, 화면 밖 클릭, Win+R)가 거부되고 Runner에는 2개만 도착한다. 감사 로그는 `host/.audit/<session>.jsonl`
+- Win+R은 Sandbox 안 실행 창을 여는 일반 GUI 입력으로 허용한다(`POL-0.1.1`). `task_submit`·READY·최신 관찰 등 기존 입력 조건은 그대로 적용된다. Sandbox 생성 설정이 아니라 Host Broker의 입력 정책이 결정하므로, 변경된 Host로 새 세션을 시작해야 한다.
+- 데모: `python host/sender.py --demo broker` — 도구 호출 9개 중 3개(작업 등록 전 관찰, 화면 밖 클릭, Win+X)가 거부되고 Runner에는 2개만 도착한다. 감사 로그는 `host/.audit/<session>.jsonl`
 
 ## MCP Server와 Codex 연결 (WBS 5.7)
 
