@@ -20,7 +20,11 @@ class RouterGuiPolicy:
         self.authority = authority
         self.base = base if base is not None else Policy()
         self.command_launch_enabled = command_launch_enabled
-        self.version = self.base.version + "+router-exact-launch-v1"
+        # Runner binds ACTION_REQUEST to its fixed POL-0.1.0 wire profile.
+        # The Router decision extension has its own revision; inventing another
+        # wire version is not negotiation and is correctly rejected by Runner.
+        self.version = self.base.version
+        self.revision = "router-exact-launch-v1"
         self._owner = None
         self._action = None
         self._steps = ()

@@ -107,6 +107,8 @@ def test_additional_approval_requirement_is_retained(setup):
 def test_broker_applies_scoped_policy_before_real_transport(certs, setup):
     async def body(broker, runner):
         action, _, policy = configured(setup)
+        assert policy.version == Policy().version == "POL-0.1.0"
+        assert policy.revision == "router-exact-launch-v1"
         broker.policy = policy  # trusted composition, before accepting Agent work
         await broker.call("task_submit", {"goal": "test only"})
         denied = await broker.call("computer_hotkey", {"keys": ["win", "r"]})
