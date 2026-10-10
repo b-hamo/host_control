@@ -16,6 +16,7 @@ class Ledger:
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("CREATE TABLE IF NOT EXISTS requests "
                         "(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, receipt TEXT)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS request_fingerprints ON requests(fingerprint)")
         self.db.commit()
 
     @staticmethod
@@ -55,10 +56,14 @@ class Ledger:
         data = asdict(receipt)
         del data["request_id"]
         with self.db:
-            cursor = self.db.execute("UPDATE requests SET receipt=? WHERE id=? AND fingerprint=?",
-                                     (json.dumps(data), self._key(receipt.request_id), receipt.fingerprint))
-            if cursor.rowcount != 1:
+            known = self.db.execute("SELECT fingerprint FROM requests WHERE id=?",
+                                    (self._key(receipt.request_id),)).fetchone()
+            if known is None or known[0] != receipt.fingerprint:
                 raise ValueError("receipt does not match reservation")
+            # Different request IDs for an identical Action share one execution.
+            # All aliases must observe its newest receipt, not a reservation-time copy.
+            self.db.execute("UPDATE requests SET receipt=? WHERE fingerprint=?",
+                            (json.dumps(data), receipt.fingerprint))
 
     def close(self):
         self.db.close()

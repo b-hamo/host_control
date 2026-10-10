@@ -474,3 +474,88 @@ def test_source_lineage_cycle_is_refused(setup):
         assert (await host.submit(Request("r1", action))).reason == "PROVENANCE_UNVERIFIED"
         assert host.sandbox.calls == 0
     asyncio.run(check())
+
+
+def test_duplicate_action_from_new_plan_reuses_verified_local_result(setup, tmp_path):
+    async def check():
+        target = tmp_path / "notes.txt"
+        action = Action("write", "local", Operation.WRITE_TEXT, Scope(writes=(str(target),)),
+                        "user-grant", locator=str(target), text="write exactly once")
+        host = setup([action])
+        first = await plan(host, action).run("write")
+        # A distinct Router instance creates a different request ID for the same Action.
+        second = await plan(host, action).run("write")
+        assert second.request_id != first.request_id
+        assert second.state == State.SUCCEEDED
+        assert second.execution_id == first.execution_id
+        assert await host.read_result(second) == b"write exactly once"
+    asyncio.run(check())
+
+
+def test_duplicate_pending_action_queries_original_execution(setup):
+    async def check():
+        action = execution()
+        sandbox = FakeSandbox()
+        sandbox.reply_state = State.ACCEPTED
+        original_status = sandbox.status
+        queried = []
+        async def status(request_id):
+            queried.append(request_id)
+            assert request_id == "original"
+            return await original_status(request_id)
+        sandbox.status = status
+        host = setup([action], sandbox=sandbox)
+        await host.submit(Request("original", action))
+        assert (await host.submit(Request("alias", action))).state == State.ACCEPTED
+        sandbox.receipt = replace(sandbox.receipt, state=State.SUCCEEDED)
+        completed = await host.status("alias")
+        assert completed.state == State.SUCCEEDED
+        assert completed.request_id == "alias"
+        assert await host.verify(completed)
+        assert host.ledger.get("original").state == State.SUCCEEDED
+        assert host.ledger.get("alias").state == State.SUCCEEDED
+        assert queried == ["original", "original"]
+        assert sandbox.calls == 1
+    asyncio.run(check())
+
+
+def test_output_slot_binds_actual_host_artifact_id(setup, tmp_path):
+    async def check():
+        final = tmp_path / "result.txt"
+        final.write_bytes(b"result")
+        artifact = Artifact("ART-000017", "EXPORTED", str(final),
+                            hashlib.sha256(final.read_bytes()).hexdigest(), output_name="result")
+        action = execution(outputs=("result",))
+        read = Action("read", "continue", Operation.READ_TEXT, Scope(reads=(str(final),)),
+                      "user-grant", inputs=("result",))
+        sandbox = FakeSandbox()
+        sandbox.artifacts = (artifact,)
+        host = setup([action, read], sandbox=sandbox)
+        router = plan(host, action)
+        router.add_task(Task("continue", Location.LOCAL, ("guest",)))
+        router.add_action(read)
+        assert (await router.run("execute")).state == State.SUCCEEDED
+        resolved = await host.artifact("result")
+        assert resolved.artifact_id == "ART-000017"  # not a guessed ID in the plan
+        assert resolved.source_ids == (SOURCE.source_id,)
+        assert (await router.run("read")).state == State.SUCCEEDED
+    asyncio.run(check())
+
+
+def test_completed_output_slot_cannot_be_rebound(setup, tmp_path):
+    async def check():
+        final = tmp_path / "result.txt"
+        final.write_bytes(b"result")
+        first = execution(outputs=("result",))
+        second = execution(action_id="second", outputs=("result",))
+        artifact = Artifact("ART-000001", "EXPORTED", str(final),
+                            hashlib.sha256(final.read_bytes()).hexdigest(), output_name="result")
+        sandbox = FakeSandbox()
+        sandbox.artifacts = (artifact,)
+        host = setup([first, second], sandbox=sandbox)
+        assert (await host.submit(Request("r1", first))).state == State.SUCCEEDED
+        sandbox.artifacts = (replace(artifact, artifact_id="ART-000002"),)
+        result = await host.submit(Request("r2", second))
+        assert result.reason == "OUTPUT_BINDING_CONFLICT"
+        assert host._artifacts["result"].artifact_id == "ART-000001"
+    asyncio.run(check())

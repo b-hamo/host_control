@@ -103,8 +103,8 @@ class Action:
     command: Command | None = None
     locator: str = ""
     text: str = ""
-    inputs: tuple[str, ...] = ()  # artifact IDs; final paths come only from Host
-    outputs: tuple[str, ...] = ()
+    inputs: tuple[str, ...] = ()  # output names; final artifact IDs/paths come only from Host
+    outputs: tuple[str, ...] = ()  # unique names within this plan/Host gateway
     depends_on: tuple[str, ...] = ()
 
     def __post_init__(self):
@@ -173,9 +173,12 @@ class Artifact:
     final_ref: str
     sha256: str
     source_ids: tuple[str, ...] = ()
+    output_name: str = ""  # plan slot; artifact_id remains the Host's actual ID
 
     def __post_init__(self):
         identifier(self.artifact_id)
+        if self.output_name:
+            identifier(self.output_name)
         strings(self.source_ids)
         if self.status != "EXPORTED" or not self.final_ref or not re.fullmatch(r"[0-9a-f]{64}", self.sha256):
             raise ValueError("only EXPORTED artifacts with final references are consumable")

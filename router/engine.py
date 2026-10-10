@@ -145,7 +145,8 @@ class Router:
         elif receipt.state == State.SUCCEEDED:
             try:
                 valid = bool(receipt.execution_id and receipt.evidence_ref) and await self.host.verify(receipt)
-                valid = valid and set(request.action.outputs) == {a.artifact_id for a in receipt.artifacts}
+                names = [a.output_name or a.artifact_id for a in receipt.artifacts]
+                valid = valid and len(names) == len(set(names)) and set(request.action.outputs) == set(names)
             except Exception:
                 valid = False
             if not valid:

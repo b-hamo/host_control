@@ -30,7 +30,7 @@ class HostGateway:
                 if previous.fingerprint != request.action.fingerprint:
                     return self._receipt(request, State.DENIED, "IDEMPOTENCY_CONFLICT")
                 return await self.status(request.request_id)
-            self._requests[request.request_id] = request
+            self._requests[request.action.fingerprint] = request
             try:
                 receipt = await self._execute(request)
             except asyncio.CancelledError:
@@ -77,7 +77,7 @@ class HostGateway:
             result_id, _ = await self.local.run(action, final_ref)
             receipt = self._receipt(request, State.SUCCEEDED, "LOCAL_DATA_VERIFIED",
                                     execution_id="LOCAL-" + uuid4().hex, evidence_ref=result_id)
-            self._verified[request.request_id] = receipt
+            self._verified[request.action.fingerprint] = receipt
             return receipt
         if self.sandbox is None or not self.sandbox.supports(request):
             return self._receipt(request, State.HELD, "SANDBOX_COMMAND_CONTRACT_UNAVAILABLE")
@@ -97,7 +97,8 @@ class HostGateway:
                 valid_identity = False
             if not valid_identity or not await self.sandbox.verify(receipt):
                 return self._receipt(request, State.UNKNOWN, "EXECUTION_EVIDENCE_MISSING")
-            if {a.artifact_id for a in receipt.artifacts} != set(request.action.outputs):
+            names = [a.output_name or a.artifact_id for a in receipt.artifacts]
+            if len(names) != len(set(names)) or set(names) != set(request.action.outputs):
                 return self._receipt(request, State.UNKNOWN, "OUTPUTS_UNCONFIRMED")
             checked_artifacts = []
             for artifact in receipt.artifacts:
@@ -105,11 +106,16 @@ class HostGateway:
                 if (checked.final_ref, checked.sha256) != (artifact.final_ref, artifact.sha256):
                     return self._receipt(request, State.UNKNOWN, "EXPORT_UNCONFIRMED")
                 checked_artifacts.append(replace(checked,
-                    source_ids=tuple(s.source_id for s in request.action.sources)))
+                    source_ids=tuple(s.source_id for s in request.action.sources),
+                    output_name=artifact.output_name))
+            for artifact in checked_artifacts:
+                previous = self._artifacts.get(artifact.output_name or artifact.artifact_id)
+                if previous is not None and previous != artifact:
+                    return self._receipt(request, State.UNKNOWN, "OUTPUT_BINDING_CONFLICT")
             receipt = replace(receipt, artifacts=tuple(checked_artifacts))
             for artifact in checked_artifacts:
-                self._artifacts[artifact.artifact_id] = artifact
-            self._verified[request.request_id] = receipt
+                self._artifacts[artifact.output_name or artifact.artifact_id] = artifact
+            self._verified[request.action.fingerprint] = receipt
         if receipt.state != State.SUCCEEDED:
             return self._receipt(request, receipt.state, "SANDBOX_" + receipt.state.value)
         return replace(receipt, reason="SANDBOX_" + receipt.state.value)
@@ -117,11 +123,13 @@ class HostGateway:
     async def status(self, request_id: str) -> Receipt:
         receipt = self.ledger.get(request_id)
         if receipt.state in {State.ACCEPTED, State.RUNNING, State.UNKNOWN} and self.sandbox is not None:
+            original = self._requests.get(receipt.fingerprint)
+            execution_request_id = original.request_id if original else request_id
             try:
-                candidate = await self.sandbox.status(request_id)
-                if candidate.request_id == request_id and candidate.fingerprint == receipt.fingerprint:
-                    if request_id in self._requests:
-                        receipt = await self._validate_receipt(self._requests[request_id], candidate)
+                candidate = await self.sandbox.status(execution_request_id)
+                if candidate.request_id == execution_request_id and candidate.fingerprint == receipt.fingerprint:
+                    if original is not None:
+                        receipt = await self._validate_receipt(original, candidate)
                         self.ledger.put(receipt)
                     elif candidate.state != State.SUCCEEDED:
                         # After restart the original output contract needs reconciliation.
@@ -130,11 +138,13 @@ class HostGateway:
                         self.ledger.put(receipt)
             except Exception:
                 pass
-        return receipt
+        return replace(receipt, request_id=request_id)
 
     async def verify(self, receipt: Receipt) -> bool:
-        trusted = self._verified.get(receipt.request_id)
-        return trusted is not None and replace(trusted, reason=receipt.reason) == receipt
+        trusted = self._verified.get(receipt.fingerprint)
+        # A caller cannot invent an alias: it must have a matching ledger reservation.
+        return trusted is not None and self.ledger.get(receipt.request_id) == receipt and \
+            replace(trusted, request_id=receipt.request_id, reason=receipt.reason) == receipt
 
     async def read_result(self, receipt: Receipt) -> bytes:
         """Return a verified Local data result; never evaluate returned code/page text."""
@@ -142,9 +152,9 @@ class HostGateway:
             raise ValueError("not a verified Local result")
         return self.local.results[receipt.evidence_ref]
 
-    async def artifact(self, artifact_id: str) -> Artifact:
-        artifact = self._artifacts[artifact_id]
-        current = self.sandbox.artifact(artifact_id)
+    async def artifact(self, output_ref: str) -> Artifact:
+        artifact = self._artifacts[output_ref]
+        current = self.sandbox.artifact(artifact.artifact_id)
         if (artifact.final_ref, artifact.sha256) != (current.final_ref, current.sha256):
             raise ValueError("artifact changed")
         if hashlib.sha256(Path(current.final_ref).read_bytes()).hexdigest() != artifact.sha256:
