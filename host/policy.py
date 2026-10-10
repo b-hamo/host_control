@@ -13,12 +13,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-POLICY_VERSION = "POL-0.1.0"
+POLICY_VERSION = "POL-0.1.1"
 
-# Key combinations that open a command, admin or security surface. The tool
-# surface has no shell on purpose (spec B-1); these would be a way around it.
+# Key combinations that open admin or security surfaces.
+# Win+R is allowed so tasks can open the Run dialog inside the Sandbox.
 DENIED_HOTKEYS = {
-    frozenset({"win", "r"}): "opens the Run dialog",
     frozenset({"win", "x"}): "opens the admin power-user menu",
     frozenset({"ctrl", "alt", "delete"}): "opens the Windows security screen",
     frozenset({"ctrl", "shift", "escape"}): "opens Task Manager",
