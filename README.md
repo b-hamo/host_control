@@ -17,13 +17,14 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `host/sender.py` | Host 송신기. Runner 접속 수락, 인증, 데모 실행 | 3.4, 4.6 |
 | `host/mcp_server.py` | MCP Server: Codex가 자식 프로세스로 켜고 stdio로 도구를 부르는 창구 | 5.7 |
 | `host/inbox_download.py` | 받는 폴더(inbox)로 내려받기: Host가 https로 받고 실행은 Sandbox에서만 | 5.9 |
+| `host/sandbox_run.py` | 받은 파일을 Sandbox 안에서 실행 (GUI 모드 + Router 부품): 사람 승인 → 정확한 명령 하나만 Win+R로 → 영수증 확인 | 7.x |
 | `host/artifacts.py` | 파일 반출 (artifact-export-v1): 후보 등록, 승인 후 업로드 권한, 결과 대조, 검사, 최종 공개, 취소 | 5.8 |
 | `host/telemetry.py` | Telemetry 채널 (`/scrp/v1/telemetry`): 후보 SECURITY_EVENT 수신, EVENT_ACK | 5.8 |
 | `host/artifact_scan.py` | 반출 전 검사: 형식 정책(UTF-8 TXT) + 백신 (기본 미설정 = 차단) | 5.8 |
 | `host/approval.py` | 사용자 승인 창 (Host 화면) | 5.6 |
 | `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
-| `host/tool_catalog.py` | 도구 14개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/tool_catalog.py` | 도구 16개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
 | `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
 | `host/tool_availability.py` | 도구 노출 규칙 (표준 라이브러리만 사용, MCP Server가 빠르게 뜨도록) | 5.7 |
@@ -36,7 +37,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
 | `schema/` | Host ↔ Runner 메시지 규격. **Runner도 이 파일을 기준으로 구현** | 2.2, 2.3 |
-| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 14개의 입력 규격 | 2.4 |
+| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 16개의 입력 규격 | 2.4 |
 | `tests/` | 인증·TLS·replay 거부, Heartbeat·재연결, Startup Verification, Broker 자동 테스트 | 4.4~4.6, 5.6 |
 
 규격의 결정 사항과 노션 초기 표와의 차이는 [schema/README.md](schema/README.md)에 있다.
@@ -203,7 +204,7 @@ powershell -ExecutionPolicy Bypass -File <sandbox_manager>\tools\setup_inbox.ps1
 | 단계 | 누가 | 무엇을 |
 |---|---|---|
 | 내려받기 | Agent → Host | `inbox_download(url)` (Broker 경유: 정책 `P-INBOX-DOWNLOAD`, 호출 빈도, 감사). 승인 없음(팀 결정 2026-10-08) |
-| 저장 | Host | 임시 폴더에 다 받은 뒤 받는 폴더로. 받는 중에는 `.part` 이름(감시기가 무시), 이름 정리·덮어쓰기 없음, "인터넷에서 받음" 표시(MOTW) |
+| 저장 | Host | 임시 폴더에 다 받은 뒤 받는 폴더에 최종 이름으로 바로 씀. 다 쓸 때까지 다른 프로그램이 못 열게 잠금(Sandbox가 켜져 있으면 받는 폴더 안 이름 바꾸기가 막히기 때문), 이름 정리·덮어쓰기 없음, "인터넷에서 받음" 표시(MOTW) |
 | 연결 | Sandbox Manager | 받는 폴더를 Sandbox `C:\Inbox`에 **읽기 전용**으로 계속 연결. 1초마다 다 받아진 파일만 SHA-256과 함께 목록에 올리고, 링크가 생기면 바로 지움 |
 | 확인 | Sandbox 안 지킴이 | 바탕화면 `Input`에 복사 → 해시 비교 → `Desktop\input-check.html`에 OK/FAIL |
 | 실행 | Agent | 기존 GUI 도구로 Sandbox 안에서만. 셸·원격 실행 경로는 없음 |
@@ -223,6 +224,31 @@ powershell -ExecutionPolicy Bypass -File <sandbox_manager>\tools\setup_inbox.ps1
 경고 로그와 감사 로그(`SECURITY_EVENT`)에 남긴다.
 
 전제: Codex는 `-s read-only`로 실행한다. 받는 폴더는 사본이 아니라 폴더째 연결이라, Codex가 그 폴더에 링크를 만들 수 있으면 지워지기 전 1초 안에 Host 파일이 보일 수 있다.
+
+### 받은 파일 실행 (sandbox_run): GUI 모드 + Router 부품
+
+GUI 모드 한 세션 안에서 **받기 → Sandbox에서 실행 → 그 창을 화면 조작**까지 이어서 한다.
+Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서버(`router_mcp_server.py`)는 그대로 둔다.
+
+```powershell
+# Codex 등록 인자에 추가 (--inbox, --artifact-export와 같이)
+--runner-exe <sandbox_runner.exe> --inbox <받는 폴더> --artifact-export --sandbox-run
+```
+
+| 단계 | 누가 | 무엇을 |
+|---|---|---|
+| 요청 | Agent | `sandbox_run(file, arguments, reason)`. 이 세션에서 `inbox_download`로 받은 `.exe`·`.msi`·`.ps1`만 |
+| 출처 | Host | Agent 말이 아니라 **Host가 받을 때 남긴 기록**(최종 주소, SHA-256). 파일이 바뀌었으면 거부 |
+| 승인 | 사람 (Host 화면) | 파일·받은 주소·해시·**정확한 실행 명령 전체**를 보여 주는 창(`P-SANDBOX-RUN`, 45초, 무응답은 거부). "예"일 때만 그 명령 지문에 묶인 위임(Router `Authority`)을 이번 한 번 만든다 |
+| 전달 | Host | 도우미(`sandbox_run_guest.ps1`)와 명령서를 받는 폴더(`C:\Inbox`, 읽기 전용)로. 실행 파일은 Sandbox 지킴이가 해시를 확인한 `Desktop\Input` 사본 |
+| 실행 | Host → Runner | Router의 `RouterGuiPolicy`가 **이 명령의 Win+R → 한 줄 입력 → Enter 세 입력만** 허용. Enter 직전에 파일·도우미·위임을 다시 확인. 평소에는 Agent가 Win+R을 못 누른다(`P-DENY-HOTKEY` 그대로) |
+| 결과 | Guest → Host | 도우미가 영수증(종료 코드, stdout 해시)을 남기면 반출 검사를 거쳐 확인. 이 실행의 영수증·stdout 반출은 따로 묻지 않는다 |
+
+`sandbox_run_status` 상태: `RUNNING`(시작됨, GUI 프로그램은 창이 열려 있는 동안 계속) → `SUCCEEDED`/`FAILED`(영수증 확인, 종료 코드·stdout).
+`HELD`(결과가 검사를 못 넘음), `UNKNOWN`(실행됐을 수도 있음: 다시 실행하지 않는다), `DENIED`(시작 안 함).
+
+실제 Sandbox 확인 (develop + Runner `916a6a2`): Sandbox가 켜진 뒤 ZoomIt 받기 → 승인 → Sandbox 안에서 ZoomIt 창이 뜸(실행 기록·도우미·해시 확인 사본·프로세스 확인).
+승인하지 않으면 입력을 하나도 보내지 않는다.
 
 ## 파일 반출 (artifact-export-v1)
 

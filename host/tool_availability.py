@@ -22,6 +22,9 @@ REQUIRED_CAPABILITY = {
     "artifact_export": "artifact.export.v1",
     # A Host feature, not a Runtime capability: only when the Host runs with --inbox.
     "inbox_download": "host.inbox",
+    # Host feature too (--sandbox-run): runs inbox downloads inside the Sandbox, with approval.
+    "sandbox_run": "host.sandbox_run",
+    "sandbox_run_status": "host.sandbox_run",
 }
 # Tools whose backend is not built yet. Hidden rather than failing late (B-11).
 NOT_YET_AVAILABLE: dict[str, str] = {}

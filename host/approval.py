@@ -29,6 +29,8 @@ log = logging.getLogger("host-approval")
 
 APPROVAL_TIMEOUT_S = 45.0          # < mcp_server.CALL_TIMEOUT_S (60 s)
 TITLE = "SCRP 파일 반출 승인"
+RUN_TITLE = "SCRP Sandbox 실행 승인"
+MAX_COMMAND_SHOWN = 1500           # the whole command or no approval at all (never cut short)
 MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2 = 0x4, 0x30, 0x100
 MB_SYSTEMMODAL, MB_SETFOREGROUND, MB_TOPMOST = 0x1000, 0x10000, 0x40000
 IDYES, IDNO = 6, 7
@@ -36,10 +38,28 @@ WM_COMMAND = 0x0111
 MAX_SHOWN = 200
 
 
-def _clean(text: str) -> str:
+def _clean(text: str, limit: int = MAX_SHOWN) -> str:
     """Untrusted text in a dialog: one line, printable, bounded."""
     text = "".join(ch if ch.isprintable() else " " for ch in str(text)).strip()
-    return text if len(text) <= MAX_SHOWN else text[:MAX_SHOWN] + "…"
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def describe_run(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str | None:
+    """sandbox_run: the exact command, in full. None when it cannot be shown in full."""
+    command = "".join(ch if ch.isprintable() else " " for ch in str(summary.get("command", "")))
+    if not command or len(command) > MAX_COMMAND_SHOWN:
+        return None
+    reason = _clean((summary.get("arguments") or {}).get("reason") or "") or "(없음)"
+    return "\n".join([
+        "AI(Codex)가 인터넷에서 받은 파일을 Sandbox 안에서 실행하려고 합니다.",
+        "이 컴퓨터에서는 실행되지 않습니다.", "",
+        f"파일: {_clean(summary.get('file', ''))}",
+        f"받은 주소: {_clean(summary.get('source', ''))}",
+        f"SHA-256: {_clean(summary.get('sha256', ''))}",
+        f"Sandbox 안에서 실행할 명령: {command}",
+        f"AI가 적은 이유 (확인되지 않은 내용): {reason}", "",
+        "허용하면 이 명령 하나만, 이번 한 번 실행합니다.",
+        f"허용할까요? ({timeout_s:.0f}초 안에 답하지 않으면 거부됩니다)"])
 
 
 def describe(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
@@ -63,9 +83,14 @@ class DialogApprover:
     async def __call__(self, summary: dict) -> bool:
         async with self._lock:                      # one question at a time
             self._seq += 1
-            title = f"{TITLE} #{self._seq}"         # unique, so this exact dialog can be closed
+            run = summary.get("tool") == "sandbox_run"
+            title = f"{RUN_TITLE if run else TITLE} #{self._seq}"   # unique, so this exact dialog can be closed
+            text = describe_run(summary, self.timeout_s) if run else describe(summary, self.timeout_s)
+            if text is None:
+                log.warning("APPROVAL %s denied: the command is too long to show in full", summary.get("tool"))
+                return False
             try:
-                approved = await asyncio.to_thread(self._ask, describe(summary, self.timeout_s), title)
+                approved = await asyncio.to_thread(self._ask, text, title)
             except asyncio.CancelledError:
                 log.info("APPROVAL %s cancelled; closing its dialog as \"No\"", title)
                 self._dismiss(title)

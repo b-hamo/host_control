@@ -177,16 +177,62 @@ class Downloader:
             if total + size > TOTAL_MAX:
                 raise DownloadError("POLICY_DENIED", f"inbox would exceed {TOTAL_MAX} bytes")
             digest = _sha256(got)
-            dst = _unique(self.inbox, got.name)
-            # Write under a temporary name the watcher ignores, then rename: never listed half-written.
-            part = dst.with_name(dst.name + f".{secrets.token_hex(4)}.part")
-            shutil.copyfile(got, part)
-            mark_internet(part, final_url)
-            os.replace(part, dst)
+            try:
+                dst = place(self.inbox, got.name, got)
+            except OSError as e:
+                raise DownloadError("RUNTIME_UNAVAILABLE", f"could not write into the inbox ({type(e).__name__})") from None
+            mark_internet(dst, final_url)
         log.info("INBOX download %s -> %s (%d bytes, sha256=%s…)", _host_of(final_url), dst.name, size, digest[:12])
         return {"source": url, "final_url": final_url,
                 "file": {"name": dst.name, "size": size, "sha256": digest},
                 "sandbox_path": f"{GUEST_INPUT}\\{dst.name}", "inbox_path": f"{GUEST_INBOX}\\{dst.name}"}
+
+
+def place(inbox: Path, name: str, content: Path | bytes) -> Path:
+    """Create a new file in the inbox and fill it under a handle that shares nothing.
+
+    A running Sandbox maps the inbox live, and while it does, nothing can be renamed or moved
+    into it (sharing violation), so a file is never written elsewhere and renamed in. It is
+    written in place instead, and until it is complete and closed nobody else (the Guest's
+    watcher included) can open it: a half-written file is never read. Never overwrites."""
+    for _ in range(20):
+        dst = _unique(inbox, name)
+        try:
+            stream = _create_exclusive(dst)
+        except FileExistsError:
+            continue                                   # taken meanwhile: next free name
+        try:
+            with stream:
+                if isinstance(content, bytes):
+                    stream.write(content)
+                else:
+                    with open(content, "rb") as src:
+                        shutil.copyfileobj(src, stream, 1024 * 1024)
+        except BaseException:
+            dst.unlink(missing_ok=True)
+            raise
+        return dst
+    raise OSError(f"no free name for {name} in the inbox")
+
+
+def _create_exclusive(path: Path):
+    if sys.platform != "win32":
+        return open(path, "xb")
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    GENERIC_WRITE, NO_SHARING, CREATE_NEW, FILE_ATTRIBUTE_NORMAL = 0x40000000, 0, 1, 0x80
+    h = k32.CreateFileW(str(path), GENERIC_WRITE, NO_SHARING, None, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, None)
+    if h in (None, wintypes.HANDLE(-1).value):
+        err = ctypes.get_last_error()
+        if err in (80, 183):                           # ERROR_FILE_EXISTS, ERROR_ALREADY_EXISTS
+            raise FileExistsError(str(path))
+        raise ctypes.WinError(err)
+    return os.fdopen(msvcrt.open_osfhandle(h, os.O_WRONLY | os.O_BINARY), "wb")
 
 
 def mark_internet(path: Path, url: str) -> None:

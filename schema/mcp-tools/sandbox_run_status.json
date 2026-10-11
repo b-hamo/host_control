@@ -1,0 +1,25 @@
+{
+  "name": "sandbox_run_status",
+  "description": "State of a sandbox_run: ACCEPTED (being started), RUNNING (started; a GUI program stays here while open), SUCCEEDED or FAILED (ended; exit_code and stdout from the Sandbox's checked receipt), DENIED (not started), HELD (its result could not pass the Host's checks) or UNKNOWN (it may have run; never run it again to find out). Calling it again is safe.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "run_id"
+    ],
+    "properties": {
+      "run_id": {
+        "type": "string",
+        "pattern": "^RUN-[0-9]{4}$",
+        "description": "run_id returned by sandbox_run."
+      }
+    }
+  },
+  "annotations": {
+    "title": "State of a Sandbox run",
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}
