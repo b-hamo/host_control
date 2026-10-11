@@ -16,13 +16,14 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 |---|---|---|
 | `host/sender.py` | Host 송신기. Runner 접속 수락, 인증, 데모 실행 | 3.4, 4.6 |
 | `host/mcp_server.py` | MCP Server: Codex가 자식 프로세스로 켜고 stdio로 도구를 부르는 창구 | 5.7 |
+| `host/inbox_download.py` | 받는 폴더(inbox)로 내려받기: Host가 https로 받고 실행은 Sandbox에서만 | 5.9 |
 | `host/artifacts.py` | 파일 반출 (artifact-export-v1): 후보 등록, 승인 후 업로드 권한, 결과 대조, 검사, 최종 공개, 취소 | 5.8 |
 | `host/telemetry.py` | Telemetry 채널 (`/scrp/v1/telemetry`): 후보 SECURITY_EVENT 수신, EVENT_ACK | 5.8 |
 | `host/artifact_scan.py` | 반출 전 검사: 형식 정책(UTF-8 TXT) + 백신 (기본 미설정 = 차단) | 5.8 |
 | `host/approval.py` | 사용자 승인 창 (Host 화면) | 5.6 |
 | `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
-| `host/tool_catalog.py` | 도구 13개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/tool_catalog.py` | 도구 14개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
 | `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
 | `host/tool_availability.py` | 도구 노출 규칙 (표준 라이브러리만 사용, MCP Server가 빠르게 뜨도록) | 5.7 |
@@ -35,7 +36,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
 | `schema/` | Host ↔ Runner 메시지 규격. **Runner도 이 파일을 기준으로 구현** | 2.2, 2.3 |
-| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 13개의 입력 규격 | 2.4 |
+| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 14개의 입력 규격 | 2.4 |
 | `tests/` | 인증·TLS·replay 거부, Heartbeat·재연결, Startup Verification, Broker 자동 테스트 | 4.4~4.6, 5.6 |
 
 규격의 결정 사항과 노션 초기 표와의 차이는 [schema/README.md](schema/README.md)에 있다.
@@ -186,6 +187,42 @@ Host가 언제 할지 정하고, 실제로 끄고 켜는 건 Sandbox Manager(`re
 - **방화벽 규칙**: Sandbox Manager가 켤 때 `SCRP PoC*` 규칙(17443·17444 허용, 나머지 차단, Sandbox 스위치에 연결)을 확인하고,
   없으면 `firewall not ready`로 거부한다. Lifecycle 저장소의 `tools/install_firewall.ps1`을 **관리자 권한으로** 한 번 실행한다
 - Windows Sandbox는 PC당 1개. 이미 켜져 있으면 `a Windows Sandbox is already running`으로 거부된다
+
+## 받는 폴더 (inbox): 내려받기는 Host, 실행은 Sandbox
+
+Router 설계("외부 출처 + 실행은 Sandbox로")대로, 인터넷 파일을 **Host가 받아서 Sandbox 안에서만 실행**하게 한다.
+Sandbox Manager `acf5f9f`의 받는 폴더 기능을 연결했다.
+
+```powershell
+# 한 번만: 받는 폴더 만들기 (이 폴더 안 파일은 Host에서 실행 금지, 관리자 권한 불필요)
+powershell -ExecutionPolicy Bypass -File <sandbox_manager>\tools\setup_inbox.ps1
+# Codex 등록 인자에 추가
+--runner-exe <sandbox_runner.exe> --inbox %USERPROFILE%\SecureCUA\codex-work\inbox
+```
+
+| 단계 | 누가 | 무엇을 |
+|---|---|---|
+| 내려받기 | Agent → Host | `inbox_download(url)` (Broker 경유: 정책 `P-INBOX-DOWNLOAD`, 호출 빈도, 감사). 승인 없음(팀 결정 2026-10-08) |
+| 저장 | Host | 임시 폴더에 다 받은 뒤 받는 폴더로. 받는 중에는 `.part` 이름(감시기가 무시), 이름 정리·덮어쓰기 없음, "인터넷에서 받음" 표시(MOTW) |
+| 연결 | Sandbox Manager | 받는 폴더를 Sandbox `C:\Inbox`에 **읽기 전용**으로 계속 연결. 1초마다 다 받아진 파일만 SHA-256과 함께 목록에 올리고, 링크가 생기면 바로 지움 |
+| 확인 | Sandbox 안 지킴이 | 바탕화면 `Input`에 복사 → 해시 비교 → `Desktop\input-check.html`에 OK/FAIL |
+| 실행 | Agent | 기존 GUI 도구로 Sandbox 안에서만. 셸·원격 실행 경로는 없음 |
+
+내려받기 제한 (`host/inbox_download.py`, Lifecycle 시연 도구 기반에 보완):
+- https만, 리다이렉트도 매번 같은 검사(최대 5번). 주소 안 비밀번호 거부
+- **공개 주소만**: 이름이 사설·루프백·링크로컬(169.254 클라우드 메타데이터 포함) 주소로 하나라도 풀리면 거부
+- **확인한 IP로 바로 접속**: 이름을 두 번 찾지 않아서, 확인과 접속 사이에 내부 주소로 바뀌는 공격(DNS rebinding)이 안 됨. 인증서·SNI는 원래 이름으로 검사
+- 파일당 50 MiB, 받는 폴더 합계 200 MiB·200개, 전체 45초(MCP 호출 60초 안)
+- **zip은 Host에서 풀지 않는다** (신뢰할 수 없는 압축을 Host가 처리하지 않게). Sandbox 안에서 푼다
+- 감사 로그에 주소·최종 주소·크기·SHA-256. **주소의 쿼리는 남기지 않는다** (서명된 링크는 쿼리가 비밀값)
+
+켤 때 확인: `--inbox`는 `--runner-exe`와 같이만 쓸 수 있고, 사용자 폴더(문서·바탕화면·다운로드·AppData 등)·OneDrive·드라이브 최상위는 거부한다.
+그리고 **받는 폴더에서 프로그램이 정말 실행되지 않는지** 무해한 시스템 프로그램(whoami) 사본으로 시험하고, 실행되면 시작하지 않는다(`setup_inbox.ps1`을 안 한 경우).
+
+보안 이벤트: 받는 폴더에 링크가 생겨 지운 경우(`INBOX_LINK_REMOVED`, `INBOX_HARDLINK_REMOVED`)는 누가 다른 Host 파일을 Sandbox에 보이게 하려던 흔적이라
+경고 로그와 감사 로그(`SECURITY_EVENT`)에 남긴다.
+
+전제: Codex는 `-s read-only`로 실행한다. 받는 폴더는 사본이 아니라 폴더째 연결이라, Codex가 그 폴더에 링크를 만들 수 있으면 지워지기 전 1초 안에 Host 파일이 보일 수 있다.
 
 ## 파일 반출 (artifact-export-v1)
 
@@ -342,6 +379,8 @@ Host가 거부하는 경우:
 - 파일 반출의 백신 엔진은 미정이다 (`--artifact-scanner` 기본 `none` = 모두 차단). 형식 정책은 발표용 UTF-8 `.txt` 한 가지
 - 후보 무효화 메시지가 계약에 없어서 `artifact_list`는 "보고된 후보" 목록이다. 지워지거나 바뀐 파일은 반출할 때 Runner가 거부한다
 - 반출은 한 번에 하나만 (`ARTIFACT_BUSY`). 후보·전송 상태는 메모리에만 있다 (Host를 다시 켜면 새로 시작)
+- 받는 폴더는 폴더째 연결이다(사본 아님). 링크는 1초 안에 지우지만 그 사이는 열려 있을 수 있다 → Codex `-s read-only` 전제
+- 내려받은 파일을 넣은 세션의 "외부 출처" 표시(Router 오염 규칙)는 아직 없다. 실행 명령 검사는 Router 작업에서 붙인다
 - MCP Server 1개 = 세션 1개. Codex를 다시 켜면 새 세션이 만들어지고 Sandbox도 다시 접속해야 한다
 - Codex가 MCP Server를 강제로 죽이면(stdin을 닫지 않고) Sandbox가 남는다. 다음 `task_submit` 때 Sandbox Manager가
   켠 Host가 죽은 세션의 Sandbox를 먼저 정리하고 시작한다 (손으로 켠 Sandbox는 건드리지 않고 거부)

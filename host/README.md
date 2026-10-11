@@ -1,7 +1,7 @@
 # host/ — Host 쪽 코드 안내
 
 Agent(Codex)의 요청을 받아 검사하고, 격리된 Sandbox 안의 Runner로 전달하는 Host 프로그램이다.
-파일 21개가 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.
+파일 22개가 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.
 
 ```
 Codex (AI)
@@ -18,6 +18,7 @@ Codex (AI)
 ┌─ ③ 세션을 관리하는 층 ───────────────────────────────────┐
 │  runtime_session.py   startup.py   lifecycle.py            │
 │  artifacts.py   artifact_scan.py   (파일 반출)             │
+│  inbox_download.py   (받는 폴더로 내려받기)                │
 └───────────────────────────────────────────────────────────┘
    ▼
 ┌─ ④ Sandbox와 통신하는 층 ────────────────────────────────┐
@@ -36,7 +37,7 @@ Sandbox 안 Runner
 |---|---|---|
 | `mcp_server.py` | Codex가 자식 프로세스로 켜는 MCP Server. `tools/list`에 도구 목록을 주고, `tools/call`을 Broker에 넘겨 결과를 돌려준다. 켜질 때 ④층(wss 서버, 세션 등록, bootstrap 파일)도 함께 시작한다 | 5.7 |
 | `tool_availability.py` | 이 세션에서 보여줄 도구를 정하는 규칙. Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 빼버리므로, 무거운 라이브러리 없이 쓸 수 있게 따로 뺐다 | 5.7 |
-| `tool_catalog.py` | `schema/mcp-tools/`의 도구 13개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
+| `tool_catalog.py` | `schema/mcp-tools/`의 도구 14개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
 
 ## ② 요청을 검사하는 층 (Broker)
 
@@ -51,6 +52,7 @@ Sandbox 안 Runner
 | 파일 | 하는 일 | WBS |
 |---|---|---|
 | `runtime_session.py` | 연결이 끊겨도 이어지는 세션. 5초마다 HEARTBEAT, 연속 2회 누락 DEGRADED · 3회 UNRESPONSIVE. 끊길 때 결과를 못 받은 Action은 재전송하지 않고 재접속 후 STATE_REQUEST로 확인. task_id·action_id 발급, 마지막 화면과 받은 시각 보관, `status()`로 상태 조회 | 4.4, 4.5 |
+| `inbox_download.py` | `inbox_download` 도구의 본체. 공개 https만, 확인한 IP로 접속(DNS rebinding 차단), 리다이렉트마다 검사, 크기·개수 한도, 다 받은 뒤에만 받는 폴더로, MOTW 표시, zip은 Host에서 안 풂. 받는 폴더가 Host에서 실행 금지인지 시작 때 시험 | 5.9 |
 | `artifacts.py` | 파일 반출 본체 (artifact-export-v1). 후보 등록·artifact_id, 승인 뒤 업로드 권한(upload_id·token·기한·상한) 먼저 등록 → ARTIFACT_REQUEST → 수신 기록과 ARTIFACT_RESULT 대조 → 검사 → 같은 바이트만 공개. 세션 종료·세대 변경·채널 끊김 시 취소 | 5.8 |
 | `artifact_scan.py` | 반출 전 검사. 형식 정책(UTF-8 `.txt`) + 백신. 기본은 검사기 없음 = 차단. AMSI는 EICAR 자체 시험을 통과해야만 사용 | 5.8 |
 | `approval.py` | 사용자 승인 창. Host 화면에 뜨고 AI는 답할 수 없음. 45초 무응답 = 거부 (MCP 호출 제한 60초 안), 호출이 취소되면 창도 닫음 | 5.6 |
@@ -122,6 +124,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_observation_upload.py` | upload_id(1회용·만료), PNG 검사, HTTPS 수신 거부 코드, 해시·크기 대조, 조작된 업로드 차단, 세션 종료 시 삭제 |
 | `tests/test_sandbox_recovery.py` | Runner만 다시 켜기, 창 닫힘은 다시 안 켬, 먹통이면 Sandbox 새로 켜기, 실패 시 넘어가기·종료, 옛 세대 token 거부, 실제 Sandbox Manager로 재시작 확인 |
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
+| `tests/test_inbox_download.py` | 내려받기: 공개 https만·사설/메타데이터 주소 거부, 확인한 IP로만 접속(두 번째 DNS 없음), 리다이렉트 검사, 크기·개수 한도, 이름 정리·덮어쓰기 없음·MOTW, zip 안 풂, 실행 금지 시험, MCP 경로(정책·감사·쿼리 제거·받는 폴더 연결·감시 시작/종료), 잘못된 옵션 |
 | `tests/test_artifact_export.py` | 파일 반출: Runner 계약 예제 14개, bootstrap 선택, token 종류 분리, Telemetry 없으면 READY 안 됨, 중복 후보, 한글·빈 파일 반출(바이트·해시 일치, 빈 201), 승인 거부, 검사 통과·차단·오류·시간 초과·형식, Runner 거부·결과 불일치·결과 없음, 채널·연결 끊김·세션 종료 취소, 수신 거부 코드, AMSI EICAR 자체 시험 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |
 | `tests/mini_runner.py` | 테스트용 최소 Runner (테스트가 아니라 도구) |

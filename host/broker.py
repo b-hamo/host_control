@@ -162,7 +162,7 @@ class Broker:
     def __init__(self, session: RuntimeSession, catalog: ToolCatalog | None = None, *,
                  policy: Policy | None = None, audit: AuditLog | None = None,
                  approver: Approver | None = None, rates: dict[str, float] | None = None,
-                 clock=time.monotonic, launcher=None, artifacts=None):
+                 clock=time.monotonic, launcher=None, artifacts=None, inbox=None):
         # B-3: bound to one session. Only a new generation of that same session replaces it
         # (switch_session), when the Runner or the Sandbox had to be restarted.
         self.session = session
@@ -171,6 +171,8 @@ class Broker:
         self.launcher = launcher
         # host/artifacts.py ArtifactBroker (artifact-export-v1 sessions). None: no artifact tools.
         self.artifacts = artifacts
+        # host/inbox_download.py Downloader (--inbox). None: no inbox_download tool.
+        self.inbox = inbox
         self.catalog = catalog or ToolCatalog()
         self.policy = policy or Policy()
         self.audit = audit or AuditLog()
@@ -194,7 +196,8 @@ class Broker:
         return [t.as_mcp() for t in self.catalog.available(self._granted())]
 
     def _granted(self) -> set[str]:
-        return self.session.granted_capabilities or set(self.session.profile.required_capabilities)
+        runtime = self.session.granted_capabilities or set(self.session.profile.required_capabilities)
+        return runtime | ({"host.inbox"} if self.inbox is not None else set())
 
     # -- the one entry point -------------------------------------------------
     async def call(self, tool: str, arguments: dict | None = None) -> ToolResult:
@@ -369,6 +372,14 @@ class Broker:
                 s.actions[wanted] = st["action_state"]["status"]
             return {**host_view, "runtime_state": st["runtime_state"], "worker_alive": st["worker_alive"],
                     "queue_depth": st["queue_depth"], "action": st["action_state"], "source": "runtime"}
+        if tool == "inbox_download":
+            from host.inbox_download import DownloadError
+            if self.inbox is None:
+                raise BrokerError("POLICY_DENIED", "inbox_download is not enabled on this Host (--inbox)")
+            try:
+                return await asyncio.to_thread(self.inbox.download, args["url"])
+            except DownloadError as e:
+                raise BrokerError(e.code, e.message) from None
         if tool in ("artifact_list", "artifact_export"):
             from host.artifacts import ArtifactError
             if self.artifacts is None:
@@ -391,6 +402,11 @@ class Broker:
         s = self.session
         outcome = {"ok": True, "status": result.data.get("status", "OK")} if result.ok else \
                   {"ok": False, "error": result.error["error"], "message": result.error["message"]}
+        if result.ok and tool == "inbox_download":
+            from host.inbox_download import _strip_query
+            # What came in, from where (query strings left out: signed URLs carry secrets).
+            outcome["download"] = {"source": _strip_query(result.data["source"]),
+                                   "final_url": _strip_query(result.data["final_url"]), **result.data["file"]}
         self.audit.record(
             session_id=s.identity[0], runtime_id=s.identity[1], task_id=self.task_id,
             action_id=result.action_id, tool=tool, arguments=mask(tool, args),

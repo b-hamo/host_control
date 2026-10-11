@@ -20,6 +20,8 @@ REQUIRED_CAPABILITY = {
     # Only sessions that selected artifact-export-v1 are granted this (host/artifacts.py).
     "artifact_list": "artifact.export.v1",
     "artifact_export": "artifact.export.v1",
+    # A Host feature, not a Runtime capability: only when the Host runs with --inbox.
+    "inbox_download": "host.inbox",
 }
 # Tools whose backend is not built yet. Hidden rather than failing late (B-11).
 NOT_YET_AVAILABLE: dict[str, str] = {}
