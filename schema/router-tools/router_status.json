@@ -1,0 +1,23 @@
+{
+  "name": "router_status",
+  "description": "Query an existing request without replay. UNKNOWN never means safe to resubmit.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "request_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+      }
+    },
+    "required": [
+      "request_id"
+    ]
+  },
+  "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "router_stop",
+  "description": "Stop and clean up this plan's Sandbox after consuming results. Confirm stopped before ending the Agent session; MCP processes may be force-killed by clients. This durably retires new submissions. Existing request status can still be queried. Never affects another plan's session.",
+  "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
+  "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false}
+}

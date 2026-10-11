@@ -9,7 +9,7 @@ import hashlib
 from dataclasses import replace
 from uuid import uuid4
 
-from router.models import Action, Task
+from router.models import Action, Task, identifier
 from router.ports import HostPort, Receipt, Request, State
 
 
@@ -46,6 +46,51 @@ class Router:
 
     def _task_started(self, task_id: str) -> bool:
         return any(a.task_id == task_id and aid in self._requests for aid, a in self._actions.items())
+
+    def extend(self, tasks: tuple[Task, ...], actions: tuple[Action, ...]) -> None:
+        """Atomically append a structured plan; existing definitions are immutable."""
+        old_tasks, old_actions = self._tasks.copy(), self._actions.copy()
+        try:
+            for values, registry, key, add in (
+                (tasks, self._tasks, "task_id", self.add_task),
+                (actions, self._actions, "action_id", self.add_action),
+            ):
+                pending = list(values)
+                if len({getattr(v, key) for v in pending}) != len(pending):
+                    raise ValueError("duplicate plan definition")
+                while pending:
+                    progressed = False
+                    for value in pending[:]:
+                        name = getattr(value, key)
+                        if name in registry:
+                            if registry[name] != value:
+                                raise ValueError("existing plan definition changed")
+                        elif all(dep in registry for dep in value.depends_on):
+                            add(value)
+                        else:
+                            continue
+                        pending.remove(value)
+                        progressed = True
+                    if not progressed:
+                        raise ValueError("missing or cyclic dependency")
+        except Exception:
+            self._tasks, self._actions = old_tasks, old_actions
+            raise
+
+    def ready(self, action_id: str) -> bool:
+        action = self._actions[action_id]
+        return (all(self.task_complete(d) for d in self._tasks[action.task_id].depends_on)
+                and all(self._succeeded(d) for d in action.depends_on))
+
+    async def reconcile(self, action_id: str, request_id: str) -> Receipt:
+        """Recover a durable reservation by querying Host, never by submitting."""
+        identifier(request_id)
+        async with self._lock:
+            request = Request(request_id, self._actions[action_id])
+            if action_id in self._requests and self._requests[action_id] != request:
+                raise ValueError("request identity changed")
+            self._requests[action_id] = request
+            return await self._poll(action_id)
 
     def require_task(self, task_id: str, discovered_task: str) -> None:
         """Insert newly discovered work before an unstarted continuation."""
@@ -102,10 +147,14 @@ class Router:
                                   "replacement": self._replacement.get(aid)}
                             for aid, action in self._actions.items()}}
 
-    async def run(self, action_id: str) -> Receipt:
+    async def run(self, action_id: str, *, request_id: str | None = None) -> Receipt:
         async with self._lock:
             action = self._actions[action_id]
+            if request_id is not None:
+                identifier(request_id)
             if action_id in self._requests:
+                if request_id is not None and self._requests[action_id].request_id != request_id:
+                    raise ValueError("request identity changed")
                 # Every repeat queries Host, even after a timeout; never submit again.
                 return await self._poll(action_id)
             if any(not self.task_complete(d) for d in self._tasks[action.task_id].depends_on) or \
@@ -115,7 +164,7 @@ class Router:
                 artifact = await self.host.artifact(aid)
                 if artifact.status != "EXPORTED" or not artifact.final_ref:
                     raise ValueError("input is not exported")
-            request = Request("REQ-" + uuid4().hex, action)
+            request = Request(request_id or "REQ-" + uuid4().hex, action)
             self._requests[action_id] = request
             try:
                 receipt = await self.host.submit(request)
