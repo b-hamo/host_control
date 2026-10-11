@@ -56,7 +56,7 @@ OPERATIONS = {
     "computer_click_element": "ui.click_element",
 }
 COORDINATE_TOOLS = {"computer_move", "computer_click", "computer_scroll"}
-RUNTIME_TOOLS = {"computer_observe", "artifact_export", *OPERATIONS}   # need a READY runtime
+RUNTIME_TOOLS = {"computer_observe", "artifact_export", "sandbox_run", *OPERATIONS}   # need a READY runtime
 
 # Rate limits per session (protocol doc §7: input 5/s, observe 2/s)
 RATE_LIMITS = {"observe": 2.0, "input": 5.0, "control": 5.0}
@@ -162,7 +162,7 @@ class Broker:
     def __init__(self, session: RuntimeSession, catalog: ToolCatalog | None = None, *,
                  policy: Policy | None = None, audit: AuditLog | None = None,
                  approver: Approver | None = None, rates: dict[str, float] | None = None,
-                 clock=time.monotonic, launcher=None, artifacts=None, inbox=None):
+                 clock=time.monotonic, launcher=None, artifacts=None, inbox=None, runner=None):
         # B-3: bound to one session. Only a new generation of that same session replaces it
         # (switch_session), when the Runner or the Sandbox had to be restarted.
         self.session = session
@@ -173,6 +173,8 @@ class Broker:
         self.artifacts = artifacts
         # host/inbox_download.py Downloader (--inbox). None: no inbox_download tool.
         self.inbox = inbox
+        # host/sandbox_run.py SandboxRunner (--sandbox-run). None: no sandbox_run tools.
+        self.runner = runner
         self.catalog = catalog or ToolCatalog()
         self.policy = policy or Policy()
         self.audit = audit or AuditLog()
@@ -197,7 +199,7 @@ class Broker:
 
     def _granted(self) -> set[str]:
         runtime = self.session.granted_capabilities or set(self.session.profile.required_capabilities)
-        return runtime | ({"host.inbox"} if self.inbox is not None else set())
+        return runtime | ({"host.inbox"} if self.inbox is not None else set())             | ({"host.sandbox_run"} if self.runner is not None else set())
 
     # -- the one entry point -------------------------------------------------
     async def call(self, tool: str, arguments: dict | None = None) -> ToolResult:
@@ -219,13 +221,16 @@ class Broker:
             self.limiter.take(category(tool))
             decision = self.policy.decide(tool, args)
             shown: dict = {}
+            plan = None
             if tool == "artifact_export":
                 decision, shown = self._artifact_decision(args, decision)
+            elif tool == "sandbox_run":
+                plan, shown = self._run_plan(args)       # the exact command, before anyone is asked
             await self._enforce(tool, args, decision, shown)
             if tool in OPERATIONS or tool == "computer_observe":
                 action_id = self.session.next_action()
             self._pending_image = None
-            data = await self._dispatch(tool, args, action_id)
+            data = await self._dispatch(tool, args, action_id, plan)
             if self.notice:
                 data, self.notice = {**data, "notice": self.notice}, None
             result = ToolResult(True, data, action_id=action_id, image=self._pending_image)
@@ -290,6 +295,15 @@ class Broker:
             return Decision("ALLOW", "P-ARTIFACT-EXISTING", "already requested; returns its state"), {}
         return decision, {"path": art.relative_path, "artifact_id": art.artifact_id}
 
+    def _run_plan(self, args: dict):
+        from host.sandbox_run import RunError
+        if self.runner is None:
+            raise BrokerError("POLICY_DENIED", "sandbox_run is not enabled on this Host (--sandbox-run)")
+        try:
+            return self.runner.plan(args["file"], args.get("arguments", []), self.session.identity)
+        except RunError as e:
+            raise BrokerError(e.code, e.message) from None
+
     async def _enforce(self, tool: str, args: dict, decision: Decision, shown: dict | None = None) -> None:
         if decision.result == "DENY":
             raise BrokerError("POLICY_DENIED", decision.reason, rule_id=decision.rule_id)
@@ -316,7 +330,7 @@ class Broker:
                               f"({args['x']}, {args['y']}) is outside the {obs['width']}x{obs['height']} screen")
         return obs["observation_id"]
 
-    async def _dispatch(self, tool: str, args: dict, action_id: str | None) -> dict:
+    async def _dispatch(self, tool: str, args: dict, action_id: str | None, plan=None) -> dict:
         s = self.session
         if tool == "task_submit":
             self.task_id, self.goal = s.next_task(), args["goal"]
@@ -377,8 +391,23 @@ class Broker:
             if self.inbox is None:
                 raise BrokerError("POLICY_DENIED", "inbox_download is not enabled on this Host (--inbox)")
             try:
-                return await asyncio.to_thread(self.inbox.download, args["url"])
+                got = await asyncio.to_thread(self.inbox.download, args["url"])
             except DownloadError as e:
+                raise BrokerError(e.code, e.message) from None
+            if self.runner is not None:
+                self.runner.register(got)            # the Host's own record: what sandbox_run may run
+            return got
+        if tool in ("sandbox_run", "sandbox_run_status"):
+            from host.sandbox_run import RunError
+            if self.runner is None:
+                raise BrokerError("POLICY_DENIED", "sandbox_run is not enabled on this Host (--sandbox-run)")
+            try:
+                if tool == "sandbox_run":
+                    run = await self.runner.start(self, plan)
+                    return {**run.view(), "message": "Approved. Call sandbox_run_status with this run_id; "
+                            "a GUI program stays RUNNING while its window is open (use computer_observe)."}
+                return await self.runner.status(self, args["run_id"])
+            except RunError as e:
                 raise BrokerError(e.code, e.message) from None
         if tool in ("artifact_list", "artifact_export"):
             from host.artifacts import ArtifactError
@@ -407,6 +436,14 @@ class Broker:
             # What came in, from where (query strings left out: signed URLs carry secrets).
             outcome["download"] = {"source": _strip_query(result.data["source"]),
                                    "final_url": _strip_query(result.data["final_url"]), **result.data["file"]}
+        if result.ok and tool in ("sandbox_run", "sandbox_run_status"):
+            outcome["run"] = {k: result.data[k] for k in ("run_id", "file", "state", "reason", "exit_code")
+                              if k in result.data}
+            run = self.runner.runs.get(result.data["run_id"]) if self.runner is not None else None
+            if run is not None and tool == "sandbox_run":
+                c = run.action.command           # what was approved, exactly (output text is not logged)
+                outcome["run"].update(sha256=run.action.sources[0].sha256, source=run.action.sources[0].reference,
+                                      command=[c.executable, *c.argv], fingerprint=run.action.fingerprint)
         self.audit.record(
             session_id=s.identity[0], runtime_id=s.identity[1], task_id=self.task_id,
             action_id=result.action_id, tool=tool, arguments=mask(tool, args),

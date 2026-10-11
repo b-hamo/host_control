@@ -49,6 +49,10 @@ class Policy:
             # Team decision 2026-10-08: no approval. The file only ever runs inside the Sandbox;
             # every download is audited (URL, final URL, SHA-256).
             return Decision("ALLOW", "P-INBOX-DOWNLOAD", "into the Sandbox inbox; never run on the Host")
+        if tool == "sandbox_run":
+            # Runs a downloaded file inside the Sandbox. The person at the Host sees the exact
+            # command; only a "Yes" lets RouterGuiPolicy press Win+R for that one command.
+            return Decision("REQUIRE_APPROVAL", "P-SANDBOX-RUN", "runs a downloaded file inside the Sandbox")
         if tool in self.require_approval_for:
             return Decision("REQUIRE_APPROVAL", "P-APPROVE-SENSITIVE", f"{tool} needs user approval")
         return Decision("ALLOW", "P-ALLOW-DEFAULT", "no rule restricts this call")
