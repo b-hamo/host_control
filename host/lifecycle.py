@@ -28,6 +28,11 @@ READY is decided only by the Host's Startup Verification, never here. The
 Sandbox Manager blocks (wsb start, `wsb list` checks), so each call runs in
 a worker thread; calls are never made from two threads at once.
 
+Shared inbox (optional, --inbox): the folder inbox_download writes into is
+mapped read-only and live into the Sandbox at prepare(), and the Sandbox
+Manager's InboxWatcher lists each finished file for the Guest every second
+until the session is stopped.
+
 The Host part the Sandbox Manager cannot do (certificate with the address in
 its SAN, token, bootstrap.json) is the `publish` callable:
     publish(host_address, bootstrap_path, identity) -> certificate PEM
@@ -76,8 +81,13 @@ class SandboxLauncher:
                  publish: Callable[[str, Path, Identity], str], *,
                  new_session: Callable[[Identity], RuntimeSession] | None = None,
                  on_switch: Callable[[RuntimeSession, str], None] | None = None,
-                 auto_recover: bool = True, runner_exit_wait_s: float = RUNNER_EXIT_WAIT_S):
+                 auto_recover: bool = True, runner_exit_wait_s: float = RUNNER_EXIT_WAIT_S,
+                 inbox: Path | None = None, inbox_watcher=None):
         self.manager = manager
+        self.inbox = Path(inbox) if inbox is not None else None
+        # (manager, sandbox) -> object with start()/stop(); default: sandbox_manager.inbox.InboxWatcher
+        self._make_watcher = inbox_watcher
+        self._watcher = None
         self.runner_exe = Path(runner_exe)
         self.session = session                       # the current generation
         self.publish = publish
@@ -127,7 +137,13 @@ class SandboxLauncher:
     async def _run_launch(self) -> None:
         s = self.session
         try:
-            self.sandbox = await self._call(self.manager.prepare, *s.identity, self.runner_exe)
+            if self.inbox is None:
+                self.sandbox = await self._call(self.manager.prepare, *s.identity, self.runner_exe)
+            else:
+                self._alive()
+                self.sandbox = await asyncio.to_thread(
+                    lambda: self.manager.prepare(*s.identity, self.runner_exe, inbox=self.inbox))
+                self._start_watcher()
             self.host_address = await self._call(self.manager.start, self.sandbox)
             log.info("SANDBOX %s started, Host address for the Runner: %s", s.identity[0], self.host_address)
             await self._publish()
@@ -138,6 +154,20 @@ class SandboxLauncher:
             self.state, self.error = FAILED, _describe(e)
             log.error("SANDBOX %s could not start: %s", s.identity[0], self.error)
             await s.fail_startup(f"sandbox {self.error}")
+
+    def _start_watcher(self) -> None:
+        if self._make_watcher is None:
+            from sandbox_manager.inbox import InboxWatcher
+            self._make_watcher = InboxWatcher
+        self._watcher = self._make_watcher(self.manager, self.sandbox)
+        self._watcher.start()
+        log.info("INBOX %s mapped read-only into the Sandbox; watching it for finished files",
+                 self.session.identity[0])
+
+    def _stop_watcher(self) -> None:
+        if self._watcher is not None:
+            self._watcher.stop()
+            self._watcher = None
 
     async def _publish(self) -> None:
         """Certificate for the address, token and bootstrap for the current generation, then hand over."""
@@ -286,6 +316,7 @@ class SandboxLauncher:
             if task is not None and task is not asyncio.current_task():
                 await asyncio.gather(task, return_exceptions=True)
         s = self.session
+        self._stop_watcher()                         # before stop(): no more scans of a closing Sandbox
         if self.sandbox is None:
             return
         reason, emergency = self._stop_reason()

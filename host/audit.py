@@ -18,6 +18,10 @@ MASKED_FIELDS = {"computer_type": ("text",)}
 
 def mask(tool: str, args: dict) -> dict:
     out = dict(args)
+    if tool == "inbox_download" and isinstance(out.get("url"), str):
+        from urllib.parse import urlsplit, urlunsplit
+        u = urlsplit(out["url"])                   # a signed URL's query is a credential: keep it out
+        out["url"] = urlunsplit((u.scheme, u.netloc.rpartition("@")[2], u.path, "", ""))
     for field in MASKED_FIELDS.get(tool, ()):
         if isinstance(out.get(field), str):
             raw = out[field].encode("utf-8")

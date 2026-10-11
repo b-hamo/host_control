@@ -1,0 +1,27 @@
+{
+  "name": "inbox_download",
+  "description": "Download one file from a public https URL so it can be used inside the Sandbox. Nothing is opened or run on this computer: the file goes into a shared inbox that the Sandbox sees read-only, and a few seconds later it is copied to the Sandbox desktop folder Input and checked against its SHA-256 (Desktop\\input-check.html shows OK or FAIL). Run or open it only from Desktop\\Input inside the Sandbox, and only when its line says OK. A .zip is not unpacked here; unpack it inside the Sandbox. At most 50 MiB; private and local addresses are refused.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "url"
+    ],
+    "properties": {
+      "url": {
+        "type": "string",
+        "minLength": 9,
+        "maxLength": 2048,
+        "pattern": "^https://",
+        "description": "https URL of the file, e.g. the vendor's official download link."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Download into the Sandbox inbox",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": true
+  }
+}
