@@ -109,13 +109,14 @@ def test_durable_protocol_reservation_never_replays(setup, tmp_path):
         await service.call("router_submit", {"request_id": "REQ-ONE", "action_id": a.action_id})
         await asyncio.gather(*service.jobs.values())
         await service.close()
-        # Simulate lost Host memory while preserving the protocol reservation.
+        # Graceful exit saves results and retires the plan before losing Host memory.
         other = Port(setup((a,)))
         service = RouterService(other, "PLAN-TEST", db)
         try:
-            await service.call("router_plan", definitions([a]))
+            assert (await service.call("router_plan", definitions([a])))["error"] == "PLAN_STOPPED"
             result = await service.call("router_submit", {"request_id": "REQ-ONE", "action_id": a.action_id})
-            assert result["receipt"]["state"] == "UNKNOWN"
+            assert result["error"] == "PLAN_STOPPED"
+            assert (await service.call("router_result", {"request_id": "REQ-ONE"}))["text"] == "inert text"
             assert other.submits == 0
         finally:
             await service.close()
@@ -211,11 +212,11 @@ def test_real_stdio_allowlist_local_result_and_restart(tmp_path):
             await stop(proc)
         proc, client = await start(path)
         try:
-            await client.call("router_plan", definitions([a, execute]))
+            assert (await client.call("router_plan", definitions([a, execute])))["error"] == "PLAN_STOPPED"
             result = await client.call("router_submit", {"request_id": "REQ-ONE", "action_id": a.action_id})
-            assert result["receipt"]["state"] == "UNKNOWN"
+            assert result["error"] == "PLAN_STOPPED"
             assert Path(a.locator).stat().st_mtime_ns == before
-            assert not (await client.call("router_result", {"request_id": "REQ-ONE"}))["ok"]
+            assert (await client.call("router_result", {"request_id": "REQ-ONE"}))["text"] == "inert text"
         finally:
             await stop(proc)
     asyncio.run(check())

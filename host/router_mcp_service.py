@@ -1,7 +1,7 @@
 """One Host-provisioned plan exposed through an allowlisted MCP contract.
 
-Submission reservations survive stdio restarts. Lost responses never permit a
-new dispatch. After a Host restart, unavailable execution evidence stays UNKNOWN.
+Retirement persists verified results before releasing the execution Host.
+Stopped plans reopen query-only; missing completion evidence stays UNKNOWN.
 """
 
 import asyncio
@@ -10,10 +10,14 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+from contextlib import closing
 
 from host.router_codec import action, task
 from router import Router
 from router.ports import Receipt, State
+
+CANCEL_WAIT_S = 5.0
+SNAPSHOT_WAIT_S = 10.0
 
 
 def checksum(value):
@@ -32,8 +36,110 @@ class RouterService:
         self.db.execute("CREATE TABLE IF NOT EXISTS submissions "
                         "(key TEXT PRIMARY KEY, action_id TEXT, fingerprint TEXT, contract TEXT, canonical TEXT)")
         self.db.execute("CREATE TABLE IF NOT EXISTS control (key TEXT PRIMARY KEY)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS retired_results (canonical TEXT PRIMARY KEY, value TEXT)")
         self.db.commit()
         self.stopped = self.db.execute("SELECT 1 FROM control WHERE key='stopped'").fetchone() is not None
+        self._retirement = None
+        self._closed = False
+        self._watcher = (asyncio.create_task(self._watch_runtime())
+                         if runtime is not None and hasattr(runtime, "wait_unavailable") and not self.stopped else None)
+
+    @staticmethod
+    def is_retired(database: Path) -> bool:
+        if not database.exists():
+            return False
+        with closing(sqlite3.connect(database)) as db:
+            exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='control'").fetchone()
+            return bool(exists and db.execute("SELECT 1 FROM control WHERE key='stopped'").fetchone())
+
+    async def _watch_runtime(self):
+        await self.host.wait_unavailable()
+        await self.call("router_stop", {})
+
+    async def _result_data(self, receipt):
+        if not await self.host.verify(receipt):
+            raise ValueError("unverified result")
+        if receipt.execution_id.startswith("LOCAL-"):
+            return {"text": (await self.host.read_result(receipt)).decode("utf-8")}
+        outputs = []
+        for art in receipt.artifacts:
+            current = await self.host.artifact(art.output_name or art.artifact_id)
+            with Path(current.final_ref).open("rb") as stream:
+                data = stream.read(1048577)
+            if len(data) > 1048576 or hashlib.sha256(data).hexdigest() != current.sha256:
+                raise ValueError("result changed or too large")
+            outputs.append({"artifact": asdict(current), "text": data.decode("utf-8")})
+        return {"outputs": outputs}
+
+    async def _retire(self):
+        # Commit the submission barrier before cancellation or any slow cleanup.
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO control VALUES ('stopped')")
+        self.stopped = True
+        if self.db.execute("SELECT 1 FROM control WHERE key='cleaned'").fetchone():
+            return True
+        if self.host is None:
+            return False
+        try:
+            for job in self.jobs.values():
+                if not job.done():
+                    job.cancel()
+            if self.jobs:
+                _, pending = await asyncio.wait(self.jobs.values(), timeout=CANCEL_WAIT_S)
+                if pending:
+                    raise TimeoutError("Router jobs did not stop")
+                await asyncio.gather(*self.jobs.values(), return_exceptions=True)
+            try:
+                async with asyncio.timeout(SNAPSHOT_WAIT_S):
+                    await self._capture_results()
+            except TimeoutError:
+                # Unsaved reservations remain UNKNOWN; never hold ports for a
+                # stalled evidence provider or replay work to reconstruct it.
+                pass
+        finally:
+            # Even failed evidence capture must attempt to release owned listeners.
+            await self.host.stop_sandbox()
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO control VALUES ('cleaned')")
+        return True
+
+    async def _capture_results(self):
+        rows = self.db.execute("SELECT DISTINCT action_id,fingerprint,canonical FROM submissions").fetchall()
+        for aid, fp, canonical in rows:
+            receipt = Receipt(canonical, fp, State.UNKNOWN, "EXECUTION_UNCONFIRMED")
+            result = {}
+            try:
+                receipt = await self.host.status(canonical)
+                if receipt.request_id != canonical or receipt.fingerprint != fp:
+                    raise ValueError("receipt identity changed")
+                if receipt.state in {State.ACCEPTED, State.RUNNING}:
+                    receipt = replace(receipt, state=State.UNKNOWN, reason="EXECUTION_UNCONFIRMED")
+                if receipt.state == State.SUCCEEDED:
+                    if not receipt.execution_id or not receipt.evidence_ref:
+                        raise ValueError("missing completion evidence")
+                    result = await self._result_data(receipt)
+            except Exception:
+                receipt = Receipt(canonical, fp, State.UNKNOWN, "EXECUTION_UNCONFIRMED")
+            snapshot = {"receipt": asdict(receipt), "result": result,
+                        "task_id": self.actions[aid].task_id if aid in self.actions else None,
+                        "progress": self.router.snapshot()}
+            with self.db:
+                self.db.execute("INSERT OR REPLACE INTO retired_results VALUES (?,?)",
+                                (canonical, json.dumps(snapshot)))
+
+    async def _stop(self):
+        if self._retirement is None:
+            self._retirement = asyncio.create_task(self._retire())
+        try:
+            cleaned = await asyncio.shield(self._retirement)
+        except Exception:
+            cleaned = False
+        return {"ok": cleaned, "plan_id": self.plan_id, "stopped": cleaned,
+                **({} if cleaned else {"error": "CLEANUP_UNCONFIRMED", "recommended_next_step": "router_status"})}
+
+    def _retired_result(self, canonical):
+        row = self.db.execute("SELECT value FROM retired_results WHERE canonical=?", (canonical,)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def _contract(self, aid):
         nodes = {}
@@ -64,17 +170,10 @@ class RouterService:
     async def call(self, name, args):
         async with self.lock:
             if name == "router_stop":
-                # Retire before waiting; even process death cannot reopen submissions.
-                with self.db:
-                    self.db.execute("INSERT OR IGNORE INTO control VALUES ('stopped')")
-                self.stopped = True
-                for job in self.jobs.values():
-                    if not job.done():
-                        job.cancel()
-                await asyncio.gather(*self.jobs.values(), return_exceptions=True)
-                await self.host.stop_sandbox()
-                return {"ok": True, "plan_id": self.plan_id, "stopped": True}
+                return await self._stop()
             if name == "router_plan":
+                if self.stopped:
+                    return {"ok": False, "error": "PLAN_STOPPED"}
                 if args["plan_id"] != self.plan_id:
                     raise ValueError("plan not provisioned")
                 if any(not j.done() for j in self.jobs.values()):
@@ -98,20 +197,26 @@ class RouterService:
                     if receipt["state"] != State.SUCCEEDED:
                         return {**result, "ok": False, "error": "RESULT_NOT_VERIFIED"}
                     row = self._row(args["request_id"])
+                    if self.stopped:
+                        cached = self._retired_result(row[3])
+                        if not cached or not cached["result"]:
+                            return {**result, "ok": False, "error": "RESULT_NOT_VERIFIED"}
+                        for output in cached["result"].get("outputs", []):
+                            art = output["artifact"]
+                            try:
+                                with Path(art["final_ref"]).open("rb") as stream:
+                                    data = stream.read(1048577)
+                                valid = art["status"] == "EXPORTED" and hashlib.sha256(data).hexdigest() == art["sha256"]
+                            except OSError:
+                                valid = False
+                            if not valid:
+                                return {**result, "ok": False, "error": "RESULT_NOT_VERIFIED"}
+                        return {**result, **cached["result"]}
                     trusted = await self.host.status(row[3])
-                    if not await self.host.verify(trusted):
+                    try:
+                        result.update(await self._result_data(trusted))
+                    except ValueError:
                         return {"ok": False, "error": "RESULT_NOT_VERIFIED"}
-                    if trusted.execution_id.startswith("LOCAL-"):
-                        result["text"] = (await self.host.read_result(trusted)).decode("utf-8")
-                    else:
-                        result["outputs"] = []
-                        for art in trusted.artifacts:
-                            current = await self.host.artifact(art.output_name or art.artifact_id)
-                            with Path(current.final_ref).open("rb") as stream:
-                                data = stream.read(1048577)
-                            if len(data) > 1048576 or hashlib.sha256(data).hexdigest() != current.sha256:
-                                raise ValueError("result changed or too large")
-                            result["outputs"].append({"artifact": asdict(current), "text": data.decode("utf-8")})
                 return result
             return {"ok": False, "error": "TOOL_NOT_EXPOSED"}
 
@@ -143,6 +248,13 @@ class RouterService:
         if row is None:
             return {"ok": False, "error": "REQUEST_NOT_FOUND"}
         aid, fp, contract, canonical = row
+        if self.stopped:
+            cached = self._retired_result(canonical)
+            receipt = cached["receipt"] if cached else asdict(Receipt(canonical, fp, State.UNKNOWN, "EXECUTION_UNCONFIRMED"))
+            return {"ok": True, "plan_id": self.plan_id, "action_id": aid,
+                    "task_id": cached["task_id"] if cached else None,
+                    "receipt": {**receipt, "request_id": rid},
+                    "progress": cached["progress"] if cached else self.router.snapshot()}
         pending = self.jobs.get(aid)
         if pending is not None and not pending.done():
             receipt = Receipt(canonical, fp, State.ACCEPTED, "REQUEST_RESERVED")
@@ -163,9 +275,20 @@ class RouterService:
                 "receipt": asdict(replace(receipt, request_id=rid)), "progress": self.router.snapshot()}
 
     async def close(self):
-        for job in self.jobs.values():
-            if not job.done():
-                job.cancel()
-        await asyncio.gather(*self.jobs.values(), return_exceptions=True)
-        self.db.close()
-        await self.host.close()
+        if self._closed:
+            return
+        if self._watcher is not None and self._watcher is not asyncio.current_task():
+            self._watcher.cancel()
+            await asyncio.gather(self._watcher, return_exceptions=True)
+        try:
+            async with self.lock:
+                result = await self._stop()
+                if not result["ok"]:
+                    raise RuntimeError("Router cleanup unconfirmed")
+        finally:
+            try:
+                if self.host is not None:
+                    await self.host.close()
+            finally:
+                self.db.close()
+                self._closed = True

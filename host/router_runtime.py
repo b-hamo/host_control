@@ -24,6 +24,7 @@ class RouterRuntime:
     def __init__(self, backend):
         self.backend = backend
         self.gateway = self.driver = self.ledger = None
+        self._closed = False
 
     @classmethod
     async def open(cls, args, manager, authority, execution_action, bindings,
@@ -56,7 +57,14 @@ class RouterRuntime:
             raise
 
     async def _on_host(self, coroutine):
-        future = asyncio.run_coroutine_threadsafe(coroutine, self.backend.loop)
+        if self.backend.loop is None or not self.backend.loop.is_running():
+            coroutine.close()
+            raise RuntimeError("Router Host is closed")
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, self.backend.loop)
+        except RuntimeError:
+            coroutine.close()
+            raise
         return await asyncio.wrap_future(future)
 
     async def submit(self, request):
@@ -75,24 +83,61 @@ class RouterRuntime:
         return await self._on_host(self.gateway.read_result(receipt))
 
     async def stop_sandbox(self):
-        """Retire this provisioned session after consuming its results."""
-        async def stop():
-            await self.driver.close()
-            launcher = self.backend.launcher
-            await launcher.shutdown()
-            if launcher.sandbox is not None:
-                if (launcher.cleanup_result is None or launcher.cleanup_result.get("failed")
-                        or await asyncio.to_thread(launcher.manager.is_running, launcher.sandbox)):
-                    raise RuntimeError("Sandbox cleanup unconfirmed")
-        await self._on_host(stop())
+        """Retire Guest AND execution Host; the service has already saved its results."""
+        # HostBackend owns the one shutdown deadline and closes both listeners
+        # even when Guest cleanup raises. Do not spend that deadline twice.
+        await self.close()
+        launcher = self.backend.launcher
+        if self.backend.error:
+            raise RuntimeError("Host cleanup unconfirmed")
+        if launcher is not None and launcher.sandbox is not None:
+            if launcher.cleanup_result is None or launcher.cleanup_result.get("failed"):
+                raise RuntimeError("Sandbox cleanup unconfirmed")
+            async with asyncio.timeout(5):
+                running = await asyncio.to_thread(launcher.manager.is_running, launcher.sandbox)
+            if running:
+                raise RuntimeError("Sandbox cleanup unconfirmed")
+
+    async def wait_unavailable(self):
+        """Only observe this runtime's Guest. Never restart it or kill a port owner."""
+        while not self._closed:
+            if not self.backend.is_alive():
+                return
+
+            async def probe():
+                launcher = self.backend.launcher
+                if self.backend.session.terminated:
+                    return True
+                if (launcher.sandbox is not None and launcher.state in {"READY", "PUBLISHED"}
+                        and launcher._launch is not None and launcher._launch.done()
+                        and launcher._finish is None):
+                    if not await asyncio.to_thread(launcher.manager.is_running, launcher.sandbox):
+                        await self.backend.session._end("RUNTIME_GONE: owned Sandbox closed")
+                        return True
+                return False
+            try:
+                if await self._on_host(probe()):
+                    return
+            except Exception:
+                # Observation failure is not permission to restart or replay.
+                if not self.backend.is_alive():
+                    return
+            await asyncio.sleep(2)
 
     async def close(self):
-        if self.backend.loop is not None and self.backend.loop.is_running():
-            async def finish():
-                if self.driver is not None:
-                    await self.driver.close()
-                if self.ledger is not None:
-                    self.ledger.close()
-                    self.ledger = None
-            await self._on_host(finish())
-        await asyncio.to_thread(self.backend.shutdown)
+        if self._closed:
+            return
+        try:
+            if self.backend.loop is not None and self.backend.loop.is_running():
+                async def finish():
+                    try:
+                        if self.driver is not None:
+                            await self.driver.close()
+                    finally:
+                        if self.ledger is not None:
+                            self.ledger.close()
+                            self.ledger = None
+                await self._on_host(finish())
+        finally:
+            await asyncio.to_thread(self.backend.shutdown)
+            self._closed = True
