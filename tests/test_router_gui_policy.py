@@ -25,7 +25,8 @@ def configured(setup, *, enabled=True, base=None):
 
 def test_default_and_unscoped_calls_preserve_denial(setup):
     action, host, policy = configured(setup, enabled=False)
-    assert policy.decide("computer_hotkey", {"keys": ["win", "r"]}).result == "DENY"
+    # POL-0.1.1: Win+R itself is allowed; admin/security keys stay denied.
+    assert policy.decide("computer_hotkey", {"keys": ["win", "x"]}).result == "DENY"
     async def check():
         with pytest.raises(ValueError, match="not authorized"):
             with policy.launch(action, LINE):
@@ -38,13 +39,14 @@ def test_exact_sequence_consumed_once_and_no_other_keys_allowed(setup):
     async def check():
         with policy.launch(action, LINE):
             assert policy.decide("computer_hotkey", {"keys": ["win", "x"]}).result == "DENY"
-            assert policy.decide("computer_hotkey", {"keys": ["win", "r"]}).rule_id == "P-ROUTER-EXACT-COMMAND"
-            assert policy.decide("computer_hotkey", {"keys": ["win", "r"]}).result == "DENY"
+            assert policy.decide("computer_hotkey", {"keys": ["win", "r"]}).result == "ALLOW"
+            assert policy.decide("computer_hotkey", {"keys": ["win", "r"]}).result == "DENY"   # step used
             assert policy.decide("computer_type", {"text": "different command"}).result == "DENY"
             assert policy.decide("computer_type", {"text": LINE}).result == "ALLOW"
             assert policy.decide("computer_keypress", {"key": "enter"}).result == "ALLOW"
             assert policy.decide("computer_keypress", {"key": "enter"}).result == "DENY"
-        assert policy.decide("computer_hotkey", {"keys": ["win", "r"]}).result == "DENY"
+        assert policy.decide("computer_hotkey", {"keys": ["win", "x"]}).result == "DENY"
+        assert policy.decide("computer_hotkey", {"keys": ["win", "r"]}).result == "ALLOW"    # base rules again
     asyncio.run(check())
 
 
@@ -107,11 +109,11 @@ def test_additional_approval_requirement_is_retained(setup):
 def test_broker_applies_scoped_policy_before_real_transport(certs, setup):
     async def body(broker, runner):
         action, _, policy = configured(setup)
-        assert policy.version == Policy().version == "POL-0.1.0"
+        assert policy.version == Policy().version == "POL-0.1.1"
         assert policy.revision == "router-exact-launch-v1"
         broker.policy = policy  # trusted composition, before accepting Agent work
         await broker.call("task_submit", {"goal": "test only"})
-        denied = await broker.call("computer_hotkey", {"keys": ["win", "r"]})
+        denied = await broker.call("computer_hotkey", {"keys": ["win", "x"]})
         assert not denied.ok and runner.requests == []
         with policy.launch(action, LINE):
             allowed = await broker.call("computer_hotkey", {"keys": ["win", "r"]})
@@ -119,5 +121,5 @@ def test_broker_applies_scoped_policy_before_real_transport(certs, setup):
             refused = await broker.call("computer_type", {"text": "wrong command"})
             assert not refused.ok
         assert len(runner.requests) == 1
-        assert broker.audit.records[-2]["policy"]["rule_id"] == "P-ROUTER-EXACT-COMMAND"
+        assert broker.audit.records[-2]["policy"]["rule_id"] == "P-ALLOW-DEFAULT"   # Win+R allowed since POL-0.1.1
     asyncio.run(with_broker(certs, body))

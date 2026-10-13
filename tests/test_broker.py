@@ -15,7 +15,7 @@ import pytest
 from host import tls
 from host.audit import AuditLog
 from host.broker import OPERATIONS, Broker, RateLimiter, BrokerError, translate
-from host.policy import Decision, Policy
+from host.policy import POLICY_VERSION, Decision, Policy
 from host.sender import Sessions, start_server
 from host.session_registry import SessionRegistry
 from host.startup import StartupProfile
@@ -109,15 +109,15 @@ def test_everything_the_tool_schema_allows_is_a_valid_protocol_message(tool):
 
 # --------------------------------------------------------------------- policy, limiter
 def test_the_policy_version_is_the_one_the_runner_accepts():
-    """The real Runner refuses every input whose policy_version is not POL-0.1.0 (host_gui.cpp);
+    """The real Runner refuses every input whose policy_version differs from its own (POL-0.1.1, host_gui.cpp);
     MiniRunner does not check it, so a version bump passed every other test (#31)."""
     from host import runtime_session
     from host.policy import POLICY_VERSION
-    assert POLICY_VERSION == runtime_session.POLICY_VERSION == Policy().version == "POL-0.1.0"
+    assert POLICY_VERSION == runtime_session.POLICY_VERSION == Policy().version == "POL-0.1.1"
 
 
-@pytest.mark.parametrize("keys", [["win", "r"], ["ctrl", "alt", "delete"], ["ctrl", "shift", "escape"], ["win", "x"]])
-def test_hotkeys_that_open_command_surfaces_are_denied(keys):
+@pytest.mark.parametrize("keys", [["ctrl", "alt", "delete"], ["ctrl", "shift", "escape"], ["win", "x"], ["ctrl", "win", "x"]])
+def test_hotkeys_that_open_admin_or_security_surfaces_are_denied(keys):
     d = Policy().decide("computer_hotkey", {"keys": keys})
     assert (d.result, d.rule_id) == ("DENY", "P-DENY-HOTKEY")
 
@@ -248,16 +248,33 @@ def test_runner_clock_skew_does_not_make_a_fresh_capture_stale(certs):
     assert res.ok and len(r.requests) == 1
 
 
+@pytest.mark.parametrize("keys", [["win", "r"], ["r", "win"]])
+def test_run_dialog_hotkey_reaches_the_runner_and_is_audited(certs, keys):
+    async def body(b, r):
+        await started(b)
+        return await b.call("computer_hotkey", {"keys": keys})
+
+    res, b, r = run(with_broker(certs, body))
+    assert res.ok and res.data["status"] == "SUCCESS"
+    assert r.executed == [res.action_id]
+    request, = r.requests
+    assert request["payload"]["operation"] == "keyboard.hotkey"
+    assert request["payload"]["arguments"] == {"keys": keys}
+    assert request["payload"]["policy_version"] == POLICY_VERSION
+    assert b.audit.records[-1]["policy"] == {
+        "result": "ALLOW", "rule_id": "P-ALLOW-DEFAULT", "version": POLICY_VERSION}
+
+
 def test_denied_hotkey_is_audited_with_its_rule(certs):
     async def body(b, r):
         await started(b)
-        return await b.call("computer_hotkey", {"keys": ["win", "r"]})
+        return await b.call("computer_hotkey", {"keys": ["win", "x"]})
 
     res, b, r = run(with_broker(certs, body))
     assert res.error["error"] == "POLICY_DENIED" and res.error["rule_id"] == "P-DENY-HOTKEY"
     assert r.requests == []
     rec = b.audit.records[-1]
-    assert rec["policy"] == {"result": "DENY", "rule_id": "P-DENY-HOTKEY", "version": "POL-0.1.0"}
+    assert rec["policy"] == {"result": "DENY", "rule_id": "P-DENY-HOTKEY", "version": POLICY_VERSION}
 
 
 def test_approval_workflow(certs):

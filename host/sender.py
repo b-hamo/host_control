@@ -149,7 +149,7 @@ async def broker_demo(session: RuntimeSession) -> None:
         ("computer_observe", {}),
         ("computer_click", {"x": 640, "y": 420}),                          # defaults: left, single
         ("computer_click", {"x": 5000, "y": 100}),                         # refused: outside the screen
-        ("computer_hotkey", {"keys": ["win", "r"]}),                       # refused: policy (Run dialog)
+        ("computer_hotkey", {"keys": ["win", "x"]}),                       # refused: policy (admin menu)
         ("computer_type", {"text": "안녕하세요"}),
         ("runtime_get_state", {}),
         ("session_stop", {"reason": "TASK_COMPLETE"}),
