@@ -8,7 +8,7 @@ import time
 import pytest
 
 from host.mcp_runtime import McpRuntime
-from host.mcp_server import HostBackend
+from host.mcp_server import HostBackend, McpServer, guard_descriptions, load_tool_list
 from test_mcp_server import Client, SERVER, stop
 from test_router_retirement import assert_rebind, free_ports
 from test_sandbox_launch import args, FakeError
@@ -19,22 +19,24 @@ def body(result):
     return json.loads(result["content"][-1]["text"])
 
 
-async def spawn(root, ports):
+async def spawn(root, ports, *, guard=False):
     root.mkdir()
     proc = await asyncio.create_subprocess_exec(
         sys.executable, str(SERVER), "--host", "127.0.0.1", "--port", str(ports[0]),
         "--upload-port", str(ports[1]), "--startup-timeout", "60",
         "--bootstrap-out", str(root / "bootstrap.json"), "--cert-dir", str(root / "certs"),
         "--audit-dir", str(root / "audit"), "--log-file", str(root / "host.log"),
+        *(["--agent-guard"] if guard else []),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     return proc, Client(proc)
 
 
-def test_two_stdio_conversations_release_reuse_and_preserve_active_owner(tmp_path):
+@pytest.mark.parametrize("guard", [False, True])
+def test_two_stdio_conversations_release_reuse_and_preserve_active_owner(tmp_path, guard):
     async def run():
         ports = free_ports()
-        p, a = await spawn(tmp_path / "a", ports)
-        q, b = await spawn(tmp_path / "b", ports)
+        p, a = await spawn(tmp_path / "a", ports, guard=guard)
+        q, b = await spawn(tmp_path / "b", ports, guard=guard)
         try:
             for client in (a, b):
                 await client.rpc("initialize")
@@ -157,6 +159,49 @@ def test_invalid_and_readonly_cold_calls_do_not_start_host(tmp_path):
     assert body(controller.call("task_submit", {}))["error"] == "INVALID_ARGUMENT"
     assert body(controller.call("computer_click", {"x": "wrong"}))["error"] == "INVALID_ARGUMENT"
     assert body(controller.call("session_stop", {"reason": "USER_STOP"}))["host_released"]
+
+
+def test_guarded_runtime_keeps_approval_without_taking_over_other_hosts(tmp_path, monkeypatch):
+    def forbidden(*_):
+        raise AssertionError("managed runtime must not reclaim another conversation")
+    monkeypatch.setattr("host.single_host.take_over", forbidden)
+    monkeypatch.setattr("host.single_host.reclaim_sandboxes", forbidden)
+    manager = RecoveringManager(tmp_path / "guest", start_delay_s=0)
+    controller, ports = runtime(tmp_path, manager)
+    controller.args.agent_guard = True
+    answers, asked = [False, True], []
+
+    async def approver(summary):
+        asked.append(summary["tool"])
+        return answers.pop(0)
+
+    controller.factory = lambda config: HostBackend(config, sandbox_manager=manager, approver=approver)
+    tools = load_tool_list()
+    guard_descriptions(tools)
+    server = McpServer(controller, tools, strict_tools=True)
+
+    def call(name, arguments):
+        return body(server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                   "params": {"name": name, "arguments": arguments}})["result"])
+
+    try:
+        server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
+        assert "only when the user says" in next(t["description"] for t in listed if t["name"] == "session_stop")
+        assert call("runtime_get_state", {})["runtime_state"] == "NOT_STARTED"
+        assert call("task_submit", {})["error"] == "INVALID_ARGUMENT"
+        assert controller.backend is None
+        assert_rebind(ports)
+        assert call("task_submit", {"goal": "inert guarded task"})["ok"]
+        wait_until(lambda: controller.backend.launcher.state == "PUBLISHED")
+        assert call("session_stop", {"reason": "USER_STOP"})["error"] == "POLICY_DENIED"
+        assert controller.backend.is_alive() and not controller.backend.session.terminated
+        assert not set(manager.names()) & {"stop", "cleanup"}
+        assert call("session_stop", {"reason": "USER_STOP"})["host_released"]
+        assert_rebind(ports)
+        assert asked == ["session_stop", "session_stop"]
+    finally:
+        controller.shutdown()
 
 
 def test_eof_during_backend_start_remembers_shutdown(tmp_path):

@@ -24,7 +24,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `host/approval.py` | 사용자 승인 창 (Host 화면) | 5.6 |
 | `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
-| `host/tool_catalog.py` | 도구 17개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/tool_catalog.py` | 도구 18개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
 | `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
 | `host/tool_availability.py` | 도구 노출 규칙 (표준 라이브러리만 사용, MCP Server가 빠르게 뜨도록) | 5.7 |
@@ -37,7 +37,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
 | `schema/` | Host ↔ Runner 메시지 규격. **Runner도 이 파일을 기준으로 구현** | 2.2, 2.3 |
-| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 17개의 입력 규격 | 2.4 |
+| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 18개의 입력 규격 | 2.4 |
 | `tests/` | 인증·TLS·replay 거부, Heartbeat·재연결, Startup Verification, Broker 자동 테스트 | 4.4~4.6, 5.6 |
 
 규격의 결정 사항과 노션 초기 표와의 차이는 [schema/README.md](schema/README.md)에 있다.
@@ -91,7 +91,7 @@ Agent의 도구 호출은 모두 `Broker.call(tool, arguments)` 하나로 들어
 | 2 | 입력 스키마 (타입·필수·enum·길이·범위, 모르는 필드 거부). 생략한 선택 인자는 기본값으로 채움 | `INVALID_ARGUMENT` | B-2 |
 | 3 | 세션: 종료됐나, READY인가, `task_submit`을 먼저 했나 | `SESSION_TERMINATED` / `RUNTIME_UNAVAILABLE` / `POLICY_DENIED` | B-3 |
 | 4 | 호출 빈도: 관찰 초당 2회, 입력 초당 5회, 제어 초당 5회. 기다리게 하지 않고 바로 거절 | `RATE_LIMITED` (+`retry_after`) | B-7 |
-| 5 | 정책: DENY 규칙(Win+X, Ctrl+Alt+Delete, Ctrl+Shift+Escape), 승인 필요 도구. Win+R은 허용 | `POLICY_DENIED` (+`rule_id`) | B-5, B-8 |
+| 5 | 정책: DENY 규칙(예: Win+R 등 명령 실행 창을 여는 단축키), 승인 필요 도구 | `POLICY_DENIED` (+`rule_id`) | B-5, B-8 |
 | 6 | 좌표가 마지막 화면 안인가, 화면이 10초 이내인가, 글자가 4 KiB 이하인가 | `INVALID_ARGUMENT` / `STALE_OBSERVATION` | 프로토콜 §6 |
 | 7 | Action ID 발급 → SCRP 메시지로 변환해 전송 (`computer_click` → `mouse.click`) | | B-4 |
 | 8 | 결과·오류를 표준 형식으로: `error`, `message`, `retryable`, `retry_after`, `recommended_next_step` | | B-10 |
@@ -99,8 +99,7 @@ Agent의 도구 호출은 모두 `Broker.call(tool, arguments)` 하나로 들어
 
 - Broker는 입력을 **절대 다시 보내지 않는다.** `ACTION_TIMEOUT`이면 `recommended_next_step: runtime_get_state`로 Agent가 먼저 확인하게 한다
 - Agent는 `session_id`를 넘기지 않는다. Broker 하나가 세션 하나에 묶인다 (다른 세션 조작 불가)
-- Win+R은 Sandbox 안 실행 창을 여는 일반 GUI 입력으로 허용한다(`POL-0.1.1`). `task_submit`·READY·최신 관찰 등 기존 입력 조건은 그대로 적용된다. Sandbox 생성 설정이 아니라 Host Broker의 입력 정책이 결정하므로, 변경된 Host로 새 세션을 시작해야 한다.
-- 데모: `python host/sender.py --demo broker` — 도구 호출 9개 중 3개(작업 등록 전 관찰, 화면 밖 클릭, Win+X)가 거부되고 Runner에는 2개만 도착한다. 감사 로그는 `host/.audit/<session>.jsonl`
+- 데모: `python host/sender.py --demo broker` — 도구 호출 9개 중 3개(작업 등록 전 관찰, 화면 밖 클릭, Win+R)가 거부되고 Runner에는 2개만 도착한다. 감사 로그는 `host/.audit/<session>.jsonl`
 
 ## MCP Server와 Codex 연결 (WBS 5.7)
 
@@ -205,6 +204,7 @@ powershell -ExecutionPolicy Bypass -File <sandbox_manager>\tools\setup_inbox.ps1
 | 단계 | 누가 | 무엇을 |
 |---|---|---|
 | 내려받기 | Agent → Host | `inbox_download(url)` (Broker 경유: 정책 `P-INBOX-DOWNLOAD`, 호출 빈도, 감사). 승인 없음(팀 결정 2026-10-08) |
+| 끝날 때 | Host / Agent → Host | **기본은 삭제**: 세션이 끝나면(stop → cleanup 뒤) 받는 폴더를 비움(`clear_inbox`). 사용자가 남기라고 하면 `inbox_finish(keep)` → PC 확인 창(`P-INBOX-KEEP`) → 고른 것만 다운로드 폴더로 **복사**(인터넷 표시), 나머지 삭제. 팀 요청 2026-10-11 |
 | 이미 받아 둔 파일 | Agent → Host | `inbox_import(name)`: 사용자 **다운로드 폴더 바로 안** 파일을 이름만으로 받는 폴더에 **복사**(원본 유지). 정책 `P-INBOX-IMPORT`. 경로·`..`·링크·hard link·받는 중 파일·50 MiB 초과는 거부(검사는 sandbox_manager `import_to_inbox`). 팀 요청 2026-10-10 |
 | 저장 | Host | 임시 폴더에 다 받은 뒤 받는 폴더에 최종 이름으로 바로 씀. 다 쓸 때까지 다른 프로그램이 못 열게 잠금(Sandbox가 켜져 있으면 받는 폴더 안 이름 바꾸기가 막히기 때문), 이름 정리·덮어쓰기 없음, "인터넷에서 받음" 표시(MOTW) |
 | 연결 | Sandbox Manager | 받는 폴더를 Sandbox `C:\Inbox`에 **읽기 전용**으로 계속 연결. 1초마다 다 받아진 파일만 SHA-256과 함께 목록에 올리고, 링크가 생기면 바로 지움 |
@@ -234,8 +234,18 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 
 ```powershell
 # Codex 등록 인자에 추가 (--inbox, --artifact-export와 같이)
---runner-exe <sandbox_runner.exe> --inbox <받는 폴더> --artifact-export --sandbox-run
+--runner-exe <sandbox_runner.exe> --inbox <받는 폴더> --artifact-export --sandbox-run --agent-guard
 ```
+
+`--agent-guard` (코덱스 같은 Agent 앱용, 2026-10-13): 코덱스 앱 시험에서 Agent가 규칙 파일을 건너뛰고 스스로 세션을 끝내거나,
+다운로드 폴더에 있는 파일 대신 웹에서 다른 설치 파일을 받은 일이 있어서 다음은 **PC 확인 창**을 거친다(45초 무응답 = 아니요).
+
+| Agent가 하려는 것 | 정책 | "아니요"면 |
+|---|---|---|
+| `session_stop` (`SUSPICIOUS_CONTENT` 제외: 보안 종료는 바로) | `P-SESSION-STOP` | Sandbox 유지, Agent에 "사용자가 끝내라고 할 때만" |
+| `inbox_download`인데 다운로드 폴더에 이름이 비슷한 파일이 있음 | `P-INBOX-DUPLICATE` | 받지 않음, "inbox_import로 그 파일을" |
+
+같은 규칙을 두 도구의 설명에도 붙인다(Agent는 규칙 파일을 건너뛰어도 도구 설명은 본다). 옵션을 빼면 지금까지와 같다.
 
 | 단계 | 누가 | 무엇을 |
 |---|---|---|

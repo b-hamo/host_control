@@ -162,7 +162,8 @@ class Broker:
     def __init__(self, session: RuntimeSession, catalog: ToolCatalog | None = None, *,
                  policy: Policy | None = None, audit: AuditLog | None = None,
                  approver: Approver | None = None, rates: dict[str, float] | None = None,
-                 clock=time.monotonic, launcher=None, artifacts=None, inbox=None, runner=None):
+                 clock=time.monotonic, launcher=None, artifacts=None, inbox=None, runner=None,
+                 guard: bool = False):
         # B-3: bound to one session. Only a new generation of that same session replaces it
         # (switch_session), when the Runner or the Sandbox had to be restarted.
         self.session = session
@@ -175,6 +176,8 @@ class Broker:
         self.inbox = inbox
         # host/sandbox_run.py SandboxRunner (--sandbox-run). None: no sandbox_run tools.
         self.runner = runner
+        # --agent-guard: what an Agent did on its own in the Codex app (2026-10-12) needs the person first
+        self.guard = guard
         self.catalog = catalog or ToolCatalog()
         self.policy = policy or Policy()
         self.audit = audit or AuditLog()
@@ -226,7 +229,10 @@ class Broker:
                 decision, shown = self._artifact_decision(args, decision)
             elif tool == "sandbox_run":
                 plan, shown = self._run_plan(args)       # the exact command, before anyone is asked
-            await self._enforce(tool, args, decision, shown)
+            denied_hint = None
+            if self.guard:
+                decision, shown, denied_hint = self._guarded(tool, args, decision, shown)
+            await self._enforce(tool, args, decision, shown, denied_hint)
             if tool in OPERATIONS or tool == "computer_observe":
                 action_id = self.session.next_action()
             self._pending_image = None
@@ -304,7 +310,26 @@ class Broker:
         except RunError as e:
             raise BrokerError(e.code, e.message) from None
 
-    async def _enforce(self, tool: str, args: dict, decision: Decision, shown: dict | None = None) -> None:
+    def _guarded(self, tool: str, args: dict, decision: Decision, shown: dict) -> tuple[Decision, dict, str | None]:
+        """--agent-guard (Codex app, 2026-10-12): the Agent ended the session on its own after a stalled
+        install, and fetched another package from the web although the user's file was in Downloads."""
+        if tool == "session_stop" and args["reason"] != "SUSPICIOUS_CONTENT":   # a security stop is never held up
+            return (Decision("REQUIRE_APPROVAL", "P-SESSION-STOP", "ends the Sandbox; the person at the Host decides"),
+                    {"stop_reason": args["reason"]},
+                    "The user chose to keep the Sandbox open. Call session_stop only when the user says to end it.")
+        if tool == "inbox_download" and self.inbox is not None and decision.result == "ALLOW":
+            similar = self.inbox.similar(args["url"])
+            if similar:
+                from host.inbox_download import _strip_query
+                return (Decision("REQUIRE_APPROVAL", "P-INBOX-DUPLICATE",
+                                 "a similar file is already in the user's Downloads folder"),
+                        {"url": _strip_query(args["url"]), "similar": similar},
+                        f"The user's Downloads folder already has {', '.join(similar)} and the user did not approve "
+                        "downloading another file. Use inbox_import with that file's name instead.")
+        return decision, shown, None
+
+    async def _enforce(self, tool: str, args: dict, decision: Decision, shown: dict | None = None,
+                       denied_hint: str | None = None) -> None:
         if decision.result == "DENY":
             raise BrokerError("POLICY_DENIED", decision.reason, rule_id=decision.rule_id)
         if decision.result == "REQUIRE_APPROVAL":
@@ -314,7 +339,8 @@ class Broker:
             summary = {"tool": tool, "arguments": mask(tool, args), "session_id": self.session.identity[0],
                        "runtime_id": self.session.identity[1], "reason": decision.reason, **(shown or {})}
             if not await self.approver(summary):
-                raise BrokerError("POLICY_DENIED", "the user did not approve this action", rule_id=decision.rule_id)
+                raise BrokerError("POLICY_DENIED", denied_hint or "the user did not approve this action",
+                                  rule_id=decision.rule_id)
 
     def _observation_for(self, tool: str, args: dict) -> str:
         obs = self.session.last_observation
@@ -408,6 +434,14 @@ class Broker:
             if self.runner is not None:
                 self.runner.register(got)            # sandbox_run may run it, like a download
             return got
+        if tool == "inbox_finish":
+            from host.inbox_download import DownloadError
+            if self.inbox is None:
+                raise BrokerError("POLICY_DENIED", "inbox_finish is not enabled on this Host (--inbox)")
+            try:
+                return await asyncio.to_thread(self.inbox.finish, args["keep"])
+            except DownloadError as e:
+                raise BrokerError(e.code, e.message) from None
         if tool in ("sandbox_run", "sandbox_run_status"):
             from host.sandbox_run import RunError
             if self.runner is None:
@@ -447,6 +481,9 @@ class Broker:
             # What came in, from where (query strings left out: signed URLs carry secrets).
             outcome["download"] = {"source": _strip_query(result.data["source"]),
                                    "final_url": _strip_query(result.data["final_url"]), **result.data["file"]}
+        if result.ok and tool == "inbox_finish":
+            outcome["finish"] = {"kept": [k["to"] for k in result.data["kept"]],
+                                 "deleted_files": result.data["deleted_files"]}
         if result.ok and tool == "inbox_import":
             outcome["import"] = {"source": result.data["source"], **result.data["file"]}
         if result.ok and tool in ("sandbox_run", "sandbox_run_status"):

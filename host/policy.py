@@ -13,11 +13,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-POLICY_VERSION = "POL-0.1.1"
+# Sent in every ACTION_REQUEST. The Runner binds its input grant to exactly "POL-0.1.0"
+# (sandbox_runner src/host_gui.cpp) and refuses any other value, so a new version needs the
+# Runner changed first; RouterGuiPolicy reports this same version (router_gui_policy.py).
+POLICY_VERSION = "POL-0.1.0"
 
-# Key combinations that open admin or security surfaces.
-# Win+R is allowed so tasks can open the Run dialog inside the Sandbox.
+# Key combinations that open a command, admin or security surface. The tool
+# surface has no shell on purpose (spec B-1); these would be a way around it.
 DENIED_HOTKEYS = {
+    frozenset({"win", "r"}): "opens the Run dialog",
     frozenset({"win", "x"}): "opens the admin power-user menu",
     frozenset({"ctrl", "alt", "delete"}): "opens the Windows security screen",
     frozenset({"ctrl", "shift", "escape"}): "opens Task Manager",
@@ -44,6 +48,10 @@ class Policy:
             for denied, why in DENIED_HOTKEYS.items():
                 if denied <= combo:
                     return Decision("DENY", "P-DENY-HOTKEY", f"{'+'.join(args['keys'])} {why}")
+        if tool == "inbox_finish":
+            if args.get("keep"):
+                return Decision("REQUIRE_APPROVAL", "P-INBOX-KEEP", "keeps files from the Sandbox inbox on this computer")
+            return Decision("ALLOW", "P-INBOX-FINISH", "empties the Sandbox inbox; keeps nothing")
         if tool == "inbox_import":
             return Decision("ALLOW", "P-INBOX-IMPORT", "a file the user already has, copied into the Sandbox inbox; "
                             "never run on the Host")

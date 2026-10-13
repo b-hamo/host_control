@@ -38,14 +38,14 @@ Sandbox 안 Runner
 |---|---|---|
 | `mcp_server.py` | Codex가 자식 프로세스로 켜는 MCP Server. `tools/list`에 도구 목록을 주고, `tools/call`을 Broker에 넘겨 결과를 돌려준다. 켜질 때 ④층(wss 서버, 세션 등록, bootstrap 파일)도 함께 시작한다 | 5.7 |
 | `tool_availability.py` | 이 세션에서 보여줄 도구를 정하는 규칙. Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 빼버리므로, 무거운 라이브러리 없이 쓸 수 있게 따로 뺐다 | 5.7 |
-| `tool_catalog.py` | `schema/mcp-tools/`의 도구 17개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
+| `tool_catalog.py` | `schema/mcp-tools/`의 도구 18개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
 
 ## ② 요청을 검사하는 층 (Broker)
 
 | 파일 | 하는 일 | WBS |
 |---|---|---|
 | `broker.py` | **모든 도구 호출의 입구 `Broker.call()`.** 도구 확인 → 입력 검사 → 세션 상태 → 호출 빈도 → 정책 → 좌표·화면 신선도 → Action ID 발급 → SCRP 메시지로 번역·전송 → 오류 정리 → 감사 로그. 하나라도 걸리면 Runner로 보내지 않는다. 입력은 절대 재전송하지 않는다 | 5.6 |
-| `policy.py` | 보안 규칙. 요청마다 ALLOW / REQUIRE_APPROVAL / DENY와 규칙 ID를 정한다 (예: Win+X 거부 `P-DENY-HOTKEY`, Win+R 허용). 나중에 Translator의 판단이 들어올 자리 | 5.6 |
+| `policy.py` | 보안 규칙. 요청마다 ALLOW / REQUIRE_APPROVAL / DENY와 규칙 ID를 정한다 (예: Win+R 거부 `P-DENY-HOTKEY`). 나중에 Translator의 판단이 들어올 자리 | 5.6 |
 | `audit.py` | 호출마다 JSON 한 줄 기록 (`host/.audit/<session>.jsonl`). `computer_type`의 글자는 길이와 SHA-256만 남긴다 | 5.6 |
 
 ## ③ 세션을 관리하는 층
