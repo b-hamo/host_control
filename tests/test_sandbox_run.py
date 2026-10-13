@@ -12,6 +12,8 @@
 import asyncio
 import hashlib
 import json
+import struct
+import zlib
 import subprocess
 import sys
 import time
@@ -23,7 +25,7 @@ import pytest
 from artifact_runner import ArtifactRunner
 from host.broker import ToolResult
 from host.mcp_server import HostBackend, load_tool_list
-from host.sandbox_run import EMPTY_SHA256, RunError, SandboxRunner
+from host.sandbox_run import EMPTY_SHA256, RunError, SandboxRunner, screen_change
 from test_inbox_download import BODY, InboxManager, Watcher, downloader, server  # noqa: F401
 from test_sandbox_launch import args as launch_args, paths, run
 
@@ -41,12 +43,34 @@ def registered(tmp_path, name="ZoomIt64.exe", data=b"MZ fake program"):
     return runner, inbox
 
 
-class FakeBroker:
-    """Just enough Broker: every call goes through the runner's policy, inputs are 'delivered'."""
+def screen(dialog=False, text=False, clock=0, w=64, h=100):
+    """A grey desktop; the Run dialog fills rows 50-80, its typed line rows 70-73, the clock the last rows."""
+    rows = []
+    for y in range(h):
+        shade = 40
+        if dialog and 50 <= y < 80:
+            shade = 200
+        if text and 70 <= y < 73:
+            shade = 10
+        if y >= h - 4:
+            shade = 90 + clock
+        rows.append(b"\x00" + bytes([shade]) * w)
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
 
-    def __init__(self, runner, hooks=None):
+
+class FakeBroker:
+    """Just enough Broker: every call goes through the runner's policy, inputs are 'delivered',
+    and the screen shows what a real Sandbox would (Run dialog after Win+R, the line after typing)."""
+
+    def __init__(self, runner, hooks=None, dialog_opens=True, text_shows=True):
         self.session = SimpleNamespace(identity=ID, actions={})
         self.policy, self.hooks, self.calls, self.n = runner.policy, hooks or {}, [], 0
+        self.dialog_opens, self.text_shows = dialog_opens, text_shows
+        self.dialog = self.text = False
+        self.clock = 0
 
     async def call(self, tool, args):
         d = self.policy.decide(tool, args)
@@ -56,6 +80,14 @@ class FakeBroker:
         if tool in self.hooks:
             self.hooks[tool]()
         self.n += 1
+        if tool == "computer_observe":
+            self.clock += 1                                    # the taskbar clock keeps changing
+            return ToolResult(True, {"status": "OK"}, action_id=f"A-{self.n}",
+                              image=screen(self.dialog, self.text, self.clock))
+        if tool == "computer_hotkey":
+            self.dialog = self.dialog_opens
+        if tool == "computer_type":
+            self.text = self.dialog and self.text_shows
         return ToolResult(True, {"status": "SUCCESS", "result": {"input_delivered": True}}, action_id=f"A-{self.n}")
 
 
@@ -127,6 +159,30 @@ def test_a_changed_helper_in_the_inbox_never_gets_enter(tmp_path):
     broker = FakeBroker(runner, hooks={"computer_type": tamper})
     r, _ = asyncio.run(launched(runner, broker))
     assert r.state == "DENIED" and "computer_keypress" not in [t for t, _, _ in broker.calls]
+
+
+def test_the_clock_alone_is_not_a_change_but_a_dialog_and_a_typed_line_are():
+    assert screen_change(screen(clock=1), screen(clock=9)) == 0.0             # taskbar left out
+    assert screen_change(screen(), screen(dialog=True)) >= 0.05
+    assert 0.004 <= screen_change(screen(dialog=True), screen(dialog=True, text=True)) < 0.05
+    assert screen_change(b"not a png", screen()) is None
+
+
+def test_nothing_is_typed_when_the_run_dialog_never_shows(tmp_path):
+    runner, _ = registered(tmp_path)
+    broker = FakeBroker(runner, dialog_opens=False)
+    r, _ = asyncio.run(launched(runner, broker))
+    assert (r.state, r.reason) == ("FAILED", "LAUNCH_SURFACE_NOT_SEEN") and not r.dispatched
+    sent = [t for t, _, _ in broker.calls if t != "computer_observe"]
+    assert sent == ["computer_hotkey"]                                    # no line, no Enter
+
+
+def test_enter_is_not_pressed_when_the_typed_line_never_shows(tmp_path):
+    runner, _ = registered(tmp_path)
+    broker = FakeBroker(runner, text_shows=False)
+    r, _ = asyncio.run(launched(runner, broker))
+    assert (r.state, r.reason) == ("FAILED", "LAUNCH_TEXT_NOT_SEEN") and not r.dispatched
+    assert "computer_keypress" not in [t for t, _, _ in broker.calls]
 
 
 # --------------------------------------------------------------------- results

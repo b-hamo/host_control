@@ -27,7 +27,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import struct
 import time
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from subprocess import list2cmdline
@@ -55,6 +57,55 @@ MAX_EVIDENCE = 65536
 MAX_STDOUT_SHOWN = 16384
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 SUFFIXES = (".exe", ".msi", ".ps1")
+# The Runner cannot report which window has focus (ui.click_element is not implemented), so the
+# launch checks the screen itself: rows of the screenshot that changed, the taskbar (clock) left out.
+TASKBAR_SHARE = 0.08
+SURFACE_CHANGE = 0.05           # after Win+R: a dialog appeared (the Run dialog is ~30% of the height)
+TEXT_CHANGE = 0.004             # after typing: the line showed up in it (one text line)
+MAX_RAW_PIXELS = 16_000_000     # the Host already refuses bigger captures
+
+
+def _scanlines(png: bytes | None) -> list[bytes] | None:
+    """The filtered rows of a non-interlaced PNG. A row whose filtered bytes changed shows changed
+    pixels (or a changed row above it), so no unfiltering is needed to see where the screen changed."""
+    if not png or png[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, ihdr, idat = 8, None, []
+    while pos + 8 <= len(png):
+        length, ctype = struct.unpack(">I4s", png[pos:pos + 8])
+        data = png[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if ctype == b"IHDR" and length == 13:
+            ihdr = struct.unpack(">IIBBBBB", data)
+        elif ctype == b"IDAT":
+            idat.append(data)
+        elif ctype == b"IEND":
+            break
+    if ihdr is None:
+        return None
+    width, height, depth, color, _, _, interlace = ihdr
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color)
+    if interlace or channels is None or width * height > MAX_RAW_PIXELS:
+        return None
+    stride = 1 + (width * channels * depth + 7) // 8
+    try:
+        raw = zlib.decompressobj().decompress(b"".join(idat), stride * height + 1)
+    except zlib.error:
+        return None
+    if len(raw) != stride * height:
+        return None
+    return [raw[i * stride:(i + 1) * stride] for i in range(height)]
+
+
+def screen_change(before: bytes | None, after: bytes | None) -> float | None:
+    """Share of screen rows (taskbar excluded) that differ; None if either capture is unreadable."""
+    a, b = _scanlines(before), _scanlines(after)
+    if a is None or b is None:
+        return None
+    if len(a) != len(b) or len(a[0]) != len(b[0]):
+        return 1.0
+    rows = max(1, int(len(a) * (1 - TASKBAR_SHARE)))
+    return sum(1 for i in range(rows) if a[i] != b[i]) / rows
 
 
 class RunError(Exception):
@@ -219,11 +270,24 @@ class SandboxRunner:
         except OSError:
             return False
 
+    async def _observe(self, broker, wait_ms: int) -> bytes | None:
+        seen = await self._send(broker, "computer_observe", {"wait_ms": wait_ms})
+        return seen.image if seen.ok else None
+
+    async def _changed(self, broker, reference: bytes, threshold: float, tries: int, wait_ms: int) -> bytes | None:
+        """A screenshot that differs from the reference by at least the threshold, or None."""
+        for _ in range(tries):
+            current = await self._observe(broker, wait_ms)
+            fraction = screen_change(reference, current)
+            if fraction is not None and fraction >= threshold:
+                return current
+        return None
+
     async def _launch(self, broker, run: Run) -> None:
         try:
-            observed = await broker.call("computer_observe", {"wait_ms": 0})
-            if not observed.ok:
-                return run.set("HELD", "VALIDATED_OBSERVATION_REQUIRED")
+            before = await self._observe(broker, 0)
+            if before is None or screen_change(before, before) is None:
+                return run.set("HELD", "VALIDATED_OBSERVATION_REQUIRED")      # nothing to compare against
             if not self._transport_intact(run):
                 return run.set("DENIED", "TRANSPORT_CHANGED")
             steps = (("computer_hotkey", {"keys": ["win", "r"]}),
@@ -250,9 +314,15 @@ class SandboxRunner:
                     if result.data.get("status") != "SUCCESS" or delivered.get("input_delivered") is not True:
                         return run.set("UNKNOWN", "GUI_INPUT_PARTIAL_OR_UNCONFIRMED")
                     if index == 0:
-                        seen = await broker.call("computer_observe", {"wait_ms": 1000})   # the Run dialog must have focus first
-                        if not seen.ok:
-                            return run.set("UNKNOWN", "LAUNCH_SURFACE_UNCONFIRMED")
+                        # Type only once the Run dialog is on the screen; typed too early, the line
+                        # lands nowhere (or in another window) and Enter would go there too.
+                        before = await self._changed(broker, before, SURFACE_CHANGE, tries=4, wait_ms=700)
+                        if before is None:
+                            return run.set("FAILED", "LAUNCH_SURFACE_NOT_SEEN")      # nothing typed
+                    elif index == 1:
+                        # Enter only if the typed line visibly arrived.
+                        if await self._changed(broker, before, TEXT_CHANGE, tries=3, wait_ms=300) is None:
+                            return run.set("FAILED", "LAUNCH_TEXT_NOT_SEEN")         # Enter never sent
             run.set("RUNNING", "INPUT_DELIVERED_AWAITING_PROCESS_RESULT")
         except asyncio.CancelledError:
             run.set("UNKNOWN" if run.dispatched else "FAILED", "LAUNCH_INTERRUPTED")

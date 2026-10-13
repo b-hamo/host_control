@@ -242,7 +242,7 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 | 출처 | Host | Agent 말이 아니라 **Host가 받을 때 남긴 기록**(최종 주소, SHA-256). 파일이 바뀌었으면 거부 |
 | 승인 | 사람 (Host 화면) | 파일·받은 주소·해시·**정확한 실행 명령 전체**를 보여 주는 창(`P-SANDBOX-RUN`, 45초, 무응답은 거부). "예"일 때만 그 명령 지문에 묶인 위임(Router `Authority`)을 이번 한 번 만든다 |
 | 전달 | Host | 도우미(`sandbox_run_guest.ps1`)와 명령서를 받는 폴더(`C:\Inbox`, 읽기 전용)로. 실행 파일은 Sandbox 지킴이가 해시를 확인한 `Desktop\Input` 사본 |
-| 실행 | Host → Runner | Router의 `RouterGuiPolicy`가 **이 명령의 Win+R → 한 줄 입력 → Enter 세 입력만** 허용. Enter 직전에 파일·도우미·위임을 다시 확인. 평소에는 Agent가 Win+R을 못 누른다(`P-DENY-HOTKEY` 그대로) |
+| 실행 | Host → Runner | Router의 `RouterGuiPolicy`가 **이 명령의 Win+R → 한 줄 입력 → Enter 세 입력만** 허용. Enter 직전에 파일·도우미·위임을 다시 확인. 평소에는 Agent가 Win+R을 못 누른다(`P-DENY-HOTKEY` 그대로).<br>입력 전후로 화면을 비교한다: 실행 창이 화면에 나타난 뒤에만 한 줄을 입력하고, 그 줄이 화면에 보인 뒤에만 Enter (Runner가 앞 창을 알려 주지 못해서, 작업 표시줄을 뺀 스크린샷 행 비교). 안 보이면 거기서 멈춘다(`LAUNCH_SURFACE_NOT_SEEN`, `LAUNCH_TEXT_NOT_SEEN`) |
 | 결과 | Guest → Host | 도우미가 영수증(종료 코드, stdout 해시)을 남기면 반출 검사를 거쳐 확인. 이 실행의 영수증·stdout 반출은 따로 묻지 않는다 |
 
 `sandbox_run_status` 상태: `RUNNING`(시작됨, GUI 프로그램은 창이 열려 있는 동안 계속) → `SUCCEEDED`/`FAILED`(영수증 확인, 종료 코드·stdout).
