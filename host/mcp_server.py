@@ -377,6 +377,20 @@ class McpServer:
         self.tool_names = {t["name"] for t in tools}
         self.instructions, self.strict_tools = instructions, strict_tools
 
+    def _start_backend(self) -> None:
+        if self.backend.is_alive() or self.backend.ident is not None:
+            return
+        a = getattr(self.backend, "args", None)            # the Router's backend has none
+        if getattr(a, "agent_guard", False):
+            # One GUI Host per PC: the conversation that starts working takes the ports over from an
+            # older conversation's Host the Codex app kept running.
+            from host.single_host import reclaim_sandboxes, take_over
+            if take_over((getattr(a, "port", 0), getattr(a, "upload_port", 0))):
+                # Its Sandbox still maps the inbox, and nothing can be renamed in a mapped inbox
+                # (the start's no-execute probe would fail): stop it now, as the next start would.
+                reclaim_sandboxes(getattr(a, "sandbox_root", None))
+        self.backend.start()
+
     def handle(self, msg: dict) -> dict | None:
         method, msg_id, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
         if method == "initialize":
@@ -386,8 +400,9 @@ class McpServer:
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
                 "instructions": self.instructions,
             }
-            if not self.backend.is_alive() and self.backend.ident is None:
-                self.backend.start()                 # heavy imports begin only now
+            if not getattr(getattr(self.backend, "args", None), "agent_guard", False):
+                self._start_backend()                # heavy imports begin only now
+            # --agent-guard: started by the first tools/call instead (host/single_host.py)
         elif method == "ping":
             result = {}
         elif method == "tools/list":
@@ -398,6 +413,7 @@ class McpServer:
             if self.strict_tools and (not isinstance(name, str) or name not in self.tool_names):
                 result = _error_result("TOOL_NOT_EXPOSED", "Tool is not exposed in this mode", False, None)
             else:
+                self._start_backend()
                 result = self.backend.call(name, args)
             logged_name = name if not self.strict_tools or (isinstance(name, str) and name in self.tool_names) else "UNEXPOSED"
             log.info("MCP tools/call %s -> %s (%.0f ms)", logged_name, "error" if result["isError"] else "ok",
