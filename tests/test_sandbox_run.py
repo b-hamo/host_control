@@ -5,7 +5,7 @@
 - the file is checked again right before Enter; a change means Enter is never sent
 - a result counts only from a matching receipt (exit code, stdout hash); the run's own result
   files need no dialog, anything else still asks
-- through the MCP Host end to end: Broker approval (P-SANDBOX-RUN), real WSS Runner stand-in,
+- through the MCP Host end to end: no approval dialog (P-SANDBOX-RUN allows), real WSS Runner stand-in,
   artifact export of the receipt and stdout, audit, inbox helpers removed afterwards
 """
 
@@ -259,7 +259,7 @@ def test_download_run_and_result_through_the_mcp_host(tmp_path, server):  # noqa
     server.routes["/ZoomIt64.exe"] = ("body", BODY)
     d, _ = downloader(tmp_path, server)
     fake = InboxManager(tmp_path / "sbx")
-    approver = Approver([True, False])
+    approver = Approver([])                     # nobody may be asked: sandbox_run needs no approval
     stdout = "ZoomIt 4.x\n".encode()
 
     async def body():
@@ -311,23 +311,19 @@ def test_download_run_and_result_through_the_mcp_host(tmp_path, server):  # noqa
             if status.get("state") in ("SUCCEEDED", "FAILED", "HELD"):
                 break
             await asyncio.sleep(0.2)
-        await asyncio.sleep(1.2)                       # status polls spent this second's control calls
-        refused = await call("sandbox_run", {"file": got["file"]["name"]})          # the person says No
         left = sorted(p.name for p in Path(d.inbox).glob("run-*"))
         await call("session_stop", {"reason": "TASK_COMPLETE"})
         await asyncio.wait_for(serving, 10)
         await asyncio.to_thread(backend.shutdown)
         audit = [json.loads(x) for x in (tmp_path / "audit" / "SES-TEST-001.jsonl").read_text(encoding="utf-8").splitlines()]
-        return early, own_win_r, started, status, refused, left, r.requests, audit
+        return early, own_win_r, started, status, left, r.requests, audit
 
-    early, own_win_r, started, status, refused, left, requests, audit = run(body())
+    early, own_win_r, started, status, left, requests, audit = run(body())
     assert early["error"] == "POLICY_DENIED"                                     # task_submit first
     assert own_win_r["ok"]                                                      # POL-0.1.1: allowed
     assert started["ok"] and started["state"] == "ACCEPTED"
     assert status["state"] == "SUCCEEDED" and status["exit_code"] == 0 and status["stdout"] == "ZoomIt 4.x\n"
-    assert refused["error"] == "POLICY_DENIED" and refused["rule_id"] == "P-SANDBOX-RUN"
-    assert [c["tool"] for c in approver.calls] == ["sandbox_run", "sandbox_run"]   # result exports asked nobody
-    assert approver.calls[0]["command"].endswith(r"Desktop\Input\ZoomIt64.exe")
+    assert approver.calls == []                     # neither the run nor its own result exports asked anyone
     ops = [m["payload"]["operation"] for m in requests if m["payload"]["operation"] != "screen.capture"]
     # the Agent's own Win+R, then the run's three inputs, once, never repeated
     assert ops == ["keyboard.hotkey", "keyboard.hotkey", "keyboard.type", "keyboard.press"]

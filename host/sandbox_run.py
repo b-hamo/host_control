@@ -5,9 +5,10 @@ MCP session can download a file, run it in the Sandbox and then work its window:
 
 - The source is the Host's own download record (final URL, SHA-256), never an
   Agent claim. Only files inbox_download fetched in this session can run.
-- The exact command is shown to the person at the Host (Broker approval,
-  rule P-SANDBOX-RUN). Only a "Yes" creates a delegation (router Authority)
-  bound to that command's fingerprint, for this one run.
+- The Host builds the exact command from that record and creates a delegation
+  (router Authority) bound to the command's fingerprint, for this one run. No
+  approval dialog (team decision 2026-10-13: the Sandbox is disposable; people
+  approve where files cross to the Host: artifact_export, inbox_finish keep).
 - RouterGuiPolicy opens Win+R only for that command's three inputs (Win+R, the
   launch line, Enter). Outside a launch every base Policy rule stays, so the
   Agent itself still cannot press Win+R.
@@ -124,7 +125,7 @@ class Run:
     launch_line: str = ""
     transport: tuple = ()              # ((inbox path, sha256), ...) for the helper and manifest
     state: str = "ACCEPTED"
-    reason: str = "APPROVED"
+    reason: str = "STARTING"
     exit_code: int | None = None
     stdout: str | None = None
     dispatched: bool = False           # Enter was sent: from here on never "did not run"
@@ -195,7 +196,7 @@ class SandboxRunner:
         except OSError:
             return False
 
-    # -- before approval: the exact command --------------------------------
+    # -- the exact command (from the Host's own record) ---------------------
     def plan(self, file: str, arguments: list[str], identity: tuple) -> tuple[Run, dict]:
         entry = self._files.get(file.casefold())
         if entry is None:
@@ -225,7 +226,7 @@ class SandboxRunner:
                  "sha256": src.sha256, "command": list2cmdline([exe, *argv])}
         return run, shown
 
-    # -- after approval: delegation, transport, launch ---------------------
+    # -- delegation, transport, launch --------------------------------------
     async def start(self, broker, run: Run) -> Run:
         if self._launching is not None:
             raise RunError("RATE_LIMITED", f"{self._launching.run_id} is being started; call again in a few seconds")

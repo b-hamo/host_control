@@ -54,7 +54,7 @@ Sandbox 안 Runner
 |---|---|---|
 | `runtime_session.py` | 연결이 끊겨도 이어지는 세션. 5초마다 HEARTBEAT, 연속 2회 누락 DEGRADED · 3회 UNRESPONSIVE. 끊길 때 결과를 못 받은 Action은 재전송하지 않고 재접속 후 STATE_REQUEST로 확인. task_id·action_id 발급, 마지막 화면과 받은 시각 보관, `status()`로 상태 조회 | 4.4, 4.5 |
 | `inbox_download.py` | `inbox_download` 도구의 본체. 공개 https만, 확인한 IP로 접속(DNS rebinding 차단), 리다이렉트마다 검사, 크기·개수 한도, 다 받은 뒤에만 받는 폴더로, MOTW 표시, zip은 Host에서 안 풂. 받는 폴더가 Host에서 실행 금지인지 시작 때 시험 | 5.9 |
-| `sandbox_run.py` | `sandbox_run`·`sandbox_run_status` 본체 (`--sandbox-run`). 이 세션에서 받은 파일만, Host가 받을 때 남긴 해시가 출처. 정확한 명령을 사람이 승인하면 Router `Authority` 위임을 이번 한 번 만들고, `RouterGuiPolicy`로 Win+R·한 줄·Enter만 허용(Enter 직전 재확인). 도우미 `sandbox_run_guest.ps1`과 명령서는 받는 폴더로 전달, 결과는 Guest 영수증을 반출 검사로 확인 | 7.x |
+| `sandbox_run.py` | `sandbox_run`·`sandbox_run_status` 본체 (`--sandbox-run`). 이 세션에서 받은 파일만, Host가 받을 때 남긴 해시가 출처. 정확한 명령에 묶인 Router `Authority` 위임을 이번 한 번 만들고(승인 창 없음, 기록), `RouterGuiPolicy`로 Win+R·한 줄·Enter만 허용(Enter 직전 재확인). 도우미 `sandbox_run_guest.ps1`과 명령서는 받는 폴더로 전달, 결과는 Guest 영수증을 반출 검사로 확인 | 7.x |
 | `artifacts.py` | 파일 반출 본체 (artifact-export-v1). 후보 등록·artifact_id, 승인 뒤 업로드 권한(upload_id·token·기한·상한) 먼저 등록 → ARTIFACT_REQUEST → 수신 기록과 ARTIFACT_RESULT 대조 → 검사 → 같은 바이트만 공개. 세션 종료·세대 변경·채널 끊김 시 취소 | 5.8 |
 | `artifact_scan.py` | 반출 전 검사. 형식 정책(UTF-8 `.txt`) + 백신. 기본은 검사기 없음 = 차단. AMSI는 EICAR 자체 시험을 통과해야만 사용 | 5.8 |
 | `approval.py` | 사용자 승인 창. Host 화면에 뜨고 AI는 답할 수 없음. 45초 무응답 = 거부 (MCP 호출 제한 60초 안), 호출이 취소되면 창도 닫음 | 5.6 |
@@ -126,7 +126,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_observation_upload.py` | upload_id(1회용·만료), PNG 검사, HTTPS 수신 거부 코드, 해시·크기 대조, 조작된 업로드 차단, 세션 종료 시 삭제 |
 | `tests/test_sandbox_recovery.py` | Runner만 다시 켜기, 창 닫힘은 다시 안 켬, 먹통이면 Sandbox 새로 켜기, 실패 시 넘어가기·종료, 옛 세대 token 거부, 실제 Sandbox Manager로 재시작 확인 |
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
-| `tests/test_sandbox_run.py` | 받은 파일 실행: 받은 파일만·정확한 명령 표시·바뀐 파일 거부, 승인된 실행은 세 입력만(Win+R은 `POL-0.1.1`부터 Agent에게도 허용), Enter 직전 파일·도우미 변조 시 Enter 안 보냄, 영수증 대조, 자기 결과만 승인 없이 반출, MCP 전 구간(승인·거부·감사·도우미 삭제), 옵션 |
+| `tests/test_sandbox_run.py` | 받은 파일 실행: 받은 파일만·정확한 명령 표시·바뀐 파일 거부, 실행은 세 입력만(Win+R은 `POL-0.1.1`부터 Agent에게도 허용), Enter 직전 파일·도우미 변조 시 Enter 안 보냄, 영수증 대조, 자기 결과만 승인 없이 반출, MCP 전 구간(승인 창 없음·감사·도우미 삭제), 옵션 |
 | `tests/test_inbox_download.py` | 내려받기: 공개 https만·사설/메타데이터 주소 거부, 확인한 IP로만 접속(두 번째 DNS 없음), 리다이렉트 검사, 크기·개수 한도, 이름 정리·덮어쓰기 없음·MOTW, zip 안 풂, 실행 금지 시험, MCP 경로(정책·감사·쿼리 제거·받는 폴더 연결·감시 시작/종료), 잘못된 옵션 |
 | `tests/test_artifact_export.py` | 파일 반출: Runner 계약 예제 14개, bootstrap 선택, token 종류 분리, Telemetry 없으면 READY 안 됨, 중복 후보, 한글·빈 파일 반출(바이트·해시 일치, 빈 201), 승인 거부, 검사 통과·차단·오류·시간 초과·형식, Runner 거부·결과 불일치·결과 없음, 채널·연결 끊김·세션 종료 취소, 수신 거부 코드, AMSI EICAR 자체 시험 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |

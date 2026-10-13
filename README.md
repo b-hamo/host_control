@@ -17,7 +17,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `host/sender.py` | Host 송신기. Runner 접속 수락, 인증, 데모 실행 | 3.4, 4.6 |
 | `host/mcp_server.py` | MCP Server: Codex가 자식 프로세스로 켜고 stdio로 도구를 부르는 창구 | 5.7 |
 | `host/inbox_download.py` | 받는 폴더(inbox)로 내려받기: Host가 https로 받고 실행은 Sandbox에서만. 다운로드 폴더에 이미 있는 파일은 `inbox_import`로 복사 | 5.9 |
-| `host/sandbox_run.py` | 받은 파일을 Sandbox 안에서 실행 (GUI 모드 + Router 부품): 사람 승인 → 정확한 명령 하나만 Win+R로 → 영수증 확인 | 7.x |
+| `host/sandbox_run.py` | 받은 파일을 Sandbox 안에서 실행 (GUI 모드 + Router 부품): 정확한 명령 하나만 Win+R로 → 영수증 확인 (승인 없음, 기록) | 7.x |
 | `host/artifacts.py` | 파일 반출 (artifact-export-v1): 후보 등록, 승인 후 업로드 권한, 결과 대조, 검사, 최종 공개, 취소 | 5.8 |
 | `host/telemetry.py` | Telemetry 채널 (`/scrp/v1/telemetry`): 후보 SECURITY_EVENT 수신, EVENT_ACK | 5.8 |
 | `host/artifact_scan.py` | 반출 전 검사: 형식 정책(UTF-8 TXT) + 백신 (기본 미설정 = 차단) | 5.8 |
@@ -252,16 +252,16 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 |---|---|---|
 | 요청 | Agent | `sandbox_run(file, arguments, reason)`. 이 세션에서 `inbox_download`로 받거나 `inbox_import`로 가져온 `.exe`·`.msi`·`.ps1`만 |
 | 출처 | Host | Agent 말이 아니라 **Host가 받을 때 남긴 기록**(최종 주소, SHA-256). 파일이 바뀌었으면 거부 |
-| 승인 | 사람 (Host 화면) | 파일·받은 주소·해시·**정확한 실행 명령 전체**를 보여 주는 창(`P-SANDBOX-RUN`, 45초, 무응답은 거부). "예"일 때만 그 명령 지문에 묶인 위임(Router `Authority`)을 이번 한 번 만든다 |
+| 위임 | Host | **승인 창 없이** Host가 받은 기록으로 정확한 명령을 만들고, 그 명령 지문에 묶인 위임(Router `Authority`)을 이번 한 번 만든다(`P-SANDBOX-RUN` ALLOW). 팀 결정(2026-10-13): Sandbox는 버리는 공간이라 실행은 자동, 사람 승인은 파일이 내 PC로 넘어올 때(`artifact_export`, `inbox_finish` 남기기) |
 | 전달 | Host | 도우미(`sandbox_run_guest.ps1`)와 명령서를 받는 폴더(`C:\Inbox`, 읽기 전용)로. 실행 파일은 Sandbox 지킴이가 해시를 확인한 `Desktop\Input` 사본 |
-| 실행 | Host → Runner | Router의 `RouterGuiPolicy`가 **이 명령의 Win+R → 한 줄 입력 → Enter 세 입력만** 허용. Enter 직전에 파일·도우미·위임을 다시 확인. 실행 중에는 다른 입력이 끼어들지 못한다. `POL-0.1.1`부터 Agent도 Win+R 자체는 쓸 수 있어서, 승인·출처 기록·영수증이 남는 실행은 `sandbox_run`을 거친 것뿐이다.<br>입력 전후로 화면을 비교한다: 실행 창이 화면에 나타난 뒤에만 한 줄을 입력하고, 그 줄이 화면에 보인 뒤에만 Enter (Runner가 앞 창을 알려 주지 못해서, 작업 표시줄을 뺀 스크린샷 행 비교). 안 보이면 거기서 멈춘다(`LAUNCH_SURFACE_NOT_SEEN`, `LAUNCH_TEXT_NOT_SEEN`) |
+| 실행 | Host → Runner | Router의 `RouterGuiPolicy`가 **이 명령의 Win+R → 한 줄 입력 → Enter 세 입력만** 허용. Enter 직전에 파일·도우미·위임을 다시 확인. 실행 중에는 다른 입력이 끼어들지 못한다. `POL-0.1.1`부터 Agent도 Win+R 자체는 쓸 수 있어서, 출처 기록·명령·영수증이 남는 실행은 `sandbox_run`을 거친 것뿐이다.<br>입력 전후로 화면을 비교한다: 실행 창이 화면에 나타난 뒤에만 한 줄을 입력하고, 그 줄이 화면에 보인 뒤에만 Enter (Runner가 앞 창을 알려 주지 못해서, 작업 표시줄을 뺀 스크린샷 행 비교). 안 보이면 거기서 멈춘다(`LAUNCH_SURFACE_NOT_SEEN`, `LAUNCH_TEXT_NOT_SEEN`) |
 | 결과 | Guest → Host | 도우미가 영수증(종료 코드, stdout 해시)을 남기면 반출 검사를 거쳐 확인. 이 실행의 영수증·stdout 반출은 따로 묻지 않는다 |
 
 `sandbox_run_status` 상태: `RUNNING`(시작됨, GUI 프로그램은 창이 열려 있는 동안 계속) → `SUCCEEDED`/`FAILED`(영수증 확인, 종료 코드·stdout).
 `HELD`(결과가 검사를 못 넘음), `UNKNOWN`(실행됐을 수도 있음: 다시 실행하지 않는다), `DENIED`(시작 안 함).
 
-실제 Sandbox 확인 (develop + Runner `916a6a2`): Sandbox가 켜진 뒤 ZoomIt 받기 → 승인 → Sandbox 안에서 ZoomIt 창이 뜸(실행 기록·도우미·해시 확인 사본·프로세스 확인).
-승인하지 않으면 입력을 하나도 보내지 않는다.
+실제 Sandbox 확인: Sandbox가 켜진 뒤 ZoomIt 받기 → `sandbox_run` → Sandbox 안에서 ZoomIt 창이 뜸(실행 기록·도우미·해시 확인 사본·프로세스 확인).
+내 PC로 가져와 직접 실행하려면 `inbox_finish`로 남길 파일을 고르고, Host 화면 승인 창에서 사람이 허락한다(`P-INBOX-KEEP`).
 
 ## 파일 반출 (artifact-export-v1)
 

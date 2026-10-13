@@ -449,7 +449,7 @@ class Broker:
             try:
                 if tool == "sandbox_run":
                     run = await self.runner.start(self, plan)
-                    return {**run.view(), "message": "Approved. Call sandbox_run_status with this run_id; "
+                    return {**run.view(), "message": "Started. Call sandbox_run_status with this run_id; "
                             "a GUI program stays RUNNING while its window is open (use computer_observe)."}
                 return await self.runner.status(self, args["run_id"])
             except RunError as e:
