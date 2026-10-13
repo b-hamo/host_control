@@ -11,9 +11,11 @@ import:
 
 - front (main thread, standard library only): answers initialize and
   tools/list at once, from the tool JSON files;
-- back (a background thread with its own event loop): imports the Broker,
+- back (a background thread created on demand, with its own event loop): imports the Broker,
   starts the wss server for the Runner, registers a session, writes the
   bootstrap file. tools/call waits for this half and then runs Broker.call().
+  Discovery and a cold runtime_get_state never start this thread. Session end
+  retires its listeners while stdio stays available for queries or a new task.
 
 With --runner-exe, the Windows Sandbox is started by the Lifecycle team's
 Sandbox Manager when the Agent calls task_submit, and stopped when the
@@ -104,7 +106,7 @@ def load_tool_list(extra_capabilities: set[str] = frozenset()) -> list[dict]:
 
 
 class HostBackend(threading.Thread):
-    """The Host stack on its own event loop, started after the MCP handshake."""
+    """One execution Host. The MCP front end or Router owns its lifetime."""
 
     def __init__(self, args: argparse.Namespace, sandbox_manager=None, *, approver=None, scanner=None):
         super().__init__(name="scrp-host", daemon=True)
@@ -121,6 +123,11 @@ class HostBackend(threading.Thread):
         self.artifacts = None
         self.runner = None                           # host/sandbox_run.py (--sandbox-run)
         self._stop = None
+        self._shutdown_requested = threading.Event()
+        self._calls = set()
+        self.retire_on_end = False                 # general MCP owns retirement; Router owns its own
+        self.final_status = None
+        self.cleanup_confirmed = False
 
     def run(self) -> None:
         import asyncio
@@ -139,7 +146,12 @@ class HostBackend(threading.Thread):
                 t.cancel()
             if pending:
                 self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            if self.session is not None:
+                self.final_status = self.session.status()
             self.loop.close()
+            self.cleanup_confirmed = (self.launcher is None or self.launcher.sandbox is None or
+                                      (self.launcher.cleanup_result is not None and
+                                       not self.launcher.cleanup_result.get("failed")))
 
     async def _main(self) -> None:
         import asyncio
@@ -289,7 +301,7 @@ class HostBackend(threading.Thread):
                          self.artifacts.scanner.name, a.export_dir)
             self.ready.set()
             try:
-                await self._stop.wait()
+                await self._wait_for_exit()
             finally:
                 try:
                     if self.runner is not None:
@@ -298,8 +310,36 @@ class HostBackend(threading.Thread):
                     if self.launcher is not None:
                         await self.launcher.shutdown()
 
+    async def _wait_for_exit(self):
+        """End this listener pair when its Guest ends, without ending the MCP connection."""
+        import asyncio
+        next_probe = 0.0
+        while not self._stop.is_set() and not self._shutdown_requested.is_set():
+            if self.retire_on_end:
+                if self.session.terminated and not self._calls:
+                    return
+                launcher = self.launcher
+                if (launcher is not None and launcher.sandbox is not None
+                        and launcher.state in {"READY", "PUBLISHED"}
+                        and launcher._launch is not None and launcher._launch.done()
+                        and launcher._finish is None and time.monotonic() >= next_probe):
+                    next_probe = time.monotonic() + 2
+                    try:
+                        running = await asyncio.to_thread(launcher.manager.is_running, launcher.sandbox)
+                    except Exception:
+                        log.warning("Could not confirm owned Sandbox state; no restart requested", exc_info=True)
+                    else:
+                        if not running:
+                            await self.session._end("RUNTIME_GONE: owned Sandbox closed")
+            try:
+                await asyncio.wait_for(self._stop.wait(), .1)
+            except TimeoutError:
+                pass
+
     def shutdown(self, timeout: float = 70.0) -> None:
         """Codex closed stdin: end the session and stop the Sandbox before the process exits."""
+        if hasattr(self, "_shutdown_requested"):
+            self._shutdown_requested.set()
         if not self.is_alive():
             return
         if self.loop is not None and self._stop is not None and self.loop.is_running():
@@ -315,7 +355,21 @@ class HostBackend(threading.Thread):
             return _error_result("RUNTIME_UNAVAILABLE", "Host is still starting", True, "retry")
         if self.error:
             return _error_result("RUNTIME_UNAVAILABLE", f"Host could not start: {self.error}", False, None)
-        fut = asyncio.run_coroutine_threadsafe(self.broker.call(tool, arguments), self.loop)
+        if not self.is_alive() or self.loop.is_closed():
+            return _error_result("SESSION_TERMINATED", "Host session ended", False, "task_submit")
+        async def invoke():
+            task = asyncio.current_task()
+            self._calls.add(task)
+            try:
+                return await self.broker.call(tool, arguments)
+            finally:
+                self._calls.discard(task)
+        request = invoke()
+        try:
+            fut = asyncio.run_coroutine_threadsafe(request, self.loop)
+        except RuntimeError:
+            request.close()
+            return _error_result("SESSION_TERMINATED", "Host session ended", False, "task_submit")
         try:
             result = fut.result(CALL_TIMEOUT_S)
         except TimeoutError:
@@ -378,6 +432,11 @@ class McpServer:
         self.instructions, self.strict_tools = instructions, strict_tools
 
     def _start_backend(self) -> None:
+        from host.mcp_runtime import McpRuntime
+        if isinstance(self.backend, McpRuntime):
+            # This owner starts only validated requests and retires its own Host.
+            # Guarded calls must not enter the legacy cross-conversation takeover.
+            return
         if self.backend.is_alive() or self.backend.ident is not None:
             return
         a = getattr(self.backend, "args", None)            # the Router's backend has none
@@ -506,26 +565,29 @@ def main(argv: list[str] | None = None) -> None:
     _setup_logging(args.log_file)
 
     extra = ({ARTIFACT_CAPABILITY} if args.artifact_export else set()) | ({"host.inbox"} if args.inbox else set())         | ({"host.sandbox_run"} if args.sandbox_run else set())
+    from host.mcp_runtime import McpRuntime
     tools = load_tool_list(extra)
     if args.agent_guard:
         guard_descriptions(tools)
-    server = McpServer(HostBackend(args), tools)
+    server = McpServer(McpRuntime(args, HostBackend), tools, strict_tools=True)
     log.info("MCP server up (pid %s), %d tools", __import__("os").getpid(), len(server.tools))
     out = sys.stdout.buffer
-    for line in sys.stdin.buffer:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        reply = server.handle(msg)
-        if reply is not None:
-            out.write(json.dumps(reply, ensure_ascii=False).encode("utf-8") + b"\n")
-            out.flush()
-    log.info("stdin closed; MCP server exiting")
-    server.backend.shutdown()
+    try:
+        for line in sys.stdin.buffer:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            reply = server.handle(msg)
+            if reply is not None:
+                out.write(json.dumps(reply, ensure_ascii=False).encode("utf-8") + b"\n")
+                out.flush()
+    finally:
+        log.info("MCP transport closed; stopping owned Host")
+        server.backend.shutdown()
 
 
 if __name__ == "__main__":
