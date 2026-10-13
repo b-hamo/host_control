@@ -24,7 +24,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `host/approval.py` | 사용자 승인 창 (Host 화면) | 5.6 |
 | `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
-| `host/tool_catalog.py` | 도구 17개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/tool_catalog.py` | 도구 18개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
 | `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
 | `host/tool_availability.py` | 도구 노출 규칙 (표준 라이브러리만 사용, MCP Server가 빠르게 뜨도록) | 5.7 |
@@ -37,7 +37,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
 | `schema/` | Host ↔ Runner 메시지 규격. **Runner도 이 파일을 기준으로 구현** | 2.2, 2.3 |
-| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 17개의 입력 규격 | 2.4 |
+| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 18개의 입력 규격 | 2.4 |
 | `tests/` | 인증·TLS·replay 거부, Heartbeat·재연결, Startup Verification, Broker 자동 테스트 | 4.4~4.6, 5.6 |
 
 규격의 결정 사항과 노션 초기 표와의 차이는 [schema/README.md](schema/README.md)에 있다.
@@ -205,6 +205,7 @@ powershell -ExecutionPolicy Bypass -File <sandbox_manager>\tools\setup_inbox.ps1
 | 단계 | 누가 | 무엇을 |
 |---|---|---|
 | 내려받기 | Agent → Host | `inbox_download(url)` (Broker 경유: 정책 `P-INBOX-DOWNLOAD`, 호출 빈도, 감사). 승인 없음(팀 결정 2026-10-08) |
+| 끝날 때 | Host / Agent → Host | **기본은 삭제**: 세션이 끝나면(stop → cleanup 뒤) 받는 폴더를 비움(`clear_inbox`). 사용자가 남기라고 하면 `inbox_finish(keep)` → PC 확인 창(`P-INBOX-KEEP`) → 고른 것만 다운로드 폴더로 **복사**(인터넷 표시), 나머지 삭제. 팀 요청 2026-10-11 |
 | 이미 받아 둔 파일 | Agent → Host | `inbox_import(name)`: 사용자 **다운로드 폴더 바로 안** 파일을 이름만으로 받는 폴더에 **복사**(원본 유지). 정책 `P-INBOX-IMPORT`. 경로·`..`·링크·hard link·받는 중 파일·50 MiB 초과는 거부(검사는 sandbox_manager `import_to_inbox`). 팀 요청 2026-10-10 |
 | 저장 | Host | 임시 폴더에 다 받은 뒤 받는 폴더에 최종 이름으로 바로 씀. 다 쓸 때까지 다른 프로그램이 못 열게 잠금(Sandbox가 켜져 있으면 받는 폴더 안 이름 바꾸기가 막히기 때문), 이름 정리·덮어쓰기 없음, "인터넷에서 받음" 표시(MOTW) |
 | 연결 | Sandbox Manager | 받는 폴더를 Sandbox `C:\Inbox`에 **읽기 전용**으로 계속 연결. 1초마다 다 받아진 파일만 SHA-256과 함께 목록에 올리고, 링크가 생기면 바로 지움 |

@@ -212,6 +212,18 @@ class Downloader:
         return {"source": "Downloads\\" + Path(got["source"]).name, "file": f,
                 "sandbox_path": f"{GUEST_INPUT}\\{f['name']}", "inbox_path": f"{GUEST_INBOX}\\{f['name']}"}
 
+    def finish(self, keep: list[str]) -> dict:
+        """inbox_finish: copy the kept items to Downloads (marked as from the Internet), then empty the inbox.
+        Copied, not moved: a moved file would carry the inbox's deny-execute ACE along. If any name is
+        refused, nothing is kept or deleted (sandbox_manager.finish_inbox)."""
+        from sandbox_manager import SandboxManagerError, finish_inbox
+        try:
+            done = finish_inbox(self.inbox, keep, self.downloads)
+        except SandboxManagerError as e:
+            raise DownloadError(e.code, e.message) from None
+        log.info("INBOX finish: kept %s, deleted %d files", [k["to"] for k in done["kept"]], done["deleted_files"])
+        return done
+
 
 def place(inbox: Path, name: str, content: Path | bytes) -> Path:
     """Create a new file in the inbox and fill it under a handle that shares nothing.

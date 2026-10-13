@@ -164,6 +164,16 @@ class SandboxLauncher:
         log.info("INBOX %s mapped read-only into the Sandbox; watching it for finished files",
                  self.session.identity[0])
 
+    def _clear_inbox(self, session_id: str) -> None:
+        """Session over: the inbox is emptied (team decision 2026-10-11: default delete; what the user
+        wanted to keep was copied to Downloads by inbox_finish before). The folder itself stays."""
+        try:
+            from sandbox_manager import clear_inbox
+            n = clear_inbox(self.inbox)
+            log.info("INBOX %s emptied at session end: %d files deleted", session_id, n)
+        except Exception as e:  # noqa: BLE001 - a file in use stays; the next session's start lists it again
+            log.warning("INBOX %s could not be emptied: %s", session_id, _describe(e))
+
     def _stop_watcher(self) -> None:
         if self._watcher is not None:
             self._watcher.stop()
@@ -333,6 +343,8 @@ class SandboxLauncher:
             self.cleanup_result = await asyncio.to_thread(self.manager.cleanup, self.sandbox)
             self.state = FAILED if failed else STOPPED
             log.info("SANDBOX %s stopped and cleaned up: %s", s.identity[0], self.cleanup_result)
+            if self.inbox is not None:
+                await asyncio.to_thread(self._clear_inbox, s.identity[0])
         except Exception as e:  # noqa: BLE001 - reported; a Sandbox may still be running
             self.state, self.error = FAILED, _describe(e)
             log.error("SANDBOX %s stop/cleanup failed: %s (check `wsb list`)", s.identity[0], self.error)

@@ -44,6 +44,10 @@ class Policy:
             for denied, why in DENIED_HOTKEYS.items():
                 if denied <= combo:
                     return Decision("DENY", "P-DENY-HOTKEY", f"{'+'.join(args['keys'])} {why}")
+        if tool == "inbox_finish":
+            if args.get("keep"):
+                return Decision("REQUIRE_APPROVAL", "P-INBOX-KEEP", "keeps files from the Sandbox inbox on this computer")
+            return Decision("ALLOW", "P-INBOX-FINISH", "empties the Sandbox inbox; keeps nothing")
         if tool == "inbox_import":
             return Decision("ALLOW", "P-INBOX-IMPORT", "a file the user already has, copied into the Sandbox inbox; "
                             "never run on the Host")

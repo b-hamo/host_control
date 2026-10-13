@@ -1,0 +1,30 @@
+{
+  "name": "inbox_finish",
+  "description": "Keep files on this computer at the end of the work: copy the inbox items the user asked to keep into this computer's Downloads folder (marked as downloaded from the Internet, so Windows asks before running them), then delete everything in the inbox. CALL IT ONLY WHEN THE USER ASKED IN THE CHAT TO KEEP A FILE (e.g. \"남겨줘\"). Never keep files on your own, not even after a failed install, and never tell the user to install or run a file on this computer. Keeping anything asks the person at this computer first; if they say no, nothing is kept or deleted. Use the names exactly as inbox_download / inbox_import reported them. Without this tool the inbox is emptied anyway when the session ends.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "keep"
+    ],
+    "properties": {
+      "keep": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "description": "Inbox names to keep in Downloads; an empty list keeps nothing and empties the inbox."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Keep chosen inbox files in Downloads, delete the rest",
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}
