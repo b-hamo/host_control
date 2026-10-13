@@ -31,6 +31,8 @@ APPROVAL_TIMEOUT_S = 45.0          # < mcp_server.CALL_TIMEOUT_S (60 s)
 TITLE = "SCRP 파일 반출 승인"
 RUN_TITLE = "SCRP Sandbox 실행 승인"
 KEEP_TITLE = "SCRP 파일 남기기 확인"
+STOP_TITLE = "SCRP Sandbox 종료 확인"
+DUPLICATE_TITLE = "SCRP 내려받기 확인"
 MAX_COMMAND_SHOWN = 1500           # the whole command or no approval at all (never cut short)
 MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2 = 0x4, 0x30, 0x100
 MB_SYSTEMMODAL, MB_SETFOREGROUND, MB_TOPMOST = 0x1000, 0x10000, 0x40000
@@ -71,6 +73,25 @@ def describe_keep(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
     lines += ["", "남긴 파일은 인터넷에서 받은 파일로 표시되어, 실행할 때 Windows가 한 번 더 묻습니다.",
               "남기지 않은 파일과 받는 폴더의 나머지는 지워집니다.",
               f"남길까요? (아니요: 아무것도 남기거나 지우지 않음. {timeout_s:.0f}초 안에 답하지 않으면 아니요)"]
+    return "\n".join(lines)
+
+
+def describe_stop(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
+    """session_stop with --agent-guard: the Agent wants to end the Sandbox."""
+    return "\n".join([
+        "AI(Codex)가 Sandbox를 끝내려고 합니다.",
+        f"AI가 고른 이유: {_clean(summary.get('stop_reason', ''))}", "",
+        "끝내면 Sandbox 안의 모든 것이 사라집니다.",
+        f"끝낼까요? (아니요: Sandbox를 계속 열어 둠. {timeout_s:.0f}초 안에 답하지 않으면 아니요)"])
+
+
+def describe_duplicate(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
+    """inbox_download with --agent-guard while a similar file is already in Downloads."""
+    lines = ["AI(Codex)가 인터넷에서 새 파일을 받으려고 합니다.", "",
+             f"받을 주소: {_clean(summary.get('url', ''))}", "",
+             "그런데 다운로드 폴더에 비슷한 파일이 이미 있습니다:"]
+    lines += [f"  {_clean(n)}" for n in (summary.get("similar") or [])[:5]]
+    lines += ["", f"그래도 인터넷에서 새로 받을까요? (아니요: 받지 않음. {timeout_s:.0f}초 안에 답하지 않으면 아니요)"]
     return "\n".join(lines)
 
 
@@ -117,6 +138,10 @@ class DialogApprover:
             return RUN_TITLE, describe_run(summary, self.timeout_s)
         if tool == "inbox_finish":
             return KEEP_TITLE, describe_keep(summary, self.timeout_s)
+        if tool == "session_stop":
+            return STOP_TITLE, describe_stop(summary, self.timeout_s)
+        if tool == "inbox_download":
+            return DUPLICATE_TITLE, describe_duplicate(summary, self.timeout_s)
         return TITLE, describe(summary, self.timeout_s)
 
     def _dismiss(self, title: str) -> None:

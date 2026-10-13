@@ -77,6 +77,23 @@ INSTRUCTIONS = (
 ARTIFACT_CAPABILITY = "artifact.export.v1"
 
 
+GUARD_RULES = {
+    "session_stop": " WITH THIS HOST: call it only when the user says to end (\"끝내\", \"종료해\"); never on your own, "
+                    "not even after a failure: leave the Sandbox open and report. The person at this computer is asked "
+                    "first; SUSPICIOUS_CONTENT ends it at once.",
+    "inbox_download": " Use it only when the user gave a URL. If the user only named a file or program, use inbox_import "
+                      "(the user's Downloads folder) instead of searching the web or picking another package; when a "
+                      "similar file is already in Downloads, the person at this computer is asked first.",
+}
+
+
+def guard_descriptions(tools: list[dict]) -> None:
+    """--agent-guard: the rules in the tool descriptions too (an Agent may skip its skill file, not these)."""
+    for t in tools:
+        if t["name"] in GUARD_RULES:
+            t["description"] = t["description"].rstrip() + GUARD_RULES[t["name"]]
+
+
 def load_tool_list(extra_capabilities: set[str] = frozenset()) -> list[dict]:
     tools = []
     for path in sorted(TOOLS_DIR.glob("*.json")):
@@ -213,12 +230,13 @@ class HostBackend(threading.Thread):
                 manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root, audit)
                 downloader = None
                 inbox = getattr(a, "inbox", None)
-                if inbox is not None:
-                    from host.inbox_download import Downloader, check_no_execute
-                    if approver is None:             # inbox_finish asks before keeping files on this PC
+                if inbox is not None or getattr(a, "agent_guard", False):
+                    if approver is None:             # inbox_finish / --agent-guard ask the person first
                         from host.approval import DialogApprover, deny_all
                         approver = self._approver or (DialogApprover() if getattr(a, "approval", "deny") == "dialog"
                                                       else deny_all)
+                if inbox is not None:
+                    from host.inbox_download import Downloader, check_no_execute
                     ok, why = await asyncio.to_thread(check_no_execute, inbox)
                     if not ok and not getattr(a, "inbox_skip_exec_check", False):   # tests only
                         raise RuntimeError(f"inbox {inbox}: {why}")
@@ -251,7 +269,7 @@ class HostBackend(threading.Thread):
                     log.info("sandbox_run on: downloads run inside the Sandbox after approval of the exact command")
                 self.broker = Broker(self.session, audit=audit, launcher=self.launcher, policy=policy,
                                      artifacts=self.artifacts, approver=approver, inbox=downloader,
-                                     runner=self.runner)
+                                     runner=self.runner, guard=bool(getattr(a, "agent_guard", False)))
                 log.info("Host ready: wss://%s:%d%s, session %s; the Sandbox starts at task_submit (Runner %s)",
                          a.host, port, CONTROL_PATH, identity[0], a.runner_exe)
             else:
@@ -440,6 +458,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--sandbox-run", action="store_true",
                     help="with --inbox and --artifact-export: sandbox_run runs downloads inside the Sandbox "
                          "after the person at this computer approves the exact command")
+    ap.add_argument("--agent-guard", action="store_true",
+                    help="for an Agent app such as Codex: ask the person at this computer before the Agent ends "
+                         "the Sandbox or downloads another file when a similar one is already in Downloads")
     ap.add_argument("--sandbox-root", type=Path, default=None,
                     help="Sandbox Manager workspace (default %%LOCALAPPDATA%%/SecureCUA/sandbox-manager)")
     ap.add_argument("--cert-dir", type=Path, default=HOST_DIR / ".certs")
@@ -469,7 +490,10 @@ def main(argv: list[str] | None = None) -> None:
     _setup_logging(args.log_file)
 
     extra = ({ARTIFACT_CAPABILITY} if args.artifact_export else set()) | ({"host.inbox"} if args.inbox else set())         | ({"host.sandbox_run"} if args.sandbox_run else set())
-    server = McpServer(HostBackend(args), load_tool_list(extra))
+    tools = load_tool_list(extra)
+    if args.agent_guard:
+        guard_descriptions(tools)
+    server = McpServer(HostBackend(args), tools)
     log.info("MCP server up (pid %s), %d tools", __import__("os").getpid(), len(server.tools))
     out = sys.stdout.buffer
     for line in sys.stdin.buffer:
