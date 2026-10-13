@@ -215,6 +215,10 @@ class HostBackend(threading.Thread):
                 inbox = getattr(a, "inbox", None)
                 if inbox is not None:
                     from host.inbox_download import Downloader, check_no_execute
+                    if approver is None:             # inbox_finish asks before keeping files on this PC
+                        from host.approval import DialogApprover, deny_all
+                        approver = self._approver or (DialogApprover() if getattr(a, "approval", "deny") == "dialog"
+                                                      else deny_all)
                     ok, why = await asyncio.to_thread(check_no_execute, inbox)
                     if not ok and not getattr(a, "inbox_skip_exec_check", False):   # tests only
                         raise RuntimeError(f"inbox {inbox}: {why}")
