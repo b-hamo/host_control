@@ -235,8 +235,18 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 
 ```powershell
 # Codex 등록 인자에 추가 (--inbox, --artifact-export와 같이)
---runner-exe <sandbox_runner.exe> --inbox <받는 폴더> --artifact-export --sandbox-run
+--runner-exe <sandbox_runner.exe> --inbox <받는 폴더> --artifact-export --sandbox-run --agent-guard
 ```
+
+`--agent-guard` (코덱스 같은 Agent 앱용, 2026-10-13): 코덱스 앱 시험에서 Agent가 규칙 파일을 건너뛰고 스스로 세션을 끝내거나,
+다운로드 폴더에 있는 파일 대신 웹에서 다른 설치 파일을 받은 일이 있어서 다음은 **PC 확인 창**을 거친다(45초 무응답 = 아니요).
+
+| Agent가 하려는 것 | 정책 | "아니요"면 |
+|---|---|---|
+| `session_stop` (`SUSPICIOUS_CONTENT` 제외: 보안 종료는 바로) | `P-SESSION-STOP` | Sandbox 유지, Agent에 "사용자가 끝내라고 할 때만" |
+| `inbox_download`인데 다운로드 폴더에 이름이 비슷한 파일이 있음 | `P-INBOX-DUPLICATE` | 받지 않음, "inbox_import로 그 파일을" |
+
+같은 규칙을 두 도구의 설명에도 붙인다(Agent는 규칙 파일을 건너뛰어도 도구 설명은 본다). 옵션을 빼면 지금까지와 같다.
 
 | 단계 | 누가 | 무엇을 |
 |---|---|---|

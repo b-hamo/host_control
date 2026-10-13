@@ -212,6 +212,21 @@ class Downloader:
         return {"source": "Downloads\\" + Path(got["source"]).name, "file": f,
                 "sandbox_path": f"{GUEST_INPUT}\\{f['name']}", "inbox_path": f"{GUEST_INBOX}\\{f['name']}"}
 
+    def similar(self, url: str) -> list[str]:
+        """Files directly in Downloads that look like the one at `url`: the same name, or one name starts
+        the other ("tailscale-setup-1.102.4.exe" / "tailscale-setup-1.102.4-amd64.msi"). Names only."""
+        from sandbox_manager.importer import downloads_folder
+        want = PureWindowsPath(urllib.parse.unquote(urllib.parse.urlsplit(url).path)).stem.lower()
+        if len(want) < 6:
+            return []
+        try:
+            entries = list((self.downloads or downloads_folder()).iterdir())
+        except OSError:
+            return []
+        found = [p.name for p in entries if p.is_file() and len(p.stem) >= 6
+                 and (p.stem.lower() == want or want.startswith(p.stem.lower()) or p.stem.lower().startswith(want))]
+        return sorted(found)[:5]
+
     def finish(self, keep: list[str]) -> dict:
         """inbox_finish: copy the kept items to Downloads (marked as from the Internet), then empty the inbox.
         Copied, not moved: a moved file would carry the inbox's deny-execute ACE along. If any name is
