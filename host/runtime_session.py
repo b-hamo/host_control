@@ -32,12 +32,11 @@ from typing import Callable
 
 from host.connection import Connection
 from host.observation_store import ObservationUploads, Screenshot
+from host.policy import POLICY_VERSION
 from host.startup import StartupProfile, StartupReport, check_hello, verify_runtime
 from scrp.validate import ProtocolError
 
 log = logging.getLogger("host-sender")
-
-POLICY_VERSION = "POL-0.1.0"
 
 HEARTBEAT_INTERVAL_S = 5.0     # protocol doc §7: every 5 s
 ALIVE_TIMEOUT_S = 3.0          # ALIVE within 3 s
