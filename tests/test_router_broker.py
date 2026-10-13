@@ -36,7 +36,7 @@ class InputOnlyDriver:
 def test_broker_policy_denial_stops_before_runner(certs, setup):
     async def body(broker, runner):
         action = execution()
-        host = setup([action], sandbox=BrokerSandbox(broker, InputOnlyDriver(["win", "r"])))
+        host = setup([action], sandbox=BrokerSandbox(broker, InputOnlyDriver(["win", "x"])))
         result = await host.submit(Request("boundary-denied", action))
         assert result.state == State.DENIED
         assert runner.requests == []

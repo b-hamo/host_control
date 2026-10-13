@@ -13,15 +13,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Sent in every ACTION_REQUEST. The Runner binds its input grant to exactly "POL-0.1.0"
-# (sandbox_runner src/host_gui.cpp) and refuses any other value, so a new version needs the
-# Runner changed first; RouterGuiPolicy reports this same version (router_gui_policy.py).
-POLICY_VERSION = "POL-0.1.0"
+# Sent in every ACTION_REQUEST. The Runner binds its input grant to exactly this value
+# (sandbox_runner src/host_gui.cpp, POL-0.1.1 since sandbox_runner #32) and refuses any other,
+# so both sides change together; RouterGuiPolicy reports this same version (router_gui_policy.py).
+POLICY_VERSION = "POL-0.1.1"
 
-# Key combinations that open a command, admin or security surface. The tool
-# surface has no shell on purpose (spec B-1); these would be a way around it.
+# Key combinations that open an admin or security surface. Since POL-0.1.1 (team decision,
+# 2026-10-13) Win+R is allowed: the Agent may open the Run dialog inside the Sandbox itself.
+# A sandbox_run still types only its own approved line while it holds the launch.
 DENIED_HOTKEYS = {
-    frozenset({"win", "r"}): "opens the Run dialog",
     frozenset({"win", "x"}): "opens the admin power-user menu",
     frozenset({"ctrl", "alt", "delete"}): "opens the Windows security screen",
     frozenset({"ctrl", "shift", "escape"}): "opens Task Manager",

@@ -91,7 +91,7 @@ Agent의 도구 호출은 모두 `Broker.call(tool, arguments)` 하나로 들어
 | 2 | 입력 스키마 (타입·필수·enum·길이·범위, 모르는 필드 거부). 생략한 선택 인자는 기본값으로 채움 | `INVALID_ARGUMENT` | B-2 |
 | 3 | 세션: 종료됐나, READY인가, `task_submit`을 먼저 했나 | `SESSION_TERMINATED` / `RUNTIME_UNAVAILABLE` / `POLICY_DENIED` | B-3 |
 | 4 | 호출 빈도: 관찰 초당 2회, 입력 초당 5회, 제어 초당 5회. 기다리게 하지 않고 바로 거절 | `RATE_LIMITED` (+`retry_after`) | B-7 |
-| 5 | 정책: DENY 규칙(예: Win+R 등 명령 실행 창을 여는 단축키), 승인 필요 도구 | `POLICY_DENIED` (+`rule_id`) | B-5, B-8 |
+| 5 | 정책: DENY 규칙(Win+X, Ctrl+Alt+Delete, Ctrl+Shift+Escape), 승인 필요 도구. Win+R은 허용 | `POLICY_DENIED` (+`rule_id`) | B-5, B-8 |
 | 6 | 좌표가 마지막 화면 안인가, 화면이 10초 이내인가, 글자가 4 KiB 이하인가 | `INVALID_ARGUMENT` / `STALE_OBSERVATION` | 프로토콜 §6 |
 | 7 | Action ID 발급 → SCRP 메시지로 변환해 전송 (`computer_click` → `mouse.click`) | | B-4 |
 | 8 | 결과·오류를 표준 형식으로: `error`, `message`, `retryable`, `retry_after`, `recommended_next_step` | | B-10 |
@@ -99,7 +99,8 @@ Agent의 도구 호출은 모두 `Broker.call(tool, arguments)` 하나로 들어
 
 - Broker는 입력을 **절대 다시 보내지 않는다.** `ACTION_TIMEOUT`이면 `recommended_next_step: runtime_get_state`로 Agent가 먼저 확인하게 한다
 - Agent는 `session_id`를 넘기지 않는다. Broker 하나가 세션 하나에 묶인다 (다른 세션 조작 불가)
-- 데모: `python host/sender.py --demo broker` — 도구 호출 9개 중 3개(작업 등록 전 관찰, 화면 밖 클릭, Win+R)가 거부되고 Runner에는 2개만 도착한다. 감사 로그는 `host/.audit/<session>.jsonl`
+- Win+R은 Sandbox 안 실행 창을 여는 일반 GUI 입력으로 허용한다(`POL-0.1.1`, 팀 결정 2026-10-13). Runner도 `POL-0.1.1`을 받아야 해서(sandbox_runner #32) 두 쪽 버전이 다르면 모든 입력이 거부된다. `task_submit`·READY·최신 관찰 등 기존 입력 조건은 그대로 적용된다. Sandbox 생성 설정이 아니라 Host Broker의 입력 정책이 결정하므로, 변경된 Host로 새 세션을 시작해야 한다.
+- 데모: `python host/sender.py --demo broker` — 도구 호출 9개 중 3개(작업 등록 전 관찰, 화면 밖 클릭, Win+X)가 거부되고 Runner에는 2개만 도착한다. 감사 로그는 `host/.audit/<session>.jsonl`
 
 ## MCP Server와 Codex 연결 (WBS 5.7)
 
@@ -253,7 +254,7 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 | 출처 | Host | Agent 말이 아니라 **Host가 받을 때 남긴 기록**(최종 주소, SHA-256). 파일이 바뀌었으면 거부 |
 | 승인 | 사람 (Host 화면) | 파일·받은 주소·해시·**정확한 실행 명령 전체**를 보여 주는 창(`P-SANDBOX-RUN`, 45초, 무응답은 거부). "예"일 때만 그 명령 지문에 묶인 위임(Router `Authority`)을 이번 한 번 만든다 |
 | 전달 | Host | 도우미(`sandbox_run_guest.ps1`)와 명령서를 받는 폴더(`C:\Inbox`, 읽기 전용)로. 실행 파일은 Sandbox 지킴이가 해시를 확인한 `Desktop\Input` 사본 |
-| 실행 | Host → Runner | Router의 `RouterGuiPolicy`가 **이 명령의 Win+R → 한 줄 입력 → Enter 세 입력만** 허용. Enter 직전에 파일·도우미·위임을 다시 확인. 평소에는 Agent가 Win+R을 못 누른다(`P-DENY-HOTKEY` 그대로).<br>입력 전후로 화면을 비교한다: 실행 창이 화면에 나타난 뒤에만 한 줄을 입력하고, 그 줄이 화면에 보인 뒤에만 Enter (Runner가 앞 창을 알려 주지 못해서, 작업 표시줄을 뺀 스크린샷 행 비교). 안 보이면 거기서 멈춘다(`LAUNCH_SURFACE_NOT_SEEN`, `LAUNCH_TEXT_NOT_SEEN`) |
+| 실행 | Host → Runner | Router의 `RouterGuiPolicy`가 **이 명령의 Win+R → 한 줄 입력 → Enter 세 입력만** 허용. Enter 직전에 파일·도우미·위임을 다시 확인. 실행 중에는 다른 입력이 끼어들지 못한다. `POL-0.1.1`부터 Agent도 Win+R 자체는 쓸 수 있어서, 승인·출처 기록·영수증이 남는 실행은 `sandbox_run`을 거친 것뿐이다.<br>입력 전후로 화면을 비교한다: 실행 창이 화면에 나타난 뒤에만 한 줄을 입력하고, 그 줄이 화면에 보인 뒤에만 Enter (Runner가 앞 창을 알려 주지 못해서, 작업 표시줄을 뺀 스크린샷 행 비교). 안 보이면 거기서 멈춘다(`LAUNCH_SURFACE_NOT_SEEN`, `LAUNCH_TEXT_NOT_SEEN`) |
 | 결과 | Guest → Host | 도우미가 영수증(종료 코드, stdout 해시)을 남기면 반출 검사를 거쳐 확인. 이 실행의 영수증·stdout 반출은 따로 묻지 않는다 |
 
 `sandbox_run_status` 상태: `RUNNING`(시작됨, GUI 프로그램은 창이 열려 있는 동안 계속) → `SUCCEEDED`/`FAILED`(영수증 확인, 종료 코드·stdout).

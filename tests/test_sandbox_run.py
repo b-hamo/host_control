@@ -120,15 +120,15 @@ def test_only_downloads_run_and_the_exact_command_is_shown(tmp_path):
 
 
 # --------------------------------------------------------------------- launch
-def test_the_agent_cannot_press_win_r_but_an_approved_run_types_exactly_its_command(tmp_path):
+def test_an_approved_run_types_exactly_its_command(tmp_path):
     runner, inbox = registered(tmp_path)
-    assert runner.policy.decide("computer_hotkey", {"keys": ["win", "r"]}).rule_id == "P-DENY-HOTKEY"
+    assert runner.policy.decide("computer_hotkey", {"keys": ["win", "r"]}).result == "ALLOW"    # POL-0.1.1
     broker = FakeBroker(runner)
     r, _ = asyncio.run(launched(runner, broker, arguments=["/accepteula"]))
     assert r.state == "RUNNING" and r.dispatched
     inputs = [(t, a, rule) for t, a, rule in broker.calls if t != "computer_observe"]
     assert [t for t, _, _ in inputs] == ["computer_hotkey", "computer_type", "computer_keypress"]
-    assert inputs[0][2] == "P-ROUTER-EXACT-COMMAND"
+    assert inputs[0][2] == "P-ALLOW-DEFAULT"
     line = inputs[1][1]["text"]
     assert line.startswith(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe") and len(line) < 259
     assert rf"C:\Inbox\run-{r.nonce}.ps1" in line and rf"-Manifest C:\Inbox\run-{r.nonce}.json" in line
@@ -138,8 +138,9 @@ def test_the_agent_cannot_press_win_r_but_an_approved_run_types_exactly_its_comm
     assert manifest["inputs"] == [{"path": manifest["executable"],
                                    "sha256": hashlib.sha256(b"MZ fake program").hexdigest()}]
     assert (inbox / f"run-{r.nonce}.ps1").read_bytes() == (ROOT / "host" / "sandbox_run_guest.ps1").read_bytes()
-    # after the launch the base rules are back
-    assert runner.policy.decide("computer_hotkey", {"keys": ["win", "r"]}).rule_id == "P-DENY-HOTKEY"
+    # after the launch the base rules are back: admin keys denied, Win+R allowed
+    assert runner.policy.decide("computer_hotkey", {"keys": ["win", "x"]}).rule_id == "P-DENY-HOTKEY"
+    assert runner.policy.decide("computer_hotkey", {"keys": ["win", "r"]}).result == "ALLOW"
 
 
 def test_a_file_changed_before_enter_never_gets_enter(tmp_path):
@@ -321,14 +322,15 @@ def test_download_run_and_result_through_the_mcp_host(tmp_path, server):  # noqa
 
     early, own_win_r, started, status, refused, left, requests, audit = run(body())
     assert early["error"] == "POLICY_DENIED"                                     # task_submit first
-    assert own_win_r["error"] == "POLICY_DENIED" and own_win_r["rule_id"] == "P-DENY-HOTKEY"
+    assert own_win_r["ok"]                                                      # POL-0.1.1: allowed
     assert started["ok"] and started["state"] == "ACCEPTED"
     assert status["state"] == "SUCCEEDED" and status["exit_code"] == 0 and status["stdout"] == "ZoomIt 4.x\n"
     assert refused["error"] == "POLICY_DENIED" and refused["rule_id"] == "P-SANDBOX-RUN"
     assert [c["tool"] for c in approver.calls] == ["sandbox_run", "sandbox_run"]   # result exports asked nobody
     assert approver.calls[0]["command"].endswith(r"Desktop\Input\ZoomIt64.exe")
     ops = [m["payload"]["operation"] for m in requests if m["payload"]["operation"] != "screen.capture"]
-    assert ops == ["keyboard.hotkey", "keyboard.type", "keyboard.press"]          # once, never repeated
+    # the Agent's own Win+R, then the run's three inputs, once, never repeated
+    assert ops == ["keyboard.hotkey", "keyboard.hotkey", "keyboard.type", "keyboard.press"]
     assert left == []                                                             # helpers removed
     rec = next(x for x in audit if x["tool"] == "sandbox_run" and x["result"]["ok"])
     assert rec["policy"]["rule_id"] == "P-SANDBOX-RUN" and rec["result"]["run"]["command"][0].endswith("ZoomIt64.exe")

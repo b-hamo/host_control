@@ -134,20 +134,25 @@ def test_codex_to_runner_end_to_end(tmp_path):
             await asyncio.sleep(0.1)
         obs = await c.call("computer_observe")
         click = await c.call("computer_click", {"x": 640, "y": 420})
-        denied = await c.call("computer_hotkey", {"keys": ["win", "r"]})
+        run_dialog = await c.call("computer_hotkey", {"keys": ["win", "r"]})
+        denied = await c.call("computer_hotkey", {"keys": ["win", "x"]})
         typed = await c.call("computer_type", {"text": "안녕하세요"})
         stop_ = await c.call("session_stop", {"reason": "TASK_COMPLETE"})
         assert await asyncio.wait_for(serving, 10) == "terminated"
         await stop(proc)
         audit = (tmp_path / "audit" / f"{boot['session_id']}.jsonl").read_text(encoding="utf-8")
-        return r, obs, click, denied, typed, stop_, audit
+        return r, obs, click, run_dialog, denied, typed, stop_, audit
 
-    r, obs, click, denied, typed, stop_, audit = run(body())
+    r, obs, click, run_dialog, denied, typed, stop_, audit = run(body())
     assert obs["ok"] and obs["width"] == 1280
     assert click["ok"] and click["status"] == "SUCCESS"
+    assert run_dialog["ok"] and run_dialog["status"] == "SUCCESS"
     assert denied["error"] == "POLICY_DENIED" and denied["rule_id"] == "P-DENY-HOTKEY"
     assert typed["ok"] and stop_["ok"]
-    assert r.executed == [click["action_id"], typed["action_id"]]      # the denied hotkey never arrived
+    assert r.executed == [click["action_id"], run_dialog["action_id"], typed["action_id"]]
+    hotkey = next(m for m in r.requests if m["action_id"] == run_dialog["action_id"])
+    assert hotkey["payload"]["operation"] == "keyboard.hotkey"
+    assert hotkey["payload"]["arguments"] == {"keys": ["win", "r"]}
     assert "안녕하세요" not in audit and len(audit.splitlines()) >= 6
 
 

@@ -45,7 +45,7 @@ Sandbox 안 Runner
 | 파일 | 하는 일 | WBS |
 |---|---|---|
 | `broker.py` | **모든 도구 호출의 입구 `Broker.call()`.** 도구 확인 → 입력 검사 → 세션 상태 → 호출 빈도 → 정책 → 좌표·화면 신선도 → Action ID 발급 → SCRP 메시지로 번역·전송 → 오류 정리 → 감사 로그. 하나라도 걸리면 Runner로 보내지 않는다. 입력은 절대 재전송하지 않는다 | 5.6 |
-| `policy.py` | 보안 규칙. 요청마다 ALLOW / REQUIRE_APPROVAL / DENY와 규칙 ID를 정한다 (예: Win+R 거부 `P-DENY-HOTKEY`). 나중에 Translator의 판단이 들어올 자리 | 5.6 |
+| `policy.py` | 보안 규칙. 요청마다 ALLOW / REQUIRE_APPROVAL / DENY와 규칙 ID를 정한다 (예: Win+X 거부 `P-DENY-HOTKEY`, Win+R 허용). 나중에 Translator의 판단이 들어올 자리 | 5.6 |
 | `audit.py` | 호출마다 JSON 한 줄 기록 (`host/.audit/<session>.jsonl`). `computer_type`의 글자는 길이와 SHA-256만 남긴다 | 5.6 |
 
 ## ③ 세션을 관리하는 층
@@ -126,7 +126,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_observation_upload.py` | upload_id(1회용·만료), PNG 검사, HTTPS 수신 거부 코드, 해시·크기 대조, 조작된 업로드 차단, 세션 종료 시 삭제 |
 | `tests/test_sandbox_recovery.py` | Runner만 다시 켜기, 창 닫힘은 다시 안 켬, 먹통이면 Sandbox 새로 켜기, 실패 시 넘어가기·종료, 옛 세대 token 거부, 실제 Sandbox Manager로 재시작 확인 |
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
-| `tests/test_sandbox_run.py` | 받은 파일 실행: 받은 파일만·정확한 명령 표시·바뀐 파일 거부, Agent의 Win+R은 계속 거부·승인된 실행은 세 입력만, Enter 직전 파일·도우미 변조 시 Enter 안 보냄, 영수증 대조, 자기 결과만 승인 없이 반출, MCP 전 구간(승인·거부·감사·도우미 삭제), 옵션 |
+| `tests/test_sandbox_run.py` | 받은 파일 실행: 받은 파일만·정확한 명령 표시·바뀐 파일 거부, 승인된 실행은 세 입력만(Win+R은 `POL-0.1.1`부터 Agent에게도 허용), Enter 직전 파일·도우미 변조 시 Enter 안 보냄, 영수증 대조, 자기 결과만 승인 없이 반출, MCP 전 구간(승인·거부·감사·도우미 삭제), 옵션 |
 | `tests/test_inbox_download.py` | 내려받기: 공개 https만·사설/메타데이터 주소 거부, 확인한 IP로만 접속(두 번째 DNS 없음), 리다이렉트 검사, 크기·개수 한도, 이름 정리·덮어쓰기 없음·MOTW, zip 안 풂, 실행 금지 시험, MCP 경로(정책·감사·쿼리 제거·받는 폴더 연결·감시 시작/종료), 잘못된 옵션 |
 | `tests/test_artifact_export.py` | 파일 반출: Runner 계약 예제 14개, bootstrap 선택, token 종류 분리, Telemetry 없으면 READY 안 됨, 중복 후보, 한글·빈 파일 반출(바이트·해시 일치, 빈 201), 승인 거부, 검사 통과·차단·오류·시간 초과·형식, Runner 거부·결과 불일치·결과 없음, 채널·연결 끊김·세션 종료 취소, 수신 거부 코드, AMSI EICAR 자체 시험 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |
