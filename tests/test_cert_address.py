@@ -152,6 +152,10 @@ def test_mcp_server_writes_the_advertised_address(tmp_path):
         proc.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n')
         proc.stdin.flush()
         proc.stdout.readline()
+        assert not (tmp_path / "bootstrap.json").exists()  # discovery must not claim execution ports
+        proc.stdin.write(b'{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"task_submit","arguments":{"goal":"certificate address test"}}}\n')
+        proc.stdin.flush()
+        assert not json.loads(proc.stdout.readline())["result"]["isError"]
         deadline = time.time() + 20
         while not (tmp_path / "bootstrap.json").exists() and time.time() < deadline:
             time.sleep(0.1)
@@ -160,5 +164,5 @@ def test_mcp_server_writes_the_advertised_address(tmp_path):
         proc.stdin.close()
         proc.wait(10)
     assert boot["host"] == "192.168.208.1"
-    assert "192.168.208.1" in san_of(tmp_path / "certs" / tls.CERT_NAME)
+    assert "192.168.208.1" in san_of(tmp_path / "certs" / boot["session_id"] / tls.CERT_NAME)
     assert boot["host_certificate_sha256"] == tls.fingerprint(boot["host_certificate_pem"])
