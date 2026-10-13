@@ -198,6 +198,32 @@ def test_telemetry_needs_its_own_token_and_is_required_before_ready(tmp_path):
     assert st["runtime_state"] == "PREPARING"
 
 
+def test_the_telemetry_token_outlasts_the_session_but_opens_the_channel_once(tmp_path):
+    """The Runner drops Telemetry once the token's deadline passes, even mid-connection; with a
+    5 minute deadline every export stopped 5 minutes into a session (real Runner 916a6a2)."""
+    from datetime import datetime, timezone
+
+    async def body():
+        host = Host(tmp_path, approver=Approver(), scanner=Scanner())
+        r = host.runner()
+        ack = await r.connect(host.boot["token"])
+        serving = asyncio.create_task(r.serve())
+        await r.open_telemetry()
+        await host.wait_ready()
+        refused = []
+        try:
+            await r.open_telemetry()                                  # still single use
+        except InvalidStatus as e:
+            refused.append(e.response.status_code)
+        await host.close(serving)
+        return ack["payload"]["channel_credentials"]["telemetry"]["expires_at"], refused
+
+    expires_at, refused = run(body())
+    left = datetime.strptime(expires_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)
+    assert left.total_seconds() > 7 * 3600
+    assert refused == [401]
+
+
 def test_startup_fails_without_telemetry_or_without_the_capability(tmp_path):
     async def no_channel():
         host = Host(tmp_path / "a", approver=Approver(), scanner=Scanner(),

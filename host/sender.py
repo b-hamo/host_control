@@ -88,7 +88,7 @@ RESUME_WAIT_S = 60.0        # how long the demo waits for a dropped Runner to co
 
 # W1 PoC default values; the real Lifecycle Manager will issue these per session.
 ALLOWED_CAPABILITIES = ["gui.observe", "gui.input", "ui.automation"]
-TELEMETRY_CREDENTIAL_TTL_S = 300
+TELEMETRY_CREDENTIAL_TTL_S = 8 * 3600     # same as session_registry.TELEMETRY_TTL_S (placeholder, never served)
 
 
 ARTIFACT_CAPABILITY = "artifact.export.v1"      # only for sessions that selected artifact-export-v1

@@ -68,7 +68,7 @@ Sandbox 안 Runner
 | `sender.py` | wss 서버를 열고 Runner 접속을 받는다. 업그레이드 전에 token 확인(401/404), HELLO를 받으면 token을 사용 처리하고 세션에 연결. 시험용 데모(`--demo protocol` / `--demo broker`)도 여기 있다 | 3.4, 4.6 |
 | `telemetry.py` | Telemetry 채널 `/scrp/v1/telemetry` (artifact-export-v1 세션만). 전용 1회용 token, CHANNEL_HELLO/ACK, 후보 SECURITY_EVENT → EVENT_ACK(STORED/REJECTED) | 5.8 |
 | `connection.py` | 연결 1개. 받은 메시지를 검사(세션 신원, connection_id, sequence, message_id·nonce 중복, 시계 오차)하고 요청·응답을 짝 맞춘다. 끊기면 버리고 새로 만든다 | 3.4 |
-| `session_registry.py` | 1회용 token 발급·확인·폐기. 처음 접속용(bootstrap, 5분)과 재접속용(reconnect, 새로 받으면 이전 것 폐기), Telemetry용(telemetry). 채널마다 자기 종류의 token만 받는다. TERMINATE 시 전부 폐기 | 4.6, 4.4 |
+| `session_registry.py` | 1회용 token 발급·확인·폐기. 처음 접속용(bootstrap, 5분)과 재접속용(reconnect, 새로 받으면 이전 것 폐기), Telemetry용(telemetry, 8시간: Runner가 연결 중에도 만료를 검사해 끊기 때문에 세션보다 길게. 여전히 1회용). 채널마다 자기 종류의 token만 받는다. TERMINATE 시 전부 폐기 | 4.6, 4.4 |
 | `tls.py` | TLS 설정(최소 1.2)과 개발용 자체 서명 인증서 생성 (`host/.certs/`) | 4.6 |
 | `bootstrap.py` | Runner가 읽을 접속 안내서 `host/.bootstrap/bootstrap.json` 생성 (세션 값, 포트·경로, token, Host 인증서, 스크린샷 업로드 주소) | 4.6 |
 | `upload_server.py` | 스크린샷을 받는 작은 HTTPS 서버 (17444, `PUT /scrp/v1/observations/<upload_id>`). 제어 채널과 같은 인증서. 크기 제한·시간 제한을 본문을 읽기 전에 건다. WebSocket 라이브러리가 요청 본문을 못 받아서 포트를 따로 쓴다. artifact-export-v1이면 같은 서버에 파일 반출 경로 `PUT /scrp/v1/artifacts/<upload_id>`(Bearer token, 디스크 스트리밍, 빈 201)가 따로 붙는다 | 5.6, 5.8 |

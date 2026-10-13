@@ -27,7 +27,13 @@ TOKEN_TTL_S = 300.0
 # is no message to refresh it mid-connection yet, so it lives longer than the
 # bootstrap token. It is still single use and superseded on every reconnect.
 RECONNECT_TTL_S = 3600.0
-TELEMETRY_TTL_S = 300.0
+# The Runner (telemetry_client.cpp) checks this deadline for as long as the Telemetry channel is
+# open, not only when it connects, and drops the channel once it passes; reconnecting with the same
+# token then fails too. With 300 s every artifact export stopped 5 minutes into a session. The
+# token is still single use (consumed when the channel opens) and only ever travels inside the
+# TLS Control channel (HELLO_ACK), so a long deadline does not let it be used twice; it only has
+# to outlast the session. Runner owner asked to check it only when connecting.
+TELEMETRY_TTL_S = 8 * 3600.0
 CONTROL_KINDS = ("bootstrap", "reconnect")
 TELEMETRY_KINDS = ("telemetry",)
 
