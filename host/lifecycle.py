@@ -350,6 +350,14 @@ class SandboxLauncher:
 
     async def shutdown(self, timeout: float = 60.0) -> None:
         """The Host is exiting (Codex closed stdin): end the session, then stop the Sandbox."""
+        try:
+            async with asyncio.timeout(timeout):
+                await self._shutdown()
+        except asyncio.TimeoutError:
+            log.error("SANDBOX %s not stopped within %.0fs of Host exit", self.session.identity[0], timeout)
+            raise TimeoutError("Sandbox shutdown unconfirmed") from None
+
+    async def _shutdown(self) -> None:
         s = self.session
         if not s.terminated:
             if s.ready.is_set():
@@ -363,7 +371,6 @@ class SandboxLauncher:
             self.session_ended(self.session.identity)
         if self._finish is None:
             return
-        try:
-            await asyncio.wait_for(asyncio.shield(self._finish), timeout)
-        except asyncio.TimeoutError:
-            log.error("SANDBOX %s not stopped within %.0fs of Host exit", s.identity[0], timeout)
+        await asyncio.shield(self._finish)
+        if self.sandbox is not None and (self.cleanup_result is None or self.cleanup_result.get("failed")):
+            raise RuntimeError("Sandbox cleanup unconfirmed")

@@ -266,18 +266,25 @@ class HostBackend(threading.Thread):
                          a.host, upload_port, a.host, port, a.approval if self._approver is None else "injected",
                          self.artifacts.scanner.name, a.export_dir)
             self.ready.set()
-            await self._stop.wait()
-            if self.runner is not None:
-                await self.runner.close()            # removes run helpers from the inbox
-            if self.launcher is not None:
-                await self.launcher.shutdown()
+            try:
+                await self._stop.wait()
+            finally:
+                try:
+                    if self.runner is not None:
+                        await self.runner.close()    # removes run helpers from the inbox
+                finally:
+                    if self.launcher is not None:
+                        await self.launcher.shutdown()
 
     def shutdown(self, timeout: float = 70.0) -> None:
         """Codex closed stdin: end the session and stop the Sandbox before the process exits."""
-        if self.loop is None or self._stop is None or not self.is_alive():
+        if not self.is_alive():
             return
-        self.loop.call_soon_threadsafe(self._stop.set)
+        if self.loop is not None and self._stop is not None and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self._stop.set)
         self.join(timeout)
+        if self.is_alive():
+            raise TimeoutError("Host shutdown unconfirmed")
 
     def call(self, tool: str, arguments: dict) -> dict:
         """Run one tool call on the Host loop and return an MCP CallToolResult."""
