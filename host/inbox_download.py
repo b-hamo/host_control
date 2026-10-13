@@ -90,6 +90,7 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
 class Downloader:
     inbox: Path
     context: ssl.SSLContext | None = None
+    downloads: Path | None = None        # inbox_import's source folder; None = the user's Downloads
     resolver: Resolver = resolve
     allow_private: bool = False          # tests only
     file_max: int = FILE_MAX
@@ -186,6 +187,30 @@ class Downloader:
         return {"source": url, "final_url": final_url,
                 "file": {"name": dst.name, "size": size, "sha256": digest},
                 "sandbox_path": f"{GUEST_INPUT}\\{dst.name}", "inbox_path": f"{GUEST_INBOX}\\{dst.name}"}
+
+    def import_local(self, name: str) -> dict:
+        """inbox_import: copy a file the user already downloaded (directly in Downloads, by name only).
+
+        Every check on the name and the file (no path, no link or hard link, finished, size, unchanged
+        while copied) is sandbox_manager.import_to_inbox's; the original stays where it is."""
+        from sandbox_manager import SandboxManagerError, import_to_inbox
+        files, total = self._inbox_usage()
+        if files >= FILES_MAX:
+            raise DownloadError("POLICY_DENIED", f"inbox already holds {files} files (limit {FILES_MAX})")
+        try:
+            got = import_to_inbox(name, self.inbox, self.downloads)
+        except SandboxManagerError as e:
+            raise DownloadError(e.code, e.message) from None
+        f = got["files"][0]
+        if total + f["size"] > TOTAL_MAX:
+            try:
+                (self.inbox / f["name"]).unlink()
+            except OSError:
+                pass
+            raise DownloadError("POLICY_DENIED", f"inbox would exceed {TOTAL_MAX} bytes")
+        log.info("INBOX import %s -> %s (%d bytes, sha256=%s…)", name, f["name"], f["size"], f["sha256"][:12])
+        return {"source": "Downloads\\" + Path(got["source"]).name, "file": f,
+                "sandbox_path": f"{GUEST_INPUT}\\{f['name']}", "inbox_path": f"{GUEST_INBOX}\\{f['name']}"}
 
 
 def place(inbox: Path, name: str, content: Path | bytes) -> Path:

@@ -1,0 +1,26 @@
+{
+  "name": "inbox_import",
+  "description": "Use a file the user ALREADY HAS in this computer's Downloads folder inside the Sandbox. Give the file name only (e.g. \"tailscale-setup-1.102.4.exe\"), never a path: only files directly in Downloads can be taken. The file is copied (the original stays) into the shared inbox, which the Sandbox sees read-only; a few seconds later it is in the Sandbox desktop folder Input, checked against its SHA-256 (Desktop\\input-check.html shows OK or FAIL). Nothing is opened or run on this computer. When the user names a file or program without giving a URL, use this tool (list the Downloads folder first if unsure of the exact name) instead of searching the web or downloading another package. At most 50 MiB.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "name"
+    ],
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255,
+        "description": "File name in the Downloads folder, without any folder part."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Copy a downloaded file into the Sandbox inbox",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

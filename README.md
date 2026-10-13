@@ -16,7 +16,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 |---|---|---|
 | `host/sender.py` | Host 송신기. Runner 접속 수락, 인증, 데모 실행 | 3.4, 4.6 |
 | `host/mcp_server.py` | MCP Server: Codex가 자식 프로세스로 켜고 stdio로 도구를 부르는 창구 | 5.7 |
-| `host/inbox_download.py` | 받는 폴더(inbox)로 내려받기: Host가 https로 받고 실행은 Sandbox에서만 | 5.9 |
+| `host/inbox_download.py` | 받는 폴더(inbox)로 내려받기: Host가 https로 받고 실행은 Sandbox에서만. 다운로드 폴더에 이미 있는 파일은 `inbox_import`로 복사 | 5.9 |
 | `host/sandbox_run.py` | 받은 파일을 Sandbox 안에서 실행 (GUI 모드 + Router 부품): 사람 승인 → 정확한 명령 하나만 Win+R로 → 영수증 확인 | 7.x |
 | `host/artifacts.py` | 파일 반출 (artifact-export-v1): 후보 등록, 승인 후 업로드 권한, 결과 대조, 검사, 최종 공개, 취소 | 5.8 |
 | `host/telemetry.py` | Telemetry 채널 (`/scrp/v1/telemetry`): 후보 SECURITY_EVENT 수신, EVENT_ACK | 5.8 |
@@ -24,7 +24,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `host/approval.py` | 사용자 승인 창 (Host 화면) | 5.6 |
 | `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
-| `host/tool_catalog.py` | 도구 16개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/tool_catalog.py` | 도구 17개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
 | `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
 | `host/tool_availability.py` | 도구 노출 규칙 (표준 라이브러리만 사용, MCP Server가 빠르게 뜨도록) | 5.7 |
@@ -37,7 +37,7 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
 | `schema/` | Host ↔ Runner 메시지 규격. **Runner도 이 파일을 기준으로 구현** | 2.2, 2.3 |
-| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 16개의 입력 규격 | 2.4 |
+| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 17개의 입력 규격 | 2.4 |
 | `tests/` | 인증·TLS·replay 거부, Heartbeat·재연결, Startup Verification, Broker 자동 테스트 | 4.4~4.6, 5.6 |
 
 규격의 결정 사항과 노션 초기 표와의 차이는 [schema/README.md](schema/README.md)에 있다.
@@ -205,6 +205,7 @@ powershell -ExecutionPolicy Bypass -File <sandbox_manager>\tools\setup_inbox.ps1
 | 단계 | 누가 | 무엇을 |
 |---|---|---|
 | 내려받기 | Agent → Host | `inbox_download(url)` (Broker 경유: 정책 `P-INBOX-DOWNLOAD`, 호출 빈도, 감사). 승인 없음(팀 결정 2026-10-08) |
+| 이미 받아 둔 파일 | Agent → Host | `inbox_import(name)`: 사용자 **다운로드 폴더 바로 안** 파일을 이름만으로 받는 폴더에 **복사**(원본 유지). 정책 `P-INBOX-IMPORT`. 경로·`..`·링크·hard link·받는 중 파일·50 MiB 초과는 거부(검사는 sandbox_manager `import_to_inbox`). 팀 요청 2026-10-10 |
 | 저장 | Host | 임시 폴더에 다 받은 뒤 받는 폴더에 최종 이름으로 바로 씀. 다 쓸 때까지 다른 프로그램이 못 열게 잠금(Sandbox가 켜져 있으면 받는 폴더 안 이름 바꾸기가 막히기 때문), 이름 정리·덮어쓰기 없음, "인터넷에서 받음" 표시(MOTW) |
 | 연결 | Sandbox Manager | 받는 폴더를 Sandbox `C:\Inbox`에 **읽기 전용**으로 계속 연결. 1초마다 다 받아진 파일만 SHA-256과 함께 목록에 올리고, 링크가 생기면 바로 지움 |
 | 확인 | Sandbox 안 지킴이 | 바탕화면 `Input`에 복사 → 해시 비교 → `Desktop\input-check.html`에 OK/FAIL |
@@ -238,7 +239,7 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 
 | 단계 | 누가 | 무엇을 |
 |---|---|---|
-| 요청 | Agent | `sandbox_run(file, arguments, reason)`. 이 세션에서 `inbox_download`로 받은 `.exe`·`.msi`·`.ps1`만 |
+| 요청 | Agent | `sandbox_run(file, arguments, reason)`. 이 세션에서 `inbox_download`로 받거나 `inbox_import`로 가져온 `.exe`·`.msi`·`.ps1`만 |
 | 출처 | Host | Agent 말이 아니라 **Host가 받을 때 남긴 기록**(최종 주소, SHA-256). 파일이 바뀌었으면 거부 |
 | 승인 | 사람 (Host 화면) | 파일·받은 주소·해시·**정확한 실행 명령 전체**를 보여 주는 창(`P-SANDBOX-RUN`, 45초, 무응답은 거부). "예"일 때만 그 명령 지문에 묶인 위임(Router `Authority`)을 이번 한 번 만든다 |
 | 전달 | Host | 도우미(`sandbox_run_guest.ps1`)와 명령서를 받는 폴더(`C:\Inbox`, 읽기 전용)로. 실행 파일은 Sandbox 지킴이가 해시를 확인한 `Desktop\Input` 사본 |

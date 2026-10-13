@@ -22,6 +22,7 @@ REQUIRED_CAPABILITY = {
     "artifact_export": "artifact.export.v1",
     # A Host feature, not a Runtime capability: only when the Host runs with --inbox.
     "inbox_download": "host.inbox",
+    "inbox_import": "host.inbox",          # a file already in the user's Downloads
     # Host feature too (--sandbox-run): runs inbox downloads inside the Sandbox, with approval.
     "sandbox_run": "host.sandbox_run",
     "sandbox_run_status": "host.sandbox_run",

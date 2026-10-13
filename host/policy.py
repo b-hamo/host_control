@@ -44,6 +44,9 @@ class Policy:
             for denied, why in DENIED_HOTKEYS.items():
                 if denied <= combo:
                     return Decision("DENY", "P-DENY-HOTKEY", f"{'+'.join(args['keys'])} {why}")
+        if tool == "inbox_import":
+            return Decision("ALLOW", "P-INBOX-IMPORT", "a file the user already has, copied into the Sandbox inbox; "
+                            "never run on the Host")
         if tool == "inbox_download":
             # Team decision 2026-10-08: no approval. The file only ever runs inside the Sandbox;
             # every download is audited (URL, final URL, SHA-256).
