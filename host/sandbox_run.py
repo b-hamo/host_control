@@ -171,11 +171,13 @@ class SandboxRunner:
 
     # -- what inbox_download fetched ---------------------------------------
     def register(self, download: dict) -> None:
-        """Called by the Broker after a successful inbox_download (the Host's own record)."""
+        """Called by the Broker after a successful inbox_download or inbox_import (the Host's own record)."""
         from host.inbox_download import _strip_query
         f = download["file"]
         source_id = f"DL-{len(self._paths) + 1:04d}"
-        src = Source(source_id, "download:" + _strip_query(download["final_url"]), f["sha256"], "external")
+        reference = ("download:" + _strip_query(download["final_url"]) if "final_url" in download
+                     else "local:" + download["source"])   # inbox_import: the user's Downloads folder
+        src = Source(source_id, reference, f["sha256"], "external")
         path = self.inbox / f["name"]
         self._files[f["name"].casefold()] = (src, path)
         self._paths[source_id] = path

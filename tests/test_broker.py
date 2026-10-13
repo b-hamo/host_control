@@ -29,12 +29,12 @@ CATALOG = ToolCatalog()
 
 
 # --------------------------------------------------------------------- catalog
-def test_catalog_has_the_sixteen_tools():
+def test_catalog_has_the_seventeen_tools():
     assert sorted(CATALOG.names) == sorted([
         "task_submit", "computer_observe", "computer_move", "computer_click", "computer_type",
         "computer_keypress", "computer_hotkey", "computer_scroll", "computer_click_element",
         "runtime_get_state", "artifact_list", "artifact_export", "session_stop", "inbox_download",
-        "sandbox_run", "sandbox_run_status"])
+        "inbox_import", "sandbox_run", "sandbox_run_status"])
 
 
 def test_validate_fills_defaults():

@@ -397,6 +397,17 @@ class Broker:
             if self.runner is not None:
                 self.runner.register(got)            # the Host's own record: what sandbox_run may run
             return got
+        if tool == "inbox_import":
+            from host.inbox_download import DownloadError
+            if self.inbox is None:
+                raise BrokerError("POLICY_DENIED", "inbox_import is not enabled on this Host (--inbox)")
+            try:
+                got = await asyncio.to_thread(self.inbox.import_local, args["name"])
+            except DownloadError as e:
+                raise BrokerError(e.code, e.message) from None
+            if self.runner is not None:
+                self.runner.register(got)            # sandbox_run may run it, like a download
+            return got
         if tool in ("sandbox_run", "sandbox_run_status"):
             from host.sandbox_run import RunError
             if self.runner is None:
@@ -436,6 +447,8 @@ class Broker:
             # What came in, from where (query strings left out: signed URLs carry secrets).
             outcome["download"] = {"source": _strip_query(result.data["source"]),
                                    "final_url": _strip_query(result.data["final_url"]), **result.data["file"]}
+        if result.ok and tool == "inbox_import":
+            outcome["import"] = {"source": result.data["source"], **result.data["file"]}
         if result.ok and tool in ("sandbox_run", "sandbox_run_status"):
             outcome["run"] = {k: result.data[k] for k in ("run_id", "file", "state", "reason", "exit_code")
                               if k in result.data}

@@ -38,7 +38,7 @@ Sandbox 안 Runner
 |---|---|---|
 | `mcp_server.py` | Codex가 자식 프로세스로 켜는 MCP Server. `tools/list`에 도구 목록을 주고, `tools/call`을 Broker에 넘겨 결과를 돌려준다. 켜질 때 ④층(wss 서버, 세션 등록, bootstrap 파일)도 함께 시작한다 | 5.7 |
 | `tool_availability.py` | 이 세션에서 보여줄 도구를 정하는 규칙. Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 빼버리므로, 무거운 라이브러리 없이 쓸 수 있게 따로 뺐다 | 5.7 |
-| `tool_catalog.py` | `schema/mcp-tools/`의 도구 16개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
+| `tool_catalog.py` | `schema/mcp-tools/`의 도구 17개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
 
 ## ② 요청을 검사하는 층 (Broker)
 
