@@ -256,7 +256,7 @@ class HostBackend(threading.Thread):
                 manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root, audit)
                 downloader = None
                 inbox = getattr(a, "inbox", None)
-                if inbox is not None or getattr(a, "agent_guard", False):
+                if inbox is not None or getattr(a, "agent_guard", False) or getattr(a, "shared", None) is not None:
                     if approver is None:             # inbox_finish / --agent-guard ask the person first
                         from host.approval import DialogApprover, deny_all
                         approver = self._approver or (DialogApprover() if getattr(a, "approval", "deny") == "dialog"
@@ -280,7 +280,9 @@ class HostBackend(threading.Thread):
                                                 inbox=inbox, inbox_watcher=getattr(a, "inbox_watcher", None),
                                                 shared_root=getattr(a, "shared", None),
                                                 shared_watcher=getattr(a, "shared_watcher", None),
-                                                finish_shared=getattr(a, "finish_shared", None))
+                                                finish_shared=getattr(a, "finish_shared", None),
+                                                shared_chooser=getattr(a, "shared_chooser", None)
+                                                or getattr(approver, "choose_shared", None))
                 policy = None
                 if getattr(a, "sandbox_run", False):
                     # Router parts in GUI mode: its policy wraps the base one (Win+R only for an

@@ -33,10 +33,12 @@ RUN_TITLE = "SCRP Sandbox 실행 승인"
 KEEP_TITLE = "SCRP 파일 남기기 확인"
 STOP_TITLE = "SCRP Sandbox 종료 확인"
 DUPLICATE_TITLE = "SCRP 내려받기 확인"
+SHARED_TITLE = "SCRP 공유 폴더 남기기"
 MAX_COMMAND_SHOWN = 1500           # the whole command or no approval at all (never cut short)
 MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2 = 0x4, 0x30, 0x100
+MB_YESNOCANCEL, MB_DEFBUTTON3 = 0x3, 0x200
 MB_SYSTEMMODAL, MB_SETFOREGROUND, MB_TOPMOST = 0x1000, 0x10000, 0x40000
-IDYES, IDNO = 6, 7
+IDYES, IDNO, IDCANCEL = 6, 7, 2
 WM_COMMAND = 0x0111
 MAX_SHOWN = 200
 
@@ -95,6 +97,23 @@ def describe_duplicate(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> 
     return "\n".join(lines)
 
 
+def describe_shared(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
+    """--shared at session end: what the Sandbox saved in its shared folder passed the scan; keep it?"""
+    files = summary.get("files") or []
+    total = sum(f.get("size", 0) for f in files)
+    lines = ["Sandbox가 공유 폴더(바탕화면 Shared)에 저장한 파일이 있습니다. 백신 검사는 통과했습니다.", ""]
+    lines += [f"  {_clean(f.get('name', ''))}  ({f.get('size', 0):,} bytes)" for f in files[:15]]
+    if len(files) > 15:
+        lines.append(f"  ... 외 {len(files) - 15}개")
+    lines += [f"  합계 {len(files)}개, {total:,} bytes", "",
+              "이 컴퓨터에 남길까요?",
+              "  예: 다운로드\\SandboxShared 폴더로 복사 (인터넷에서 받은 파일로 표시, 실행할 때 Windows가 한 번 더 물음)",
+              "  아니요: 지움",
+              f"  취소 또는 {timeout_s:.0f}초 무응답: 지우지 않고 공유 폴더에 실행 금지 상태로 보관",
+              f"  ({_clean(summary.get('share', ''))})"]
+    return "\n".join(lines)
+
+
 def describe(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
     lines = ["AI(Codex)가 Sandbox 안의 파일을 이 컴퓨터로 반출하려고 합니다.", ""]
     if summary.get("path"):
@@ -131,6 +150,21 @@ class DialogApprover:
                  "approved" if approved else "denied")
         return approved
 
+    async def choose_shared(self, summary: dict) -> str:
+        """--shared at session end: "keep" (Yes), "delete" (No), "hold" (Cancel, no answer, or no dialog)."""
+        async with self._lock:
+            self._seq += 1
+            title = f"{SHARED_TITLE} #{self._seq}"
+            try:
+                answer = await asyncio.to_thread(self._ask_code, describe_shared(summary, self.timeout_s), title,
+                                                 MB_YESNOCANCEL | MB_DEFBUTTON3)
+            except asyncio.CancelledError:
+                self._dismiss(title, IDCANCEL)
+                raise
+        choice = {IDYES: "keep", IDNO: "delete"}.get(answer, "hold")
+        log.info("APPROVAL shared folder %s: %s", summary.get("share"), choice)
+        return choice
+
     def _question(self, summary: dict) -> tuple[str, str | None]:
         """(dialog title, text) for this tool; text None = cannot be shown in full, so no."""
         tool = summary.get("tool")
@@ -144,8 +178,9 @@ class DialogApprover:
             return DUPLICATE_TITLE, describe_duplicate(summary, self.timeout_s)
         return TITLE, describe(summary, self.timeout_s)
 
-    def _dismiss(self, title: str) -> None:
-        """Press "No" on the dialog with this title (in the background; it may still be opening)."""
+    def _dismiss(self, title: str, button: int = None) -> None:
+        """Press "No" (or button) on the dialog with this title (in the background; it may still be opening)."""
+        button = IDNO if button is None else button
         if sys.platform != "win32":
             return
 
@@ -155,22 +190,25 @@ class DialogApprover:
             for _ in range(40):                     # up to 2 s for the window to exist
                 hwnd = user32.FindWindowW(None, ctypes.c_wchar_p(title))
                 if hwnd:
-                    user32.PostMessageW(hwnd, WM_COMMAND, IDNO, 0)
+                    user32.PostMessageW(hwnd, WM_COMMAND, button, 0)
                     return
                 time.sleep(0.05)
         threading.Thread(target=press_no, name="approval-dismiss", daemon=True).start()
 
     def _ask(self, text: str, title: str = TITLE) -> bool:
+        return self._ask_code(text, title, MB_YESNO | MB_DEFBUTTON2) == IDYES
+
+    def _ask_code(self, text: str, title: str, buttons: int) -> int:
+        """The button pressed (IDYES, IDNO, IDCANCEL), or 0 without Windows, 32000 on timeout."""
         if sys.platform != "win32":
-            log.warning("approval dialog needs Windows; denying")
-            return False
+            log.warning("approval dialog needs Windows; no answer")
+            return 0
         import ctypes
         user32 = ctypes.WinDLL("user32")
-        flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
+        flags = buttons | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
         # MessageBoxTimeoutW: exported by user32 since Windows XP; returns 32000 on timeout.
-        answer = user32.MessageBoxTimeoutW(None, ctypes.c_wchar_p(text), ctypes.c_wchar_p(title),
-                                           flags, 0, int(self.timeout_s * 1000))
-        return answer == IDYES
+        return user32.MessageBoxTimeoutW(None, ctypes.c_wchar_p(text), ctypes.c_wchar_p(title),
+                                         flags, 0, int(self.timeout_s * 1000))
 
 
 async def deny_all(summary: dict) -> bool:
