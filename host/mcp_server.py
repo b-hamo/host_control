@@ -89,6 +89,20 @@ GUARD_RULES = {
 }
 
 
+SHARED_RULE = (" WITH THIS HOST: anything the user wants on this computer too (a portable program, a PDF, a "
+               "result file) goes in the Sandbox's Desktop\\Shared folder (unzip or save it there; it runs there "
+               "as usual). It appears on this computer at once, where it cannot run; when the session ends it is "
+               "scanned for malware and copied to the user's Downloads\\SandboxShared folder. Installed programs "
+               "(services, drivers) cannot come along: only files.")
+
+
+def shared_description(tools: list[dict]) -> None:
+    """--shared: tell the Agent where to save what should reach this computer."""
+    for t in tools:
+        if t["name"] == "task_submit":
+            t["description"] = t["description"].rstrip() + SHARED_RULE
+
+
 def guard_descriptions(tools: list[dict]) -> None:
     """--agent-guard: the rules in the tool descriptions too (an Agent may skip its skill file, not these)."""
     for t in tools:
@@ -263,7 +277,10 @@ class HostBackend(threading.Thread):
                                                 self.session, publish, new_session=sessions.get,
                                                 on_switch=switch,
                                                 auto_recover=not getattr(a, "no_auto_restart", False),
-                                                inbox=inbox, inbox_watcher=getattr(a, "inbox_watcher", None))
+                                                inbox=inbox, inbox_watcher=getattr(a, "inbox_watcher", None),
+                                                shared_root=getattr(a, "shared", None),
+                                                shared_watcher=getattr(a, "shared_watcher", None),
+                                                finish_shared=getattr(a, "finish_shared", None))
                 policy = None
                 if getattr(a, "sandbox_run", False):
                     # Router parts in GUI mode: its policy wraps the base one (Win+R only for an
@@ -530,6 +547,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--inbox", type=Path, default=None,
                     help="with --runner-exe: shared download folder, mapped read-only into the Sandbox "
                          "(prepare it once with sandbox_manager tools/setup_inbox.ps1); enables inbox_download")
+    ap.add_argument("--shared", type=Path, default=None,
+                    help="with --runner-exe: root of the per-session shared folders (each mapped writable at "
+                         "C:\\Shared; nothing in it runs here; scanned and copied to Downloads\\SandboxShared at "
+                         "session end). Prepare it like the inbox: under a folder set up by setup_inbox.ps1")
     ap.add_argument("--sandbox-run", action="store_true",
                     help="with --inbox and --artifact-export: sandbox_run runs downloads inside the Sandbox "
                          "after the person at this computer approves the exact command")
@@ -556,6 +577,18 @@ def main(argv: list[str] | None = None) -> None:
                 args.inbox = check_inbox_root(args.inbox)
             except SandboxManagerError as e:
                 ap.error(f"--inbox: {e.message}")
+        if args.shared is not None:
+            from sandbox_manager import SandboxManagerError
+            from sandbox_manager.inbox import check_inbox_root
+            try:
+                args.shared = check_inbox_root(args.shared)
+            except SandboxManagerError as e:
+                ap.error(f"--shared: {e.message}")
+            if args.inbox is not None and (args.shared == args.inbox or args.inbox in args.shared.parents
+                                           or args.shared in args.inbox.parents):
+                ap.error("--shared must be separate from --inbox")
+    elif args.shared is not None:
+        ap.error("--shared needs --runner-exe (the folder is mapped into the Sandbox it starts)")
     elif args.inbox is not None:
         ap.error("--inbox needs --runner-exe (the inbox is mapped into the Sandbox it starts)")
     elif args.bootstrap_out is None:
@@ -569,6 +602,8 @@ def main(argv: list[str] | None = None) -> None:
     tools = load_tool_list(extra)
     if args.agent_guard:
         guard_descriptions(tools)
+    if args.shared is not None:
+        shared_description(tools)
     server = McpServer(McpRuntime(args, HostBackend), tools, strict_tools=True)
     log.info("MCP server up (pid %s), %d tools", __import__("os").getpid(), len(server.tools))
     out = sys.stdout.buffer
