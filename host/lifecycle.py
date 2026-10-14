@@ -33,6 +33,13 @@ mapped read-only and live into the Sandbox at prepare(), and the Sandbox
 Manager's InboxWatcher lists each finished file for the Guest every second
 until the session is stopped.
 
+Shared folder (optional, --shared, 배주한 요청 2026-10-15): each session gets a
+new folder under the --shared root, mapped writable at C:\\Shared. The Guest
+copies its Desktop\\Shared there, so portable programs and files the Agent
+saves appear on this computer, where nothing in that folder can run. At
+session end sandbox_manager.finish_shared scans it with Microsoft Defender and
+copies a clean folder to Downloads\\SandboxShared\\<session> (status()["shared"]).
+
 The Host part the Sandbox Manager cannot do (certificate with the address in
 its SAN, token, bootstrap.json) is the `publish` callable:
     publish(host_address, bootstrap_path, identity) -> certificate PEM
@@ -82,9 +89,16 @@ class SandboxLauncher:
                  new_session: Callable[[Identity], RuntimeSession] | None = None,
                  on_switch: Callable[[RuntimeSession, str], None] | None = None,
                  auto_recover: bool = True, runner_exit_wait_s: float = RUNNER_EXIT_WAIT_S,
-                 inbox: Path | None = None, inbox_watcher=None):
+                 inbox: Path | None = None, inbox_watcher=None,
+                 shared_root: Path | None = None, shared_watcher=None, finish_shared=None):
         self.manager = manager
         self.inbox = Path(inbox) if inbox is not None else None
+        self.shared_root = Path(shared_root) if shared_root is not None else None
+        self.shared: Path | None = None              # this session's folder under shared_root
+        self.shared_result: dict | None = None       # finish_shared() at session end
+        self._make_shared_watcher = shared_watcher   # default: sandbox_manager.SharedWatcher
+        self._finish_shared = finish_shared          # default: sandbox_manager.finish_shared
+        self._shared_watcher = None
         # (manager, sandbox) -> object with start()/stop(); default: sandbox_manager.inbox.InboxWatcher
         self._make_watcher = inbox_watcher
         self._watcher = None
@@ -108,8 +122,12 @@ class SandboxLauncher:
         self._finish: asyncio.Task | None = None
 
     def status(self) -> dict:
-        return {"state": self.state, "host_address": self.host_address, "error": self.error,
-                "generation": self.session.identity[2], "recoveries": list(self.recoveries)}
+        st = {"state": self.state, "host_address": self.host_address, "error": self.error,
+              "generation": self.session.identity[2], "recoveries": list(self.recoveries)}
+        if self.shared_root is not None:
+            st["shared"] = {"guest_folder": "Desktop\\Shared", "host_folder": str(self.shared) if self.shared else None,
+                            "at_end": self.shared_result}
+        return st
 
     def hint(self) -> str | None:
         """What the Agent should do while the runtime is not READY."""
@@ -137,13 +155,22 @@ class SandboxLauncher:
     async def _run_launch(self) -> None:
         s = self.session
         try:
-            if self.inbox is None:
+            if self.shared_root is not None:
+                from sandbox_manager import make_share
+                self._alive()
+                self.shared = await asyncio.to_thread(make_share, self.shared_root, s.identity[0])
+                log.info("SHARED %s: %s mapped writable at C:\\Shared", s.identity[0], self.shared)
+            extra = {k: v for k, v in (("inbox", self.inbox), ("shared", self.shared)) if v is not None}
+            if not extra:
                 self.sandbox = await self._call(self.manager.prepare, *s.identity, self.runner_exe)
             else:
                 self._alive()
                 self.sandbox = await asyncio.to_thread(
-                    lambda: self.manager.prepare(*s.identity, self.runner_exe, inbox=self.inbox))
-                self._start_watcher()
+                    lambda: self.manager.prepare(*s.identity, self.runner_exe, **extra))
+                if self.inbox is not None:
+                    self._start_watcher()
+                if self.shared is not None:
+                    self._start_shared_watcher()
             self.host_address = await self._call(self.manager.start, self.sandbox)
             log.info("SANDBOX %s started, Host address for the Runner: %s", s.identity[0], self.host_address)
             await self._publish()
@@ -178,6 +205,33 @@ class SandboxLauncher:
         if self._watcher is not None:
             self._watcher.stop()
             self._watcher = None
+        if self._shared_watcher is not None:
+            self._shared_watcher.stop()
+            self._shared_watcher = None
+
+    def _start_shared_watcher(self) -> None:
+        if self._make_shared_watcher is None:
+            from sandbox_manager import SharedWatcher
+            self._make_shared_watcher = SharedWatcher
+        self._shared_watcher = self._make_shared_watcher(self.manager, self.sandbox)
+        self._shared_watcher.start()
+
+    def _end_shared(self, session_id: str) -> None:
+        """Session over: scan the shared folder; a clean one is copied to Downloads\\SandboxShared."""
+        try:
+            if self._finish_shared is None:
+                from sandbox_manager import finish_shared
+                self._finish_shared = finish_shared
+            self.shared_result = self._finish_shared(self.shared)
+            r = self.shared_result
+            log.info("SHARED %s at session end: %s, %d files, scan %s, copied to %s", session_id, r["status"],
+                     len(r["files"]), r["scan"], r["dest"])
+            if r["status"] in ("BLOCKED", "QUARANTINED"):
+                log.warning("SECURITY shared folder %s kept where nothing runs: %s", r["share"], r["scan"])
+        except Exception as e:  # noqa: BLE001 - the folder stays where nothing can run
+            self.shared_result = {"status": "QUARANTINED", "share": str(self.shared), "dest": None, "files": [],
+                                  "scan": f"error: {_describe(e)}", "events": []}
+            log.warning("SHARED %s could not be finished: %s", session_id, _describe(e))
 
     async def _publish(self) -> None:
         """Certificate for the address, token and bootstrap for the current generation, then hand over."""
@@ -345,6 +399,8 @@ class SandboxLauncher:
             log.info("SANDBOX %s stopped and cleaned up: %s", s.identity[0], self.cleanup_result)
             if self.inbox is not None:
                 await asyncio.to_thread(self._clear_inbox, s.identity[0])
+            if self.shared is not None:
+                await asyncio.to_thread(self._end_shared, s.identity[0])
         except Exception as e:  # noqa: BLE001 - reported; a Sandbox may still be running
             self.state, self.error = FAILED, _describe(e)
             log.error("SANDBOX %s stop/cleanup failed: %s (check `wsb list`)", s.identity[0], self.error)
