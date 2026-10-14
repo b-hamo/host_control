@@ -90,7 +90,8 @@ class SandboxLauncher:
                  on_switch: Callable[[RuntimeSession, str], None] | None = None,
                  auto_recover: bool = True, runner_exit_wait_s: float = RUNNER_EXIT_WAIT_S,
                  inbox: Path | None = None, inbox_watcher=None,
-                 shared_root: Path | None = None, shared_watcher=None, finish_shared=None):
+                 shared_root: Path | None = None, shared_watcher=None, finish_shared=None,
+                 shared_chooser=None):
         self.manager = manager
         self.inbox = Path(inbox) if inbox is not None else None
         self.shared_root = Path(shared_root) if shared_root is not None else None
@@ -98,6 +99,9 @@ class SandboxLauncher:
         self.shared_result: dict | None = None       # finish_shared() at session end
         self._make_shared_watcher = shared_watcher   # default: sandbox_manager.SharedWatcher
         self._finish_shared = finish_shared          # default: sandbox_manager.finish_shared
+        # async (summary) -> "keep" | "delete" | "hold": the person at this computer (DialogApprover.choose_shared).
+        # None: nobody to ask, so a clean folder is held where it is (배주한 결정 2026-10-15: no answer = hold).
+        self._choose_shared = shared_chooser
         self._shared_watcher = None
         # (manager, sandbox) -> object with start()/stop(); default: sandbox_manager.inbox.InboxWatcher
         self._make_watcher = inbox_watcher
@@ -216,16 +220,27 @@ class SandboxLauncher:
         self._shared_watcher = self._make_shared_watcher(self.manager, self.sandbox)
         self._shared_watcher.start()
 
-    def _end_shared(self, session_id: str) -> None:
-        """Session over: scan the shared folder; a clean one is copied to Downloads\\SandboxShared."""
+    def _end_shared(self, session_id: str, loop) -> None:
+        """Session over (worker thread): scan the shared folder; for a clean one the person chooses keep
+        (copied to Downloads\\SandboxShared), delete, or hold (no answer: left where nothing runs)."""
+        def decide(result: dict) -> str:
+            if self._choose_shared is None:
+                return "hold"
+            summary = {"tool": "shared_finish", "session_id": session_id, "share": result["share"],
+                       "files": result["files"]}
+            # A little longer than the dialog's own timeout; anything else (error, Host exiting) = hold.
+            return asyncio.run_coroutine_threadsafe(self._choose_shared(summary), loop).result(120)
+
         try:
             if self._finish_shared is None:
                 from sandbox_manager import finish_shared
                 self._finish_shared = finish_shared
-            self.shared_result = self._finish_shared(self.shared)
+            self.shared_result = self._finish_shared(self.shared, decide=decide)
             r = self.shared_result
             log.info("SHARED %s at session end: %s, %d files, scan %s, copied to %s", session_id, r["status"],
                      len(r["files"]), r["scan"], r["dest"])
+            if r["status"] == "HELD":
+                log.info("SHARED %s held where nothing runs (no keep/delete answer): %s", session_id, r["share"])
             if r["status"] in ("BLOCKED", "QUARANTINED"):
                 log.warning("SECURITY shared folder %s kept where nothing runs: %s", r["share"], r["scan"])
         except Exception as e:  # noqa: BLE001 - the folder stays where nothing can run
@@ -400,7 +415,7 @@ class SandboxLauncher:
             if self.inbox is not None:
                 await asyncio.to_thread(self._clear_inbox, s.identity[0])
             if self.shared is not None:
-                await asyncio.to_thread(self._end_shared, s.identity[0])
+                await asyncio.to_thread(self._end_shared, s.identity[0], asyncio.get_running_loop())
         except Exception as e:  # noqa: BLE001 - reported; a Sandbox may still be running
             self.state, self.error = FAILED, _describe(e)
             log.error("SANDBOX %s stop/cleanup failed: %s (check `wsb list`)", s.identity[0], self.error)

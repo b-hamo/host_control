@@ -250,8 +250,10 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 
 `--shared <폴더>` (배주한 요청 2026-10-15, sandbox_manager #34): 세션마다 `<폴더>\<세션>`을 새로 만들어 Sandbox `C:\Shared`에
 **쓰기 가능**하게 연결한다. Agent가 Sandbox 바탕화면 `Shared`에 풀거나 저장한 포터블 프로그램·PDF가 몇 초 안에 이 PC에도 보인다
-(여기서는 실행 금지). 세션이 끝나면 Microsoft Defender로 검사해 깨끗하면 `다운로드\SandboxShared\<세션>`으로 복사(인터넷 표시)하고,
-위협·검사 오류면 실행 금지 상태로 그대로 둔다. 결과는 `runtime_get_state`의 `sandbox.shared`. 서비스·드라이버를 까는 설치형은
+(여기서는 실행 금지). 세션이 끝나면 Microsoft Defender로 검사하고, 위협·검사 오류면 실행 금지 상태로 그대로 둔다. 깨끗하면
+**PC 확인 창**(`SCRP 공유 폴더 남기기`, 파일 목록)으로 묻는다: **예** = `다운로드\SandboxShared\<세션>`으로 복사(인터넷 표시),
+**아니요** = 지움, **취소·45초 무응답** = 지우지 않고 공유 폴더에 실행 금지 상태로 보관(배주한 결정 2026-10-15, #68).
+결과는 `runtime_get_state`의 `sandbox.shared`(EXPORTED·DELETED·HELD·BLOCKED·QUARANTINED·EMPTY). 서비스·드라이버를 까는 설치형은
 파일만 와서 이 PC에서 동작하지 않는다. `<폴더>`는 받는 폴더처럼 `setup_inbox.ps1`로 준비한 곳 아래(예: `codex-work\shared`)여야
 하고, 실행이 막히지 않으면 시작을 거부한다. 옵션을 빼면 지금까지와 같다.
 
