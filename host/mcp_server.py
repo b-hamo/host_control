@@ -98,6 +98,18 @@ SHARED_RULE = (" WITH THIS HOST: by default (the user need not ask) install and 
                "and say they stay in the Sandbox. Skip Desktop\\Shared only if the user says Sandbox only.")
 
 
+SAVE_DOWNLOADS_RULE = (" WITH THIS HOST: the downloaded file is also saved in the user's Downloads folder "
+                       "(downloads_copy), like a browser download, and stays there after the session; it is not "
+                       "deleted at the end. Never run it on this computer; it runs in the Sandbox only.")
+
+
+def save_downloads_description(tools: list[dict]) -> None:
+    """--save-downloads: tell the Agent the download also stays in Downloads."""
+    for t in tools:
+        if t["name"] == "inbox_download":
+            t["description"] = t["description"].rstrip() + SAVE_DOWNLOADS_RULE
+
+
 def shared_description(tools: list[dict]) -> None:
     """--shared: tell the Agent where to save what should reach this computer."""
     for t in tools:
@@ -268,7 +280,8 @@ class HostBackend(threading.Thread):
                     ok, why = await asyncio.to_thread(check_no_execute, inbox)
                     if not ok and not getattr(a, "inbox_skip_exec_check", False):   # tests only
                         raise RuntimeError(f"inbox {inbox}: {why}")
-                    downloader = getattr(a, "inbox_downloader", None) or Downloader(Path(inbox))   # tests inject one
+                    downloader = getattr(a, "inbox_downloader", None) or Downloader(   # tests inject one
+                        Path(inbox), save_to_downloads=bool(getattr(a, "save_downloads", False)))
                     log.info("inbox %s: %s; inbox_download on", inbox, why)
                 self.session = sessions.get(identity)      # startup clock starts at task_submit
                 def switch(new_session, notice: str) -> None:
@@ -551,6 +564,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--inbox", type=Path, default=None,
                     help="with --runner-exe: shared download folder, mapped read-only into the Sandbox "
                          "(prepare it once with sandbox_manager tools/setup_inbox.ps1); enables inbox_download")
+    ap.add_argument("--save-downloads", action="store_true",
+                    help="with --inbox: inbox_download also saves a copy in the user's Downloads folder (marked as "
+                         "from the internet) that stays after the session")
     ap.add_argument("--shared", type=Path, default=None,
                     help="with --runner-exe: root of the per-session shared folders (each mapped writable at "
                          "C:\\Shared; nothing in it runs here; scanned and copied to Downloads\\SandboxShared at "
@@ -597,6 +613,8 @@ def main(argv: list[str] | None = None) -> None:
         ap.error("--inbox needs --runner-exe (the inbox is mapped into the Sandbox it starts)")
     elif args.bootstrap_out is None:
         args.bootstrap_out = HOST_DIR / ".bootstrap" / "bootstrap.json"
+    if args.save_downloads and args.inbox is None:
+        ap.error("--save-downloads needs --inbox (it is part of inbox_download)")
     if args.sandbox_run and (args.inbox is None or not args.artifact_export):
         ap.error("--sandbox-run needs --inbox (the file to run) and --artifact-export (its checked result)")
     _setup_logging(args.log_file)
@@ -608,6 +626,8 @@ def main(argv: list[str] | None = None) -> None:
         guard_descriptions(tools)
     if args.shared is not None:
         shared_description(tools)
+    if args.save_downloads:
+        save_downloads_description(tools)
     server = McpServer(McpRuntime(args, HostBackend), tools, strict_tools=True)
     log.info("MCP server up (pid %s), %d tools", __import__("os").getpid(), len(server.tools))
     out = sys.stdout.buffer
