@@ -1,5 +1,5 @@
 jsonschema>=4.26
 websockets>=17
 cryptography>=42
-# Lifecycle 담당의 Sandbox Manager (mcp_server.py --runner-exe 일 때만 사용). develop에 합쳐진 커밋으로 고정
-sandbox_manager @ git+https://github.com/b-hamo/sandbox_manager.git@c8444f717bdafd52e26cb0711bc1dca8db2a492b
+# Sandbox 창 종료 API (#78): sandbox_manager#46 구현 커밋. 선행 PR Squash 병합 후 develop SHA로 갱신
+sandbox_manager @ git+https://github.com/b-hamo/sandbox_manager.git@7645be80c5fe3054b393496e2d65a14e5d4d744c
