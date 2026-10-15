@@ -89,11 +89,13 @@ GUARD_RULES = {
 }
 
 
-SHARED_RULE = (" WITH THIS HOST: anything the user wants on this computer too (a portable program, a PDF, a "
-               "result file) goes in the Sandbox's Desktop\\Shared folder (unzip or save it there; it runs there "
-               "as usual). It appears on this computer at once, where it cannot run; when the session ends it is "
-               "scanned for malware and copied to the user's Downloads\\SandboxShared folder. Installed programs "
-               "(services, drivers) cannot come along: only files.")
+SHARED_RULE = (" WITH THIS HOST: by default (the user need not ask) install and save into the Sandbox's "
+               "Desktop\\Shared folder: set an installer's destination folder to Desktop\\Shared\\<program>, unzip "
+               "portable programs there, save files (PDF, results) there. It runs there as usual. It appears on this "
+               "computer at once, where it cannot run; when the session ends it is scanned for malware and the person "
+               "at this computer chooses: keep (copied to Downloads\\SandboxShared), delete, or no answer = held. "
+               "Installers with no folder choice or with services/drivers cannot come along: install them normally "
+               "and say they stay in the Sandbox. Skip Desktop\\Shared only if the user says Sandbox only.")
 
 
 def shared_description(tools: list[dict]) -> None:
