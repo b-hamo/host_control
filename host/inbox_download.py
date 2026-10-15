@@ -34,6 +34,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import warnings
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Callable
@@ -64,6 +65,51 @@ def resolve(host: str, port: int) -> list[str]:
     except socket.gaierror as e:
         raise DownloadError("INVALID_ARGUMENT", f"cannot resolve {host}: {e}") from None
     return list(dict.fromkeys(info[4][0].split("%")[0] for info in infos))
+
+
+def store_certificates(now=None, enum=None) -> list[bytes]:
+    """The Windows ROOT and CA store certificates Python would trust for servers, minus expired ones.
+
+    Python loads both stores as trust anchors. An expired cross-signed certificate kept in the CA store
+    (2026-10-15 on this PC: "ISRG Root X2" signed by X1, expired 2025-09-15) is then picked before the
+    valid chain the server sends, and the whole download fails with "certificate has expired" although
+    browsers accept the site (www.7-zip.org). Dropping expired ones changes nothing else."""
+    from datetime import datetime, timezone
+
+    from cryptography import x509
+    now = now or datetime.now(timezone.utc)
+    enum = enum or ssl.enum_certificates
+    out = []
+    for store in ("ROOT", "CA"):
+        try:
+            certs = enum(store)
+        except OSError:
+            continue
+        for der, encoding, trust in certs:
+            if encoding != "x509_asn" or not (trust is True or ssl.Purpose.SERVER_AUTH.oid in trust):
+                continue                                   # the same filter as ssl.load_default_certs
+            try:
+                with warnings.catch_warnings():            # some old Windows roots have a non-positive serial
+                    warnings.simplefilter("ignore")
+                    c = x509.load_der_x509_certificate(der)
+            except ValueError:
+                continue
+            if c.not_valid_before_utc <= now <= c.not_valid_after_utc:
+                out.append(der)
+    return out
+
+
+def trust_context() -> ssl.SSLContext:
+    """Normal server verification (hostname, chain) with only certificates that are still valid."""
+    if sys.platform != "win32":
+        return ssl.create_default_context()
+    try:
+        ders = store_certificates()
+    except ImportError:
+        return ssl.create_default_context()
+    if not ders:
+        return ssl.create_default_context()
+    return ssl.create_default_context(cadata=b"".join(ders))
 
 
 def safe_name(name: str, fallback: str = "download.bin") -> str:
@@ -123,7 +169,7 @@ class Downloader:
         return files, total
 
     def fetch(self, url: str, staging: Path) -> tuple[Path, str]:
-        ctx = self.context or ssl.create_default_context()
+        ctx = self.context or trust_context()
         deadline = time.monotonic() + self.deadline_s
         current = url
         for _ in range(MAX_REDIRECTS + 1):
