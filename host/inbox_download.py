@@ -14,12 +14,16 @@ Based on the Lifecycle team's demo tool (sandbox_manager acf5f9f tools/inbox_dow
   - the downloaded file is marked as coming from the Internet (Zone.Identifier, ZoneId=3), so Windows
     and Office treat it as untrusted if someone opens it on the Host anyway
   - the inbox limits (files, total bytes) are checked before anything is written
+  - optional (save_to_downloads, Host --save-downloads, 배주한 결정 2026-10-15): a copy also goes to the
+    user's Downloads folder like a browser download (marked as from the Internet) and stays there after
+    the session; the Sandbox still gets the inbox copy (Downloads itself is never mapped)
 
 Nothing downloaded is ever opened or run on the Host; it is only read to hash it.
 """
 
 from __future__ import annotations
 
+import email.message
 import hashlib
 import http.client
 import ipaddress
@@ -112,6 +116,23 @@ def trust_context() -> ssl.SSLContext:
     return ssl.create_default_context(cadata=b"".join(ders))
 
 
+def pick_name(disposition: str | None, url: str, final_url: str) -> str:
+    """The file's name: the server's Content-Disposition filename, else the last part of the URL the
+    Agent asked for, else of the final URL. 2026-10-15: www.7-zip.org/a/7z2604-x64.exe redirects to a
+    GitHub release asset whose path is a bare id ("4c8fc6ce-...", no .exe); the name says what it is."""
+    if disposition:
+        msg = email.message.Message()
+        msg["Content-Disposition"] = disposition
+        given = msg.get_filename()
+        if given:
+            return safe_name(PureWindowsPath(given.replace("/", "\\")).name)
+    for candidate in (url, final_url):
+        name = PureWindowsPath(urllib.parse.unquote(urllib.parse.urlsplit(candidate).path)).name
+        if PureWindowsPath(name).suffix:
+            return safe_name(name)
+    return safe_name(PureWindowsPath(urllib.parse.unquote(urllib.parse.urlsplit(final_url).path)).name)
+
+
 def safe_name(name: str, fallback: str = "download.bin") -> str:
     name = re.sub(r"[^A-Za-z0-9._-]", "_", name).strip("._") or fallback
     if name.lower().endswith(INCOMPLETE_SUFFIXES):
@@ -141,6 +162,7 @@ class Downloader:
     allow_private: bool = False          # tests only
     file_max: int = FILE_MAX
     deadline_s: float = DEADLINE_S
+    save_to_downloads: bool = False      # --save-downloads: also keep a copy in Downloads
 
     def _check(self, url: str) -> tuple[urllib.parse.SplitResult, str]:
         u = urllib.parse.urlsplit(url)
@@ -192,7 +214,7 @@ class Downloader:
                 length = resp.getheader("Content-Length")
                 if length is not None and int(length) > self.file_max:
                     raise DownloadError("INVALID_ARGUMENT", f"file is {length} bytes (limit {self.file_max})")
-                name = safe_name(PureWindowsPath(urllib.parse.unquote(u.path)).name)
+                name = pick_name(resp.getheader("Content-Disposition"), url, current)
                 out = staging / name
                 total = 0
                 with out.open("wb") as f:
@@ -229,10 +251,34 @@ class Downloader:
             except OSError as e:
                 raise DownloadError("RUNTIME_UNAVAILABLE", f"could not write into the inbox ({type(e).__name__})") from None
             mark_internet(dst, final_url)
+            saved = self._save_copy(got, digest, final_url) if self.save_to_downloads else None
         log.info("INBOX download %s -> %s (%d bytes, sha256=%s…)", _host_of(final_url), dst.name, size, digest[:12])
-        return {"source": url, "final_url": final_url,
-                "file": {"name": dst.name, "size": size, "sha256": digest},
-                "sandbox_path": f"{GUEST_INPUT}\\{dst.name}", "inbox_path": f"{GUEST_INBOX}\\{dst.name}"}
+        result = {"source": url, "final_url": final_url,
+                  "file": {"name": dst.name, "size": size, "sha256": digest},
+                  "sandbox_path": f"{GUEST_INPUT}\\{dst.name}", "inbox_path": f"{GUEST_INBOX}\\{dst.name}"}
+        if saved is not None:
+            result["downloads_copy"] = saved
+        return result
+
+    def _save_copy(self, got: Path, digest: str, final_url: str) -> dict:
+        """Copy the fetched file into Downloads (never overwriting; an identical file already there is
+        reused). A failure here does not fail the download: the Sandbox copy is what the task needs."""
+        from sandbox_manager.importer import downloads_folder
+        folder = self.downloads or downloads_folder()
+        try:
+            same = folder / got.name
+            if same.is_file() and not same.is_symlink() and same.stat().st_size == got.stat().st_size \
+                    and _sha256(same) == digest:
+                return {"path": f"Downloads\\{same.name}", "new": False}
+            dst = _unique(folder, got.name)
+            with got.open("rb") as src, open(dst, "xb") as out:     # x: never replaces a file that appeared
+                shutil.copyfileobj(src, out)
+            mark_internet(dst, final_url)
+        except OSError as e:
+            log.warning("INBOX download: could not keep a copy in Downloads (%s)", type(e).__name__)
+            return {"path": None, "error": type(e).__name__}
+        log.info("INBOX download kept in Downloads as %s", dst.name)
+        return {"path": f"Downloads\\{dst.name}", "new": True}
 
     def import_local(self, name: str) -> dict:
         """inbox_import: copy a file the user already downloaded (directly in Downloads, by name only).
