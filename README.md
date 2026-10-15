@@ -10,6 +10,34 @@ Codex ──MCP──▶ [ MCP Server ] ──▶ [ Broker ] ──▶ [ Runtime
                                   (도구 호출 검사)  (연결·재연결·READY 관리)      Sandbox 안
 ```
 
+## Sandbox 화면 창을 닫을 때 (#78)
+
+`--runner-exe`로 Host가 시작한 Sandbox 화면 창을 닫으면 해당 세션도 종료한다.
+Sandbox Manager가 최초 관찰한 창의 소멸을 5초 유예 후 확정하면, Host의
+`SandboxLauncher`가 `USER_STOP` 흐름을 실행한다. 최소화·숨김은 종료가 아니다.
+`runtime_get_state`의 `sandbox.window_state`에서 `UNSEEN/OPEN/MISSING/CLOSED/UNKNOWN/UNAVAILABLE`을 확인할 수 있다.
+
+1. 해당 Sandbox ID의 창 종료 확정. `MISSING` 유예 중에는 Runner/VM 복구를 보류한다.
+2. 연결된 Runner가 준비됐다면 `TERMINATE(USER_STOP)` 전송. 연결/응답 실패에도 종료를 계속한다.
+3. Manager `stop()`이 `wsb list`로 VM 종료를 확인한 뒤 `cleanup()`을 수행한다.
+4. `--shared`가 설정된 경우 기존 크기·링크·Defender 검사 후 보존/삭제/보류 선택을 실행한다.
+   빈 폴더에는 질문하지 않으며 검사 실패·무응답 처리는 기존 정책을 따른다.
+
+창 닫기는 사용자의 종료 의사이므로 별도의 `session_stop` 승인창을 다시 요청하지 않는다.
+창이 처음부터 관찰되지 않거나 조회에 실패한 경우에는 임의 종료하지 않는다.
+사용자 종료와 자동 복구가 겹쳐도 닫힌 창 때문에 Sandbox를 다시 켜지 않는다.
+VM 종료를 확인하지 못하면 실패 상태로 보고하며 Shared 파일 반출도 진행하지 않는다.
+
+의존성: sandbox_manager#46의 `window_state()` API와 창 감시가 필요하다. 기존 실행 중인
+Host/Sandbox에는 소급 적용되지 않으며 변경 버전으로 새 세션을 시작해야 한다.
+Shared 옵션은 여전히 명시적으로 설정한다. 현재 세션의 설치 상태 전체를 보존하거나,
+마지막 Shared 미러링 주기 이후 Guest에만 남은 파일까지 자동 회수하는 기능은 아니다.
+
+검증: `tests/test_window_close.py`는 실제 Host/MiniRunner 통신을 사용해 창 종료,
+시작 중 종료, 연결 끊김과 복구 경쟁, 종료 실패, Shared keep/delete/hold를 검사한다.
+VM 및 창 backend와 Defender 판정/사용자 선택은 테스트 대역이다.
+실제 Windows 창 수명 검증은 Manager의 `tests/test_window_session.py`에서 수행한다.
+
 ## 현재 포함된 것
 
 | 경로 | 내용 | WBS |

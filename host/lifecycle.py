@@ -124,10 +124,14 @@ class SandboxLauncher:
         self._recovery: asyncio.Task | None = None
         self._ready: asyncio.Task | None = None
         self._finish: asyncio.Task | None = None
+        self._window_watch: asyncio.Task | None = None
+        self._window_stop_requested = False
 
     def status(self) -> dict:
         st = {"state": self.state, "host_address": self.host_address, "error": self.error,
               "generation": self.session.identity[2], "recoveries": list(self.recoveries)}
+        if self.sandbox is not None and callable(getattr(self.manager, "window_state", None)):
+            st["window_state"] = self._window_state()
         if self.shared_root is not None:
             st["shared"] = {"guest_folder": "Desktop\\Shared", "host_folder": str(self.shared) if self.shared else None,
                             "at_end": self.shared_result}
@@ -176,6 +180,8 @@ class SandboxLauncher:
                 if self.shared is not None:
                     self._start_shared_watcher()
             self.host_address = await self._call(self.manager.start, self.sandbox)
+            if callable(getattr(self.manager, "window_state", None)):
+                self._window_watch = asyncio.create_task(self._watch_window())
             log.info("SANDBOX %s started, Host address for the Runner: %s", s.identity[0], self.host_address)
             await self._publish()
             log.info("SANDBOX %s bootstrap published; waiting for the Runner", s.identity[0])
@@ -282,18 +288,55 @@ class SandboxLauncher:
             log.error("SANDBOX %s mark_ready failed: %s", identity[0], _describe(e))
 
     # -- recovery --------------------------------------------------------------
+    def _window_state(self) -> str:
+        probe = getattr(self.manager, "window_state", None)
+        return probe(self.sandbox) if probe is not None and self.sandbox is not None else "UNAVAILABLE"
+
+    async def _stop_for_window(self) -> None:
+        if self.session.terminated or self._window_stop_requested:
+            return
+        self._window_stop_requested = True
+        log.info("SANDBOX %s window closed by user; ending session", self.session.identity[0])
+        try:
+            if self.session.ready.is_set():
+                await self.session.terminate("USER_STOP")
+            else:
+                await self.session._end("WINDOW_CLOSED: user closed the Sandbox client")
+        except Exception as exc:
+            log.warning("TERMINATE after window close failed; still stopping owned Sandbox: %s", exc)
+            if not self.session.terminated:
+                await self.session._end("WINDOW_CLOSED: user closed the Sandbox client")
+
+    async def _watch_window(self) -> None:
+        while not self.session.terminated and self._finish is None:
+            try:
+                if self._window_state() == "CLOSED":
+                    await self._stop_for_window()
+                    return
+            except Exception as exc:
+                log.warning("Could not inspect Sandbox window; no stop requested: %s", exc)
+            await asyncio.sleep(0.5)
+
+    async def _window_prevents_recovery(self) -> bool:
+        # A disconnected Runner can trigger recovery while the window's close
+        # grace period is still running. Let that decision resolve first.
+        while not self.session.terminated and self._window_state() == "MISSING":
+            await asyncio.sleep(0.2)
+        if self.session.terminated or self._window_stop_requested:
+            return True
+        if self._window_state() == "CLOSED":
+            await self._stop_for_window()
+            return True
+        return False
+
     def on_health(self, identity: Identity, old: Health, new: Health, why: str) -> None:
         """RuntimeSession's on_health. Only UNRESPONSIVE of a verified current generation matters."""
         s = self.session
         if (new is not Health.UNRESPONSIVE or identity != s.identity or not s.verified or s.terminated
-                or self.sandbox is None or self._finish is not None
+                or self.sandbox is None or self._finish is not None or self._window_stop_requested
                 or (self._recovery is not None and not self._recovery.done())):
             return
         loop = asyncio.get_running_loop()
-        if not self.auto_recover:
-            log.error("SANDBOX %s %s; automatic restart is off, ending the session", identity[0], why)
-            loop.create_task(s._end(f"RUNTIME_LOST: {why}"))
-            return
         kind = "runner" if s.conn is None else "sandbox"    # lost and not back / connected but silent
         self._recovery = loop.create_task(self._recover(kind, why))
 
@@ -313,6 +356,12 @@ class SandboxLauncher:
         return new
 
     async def _recover(self, kind: str, why: str) -> None:
+        if await self._window_prevents_recovery():
+            return
+        if not self.auto_recover:
+            log.error("SANDBOX %s %s; automatic restart is off, ending the session", self.session.identity[0], why)
+            await self.session._end(f"RUNTIME_LOST: {why}")
+            return
         old = self.session
         self.state = RECOVERING
         log.warning("SANDBOX %s recovering (%s): %s", old.identity[0], kind, why)
@@ -329,6 +378,8 @@ class SandboxLauncher:
         if gone:
             log.warning("SANDBOX %s is gone (closed); not restarting", old.identity[0])
             await old._end("RUNTIME_GONE: the Sandbox was closed")
+            return
+        if await self._window_prevents_recovery():
             return
         new = self._next_generation(why)
         await old._end(f"REPLACED: {why}")          # its tokens are revoked; it is not current any more
@@ -367,6 +418,8 @@ class SandboxLauncher:
             log.warning("SANDBOX %s is gone (closed); not restarting", self.session.identity[0])
             await self.session._end("RUNTIME_GONE: the Sandbox was closed")
         except Exception as e:  # noqa: BLE001 - nothing left to try
+            if await self._window_prevents_recovery():
+                return
             self.state, self.error = FAILED, _describe(e)
             log.error("SANDBOX %s recovery failed: %s", self.session.identity[0], self.error)
             await self.session.fail_startup(f"recovery {self.error}")
@@ -391,7 +444,7 @@ class SandboxLauncher:
 
     async def _stop_and_clean(self) -> None:
         # Never call stop() while start(), a recovery or mark_ready() is still running in its thread.
-        for task in (self._launch, self._recovery, self._ready):
+        for task in (self._launch, self._recovery, self._ready, self._window_watch):
             if task is not None and task is not asyncio.current_task():
                 await asyncio.gather(task, return_exceptions=True)
         s = self.session
@@ -425,7 +478,7 @@ class SandboxLauncher:
         why = self.session.end_reason or ""
         if why in TERMINATION_REASONS:
             return why, False                        # terminate(): TERMINATE was sent
-        if why.startswith(("STOPPED_BY_AGENT", "HOST_EXIT", "RUNTIME_GONE")):
+        if why.startswith(("STOPPED_BY_AGENT", "HOST_EXIT", "RUNTIME_GONE", "WINDOW_CLOSED")):
             return "USER_STOP", True                 # no Runner to tell
         if why.startswith("RUNTIME_START_FAILED") and "timeout" in why:
             return "TIMEOUT", True
