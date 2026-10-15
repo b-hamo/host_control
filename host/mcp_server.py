@@ -83,9 +83,15 @@ GUARD_RULES = {
     "session_stop": " WITH THIS HOST: call it only when the user says to end (\"끝내\", \"종료해\"); never on your own, "
                     "not even after a failure: leave the Sandbox open and report. The person at this computer is asked "
                     "first; SUSPICIOUS_CONTENT ends it at once.",
-    "inbox_download": " Use it only when the user gave a URL. If the user only named a file or program, use inbox_import "
-                      "(the user's Downloads folder) instead of searching the web or picking another package; when a "
-                      "similar file is already in Downloads, the person at this computer is asked first.",
+    "inbox_download": " If the user named a file or program without a URL, first look in the user's Downloads folder: "
+                      "a matching file goes through inbox_import, never downloaded again or swapped for another "
+                      "package. Only when nothing matches, find the vendor's official download yourself and call this "
+                      "tool with its direct https URL (do not ask the user for it). When a similar file is already in "
+                      "Downloads, the person at this computer is asked first.",
+    "task_submit": " WITH THIS HOST: never download anything inside the Sandbox (no browser download, no download "
+                   "command there). Files reach the Sandbox only from this computer through inbox_download or "
+                   "inbox_import; run the copy that appears in the Sandbox's Desktop\\Input folder. If inbox_download "
+                   "fails, report it instead of downloading inside the Sandbox.",
 }
 
 

@@ -154,3 +154,16 @@ def test_the_rules_are_in_the_tool_descriptions():
     assert "inbox_import" in d["inbox_download"]
     plain = {t["name"]: t["description"] for t in load_tool_list({"host.inbox"})}
     assert "끝내" not in plain["session_stop"]                              # only with the guard
+
+
+def test_guard_sends_downloads_through_this_computer_never_the_sandbox():
+    # 2026-10-15: with "use it only when the user gave a URL" Codex skipped inbox_download for
+    # "7-Zip 받아서 설치해 줘" and downloaded inside the Sandbox's browser instead.
+    from host.mcp_server import guard_descriptions, load_tool_list
+    tools = load_tool_list({"host.inbox"})
+    guard_descriptions(tools)
+    d = {t["name"]: t["description"] for t in tools}
+    assert "never download anything inside the Sandbox" in d["task_submit"]
+    assert "Desktop\\Input" in d["task_submit"]
+    assert "official download" in d["inbox_download"] and "inbox_import" in d["inbox_download"]
+    assert "Use it only when the user gave a URL" not in d["inbox_download"]
