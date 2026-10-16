@@ -40,7 +40,7 @@ class Authority:
         for name in ("reads", "writes", "network", "capabilities"):
             if not set(getattr(action.scope, name)) <= set(getattr(grant.scope, name)):
                 return "DELEGATION_SCOPE"
-        if action.operation in EXECUTION and action.fingerprint not in grant.execution_fingerprints:
+        if (action.operation in EXECUTION or action.operation in {Operation.GUI, Operation.LOCAL_BROWSER, Operation.LOCAL_CLIPBOARD}) and action.fingerprint not in grant.execution_fingerprints:
             return "EXECUTION_NOT_DELEGATED"
         supplied = {s.source_id: s for s in action.sources}
         visited, active = set(), set()

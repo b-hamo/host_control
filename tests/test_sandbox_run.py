@@ -272,51 +272,63 @@ def test_download_run_and_result_through_the_mcp_host(tmp_path, server):  # noqa
             setattr(a, k, v)
         backend = HostBackend(a, sandbox_manager=fake, approver=approver, scanner=PassScanner())
         backend.start()
-        assert backend.ready.wait(20) and not backend.error, backend.error
-        last = [0.0]
+        try:
+            assert backend.ready.wait(20) and not backend.error, backend.error
+            last = [0.0]
 
-        async def call(tool, arguments=None):
-            gap = 0.25 - (time.monotonic() - last[0])         # under the Broker's control rate
-            if gap > 0:
-                await asyncio.sleep(gap)
-            last[0] = time.monotonic()
-            res = await asyncio.to_thread(backend.call, tool, arguments or {})
-            return json.loads(res["content"][-1]["text"])
+            async def call(tool, arguments=None):
+                # Internal artifact calls share the control bucket. External
+                # pacing alone cannot guarantee that a token is available.
+                for attempt in range(6):
+                    gap = 0.25 - (time.monotonic() - last[0])
+                    if gap > 0:
+                        await asyncio.sleep(gap)
+                    last[0] = time.monotonic()
+                    res = await asyncio.to_thread(backend.call, tool, arguments or {})
+                    result = json.loads(res["content"][-1]["text"])
+                    if result.get("error") != "RATE_LIMITED":
+                        return result
+                    assert result.get("retryable"), result
+                    if attempt == 5:
+                        raise AssertionError(f"{tool} remained rate limited: {result}")
+                    await asyncio.sleep(max(float(result["retry_after"]), 0.01) + 0.02)
 
-        got = await call("inbox_download", {"url": f"{server.base}/ZoomIt64.exe?sig=SECRET"})
-        early = await call("sandbox_run", {"file": got["file"]["name"]})          # before task_submit
-        await call("task_submit", {"goal": "ZoomIt 받아서 Sandbox에서 실행"})
-        r, serving = await artifact_guest(*paths(tmp_path / "sbx"))
-        for _ in range(60):
-            if (await call("runtime_get_state"))["runtime_state"] == "READY":
-                break
-        own_win_r = await call("computer_hotkey", {"keys": ["win", "r"]})
-        started = await call("sandbox_run", {"file": got["file"]["name"], "reason": "실행해 보기"})
-        for _ in range(60):                                                         # wait for Enter
-            if any(m["payload"]["operation"] == "keyboard.press" for m in r.requests):
-                break
-            await asyncio.sleep(0.1)
-        # the Guest helper's part: read the manifest from the inbox, report stdout and the receipt
-        manifest = json.loads(next(Path(d.inbox).glob("run-*.json")).read_text(encoding="utf-8"))
-        nonce = manifest["nonce"]
-        receipt = {k: manifest[k] for k in ("run_id", "fingerprint", "nonce", "runtime_id", "generation",
-                                            "command_sha256", "sources")}
-        receipt.update(contract="sandbox-run-v1", process_id=4242, execution_count=1, exit_code=0,
-                       stdout_sha256=hashlib.sha256(stdout).hexdigest())
-        await r.report(f"run-{nonce}-stdout.txt", stdout)
-        await r.report(f"run-{nonce}-receipt.txt", json.dumps(receipt).encode())
-        status = {}
-        for _ in range(80):
-            status = await call("sandbox_run_status", {"run_id": started["run_id"]})
-            if status.get("state") in ("SUCCEEDED", "FAILED", "HELD"):
-                break
-            await asyncio.sleep(0.2)
-        left = sorted(p.name for p in Path(d.inbox).glob("run-*"))
-        await call("session_stop", {"reason": "TASK_COMPLETE"})
-        await asyncio.wait_for(serving, 10)
-        await asyncio.to_thread(backend.shutdown)
-        audit = [json.loads(x) for x in (tmp_path / "audit" / "SES-TEST-001.jsonl").read_text(encoding="utf-8").splitlines()]
-        return early, own_win_r, started, status, left, r.requests, audit
+            got = await call("inbox_download", {"url": f"{server.base}/ZoomIt64.exe?sig=SECRET"})
+            early = await call("sandbox_run", {"file": got["file"]["name"]})          # before task_submit
+            await call("task_submit", {"goal": "ZoomIt 받아서 Sandbox에서 실행"})
+            r, serving = await artifact_guest(*paths(tmp_path / "sbx"))
+            for _ in range(60):
+                if (await call("runtime_get_state"))["runtime_state"] == "READY":
+                    break
+            own_win_r = await call("computer_hotkey", {"keys": ["win", "r"]})
+            started = await call("sandbox_run", {"file": got["file"]["name"], "reason": "실행해 보기"})
+            for _ in range(60):                                                         # wait for Enter
+                if any(m["payload"]["operation"] == "keyboard.press" for m in r.requests):
+                    break
+                await asyncio.sleep(0.1)
+            # the Guest helper's part: read the manifest from the inbox, report stdout and the receipt
+            manifest = json.loads(next(Path(d.inbox).glob("run-*.json")).read_text(encoding="utf-8"))
+            nonce = manifest["nonce"]
+            receipt = {k: manifest[k] for k in ("run_id", "fingerprint", "nonce", "runtime_id", "generation",
+                                                "command_sha256", "sources")}
+            receipt.update(contract="sandbox-run-v1", process_id=4242, execution_count=1, exit_code=0,
+                           stdout_sha256=hashlib.sha256(stdout).hexdigest())
+            await r.report(f"run-{nonce}-stdout.txt", stdout)
+            await r.report(f"run-{nonce}-receipt.txt", json.dumps(receipt).encode())
+            status = {}
+            for _ in range(80):
+                status = await call("sandbox_run_status", {"run_id": started["run_id"]})
+                if status.get("state") in ("SUCCEEDED", "FAILED", "HELD"):
+                    break
+                await asyncio.sleep(0.2)
+            left = sorted(p.name for p in Path(d.inbox).glob("run-*"))
+            stopped = await call("session_stop", {"reason": "TASK_COMPLETE"})
+            assert stopped.get("ok") and stopped.get("stopped"), stopped
+            await asyncio.wait_for(serving, 10)
+            audit = [json.loads(x) for x in (tmp_path / "audit" / "SES-TEST-001.jsonl").read_text(encoding="utf-8").splitlines()]
+            return early, own_win_r, started, status, left, r.requests, audit
+        finally:
+            await asyncio.to_thread(backend.shutdown)
 
     early, own_win_r, started, status, left, requests, audit = run(body())
     assert early["error"] == "POLICY_DENIED"                                     # task_submit first

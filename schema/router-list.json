@@ -1,0 +1,15 @@
+{
+  "name": "router_list",
+  "description": "List Host-registered profile names and existing plan IDs with stop/cleanup state. Read-only; never starts or replays a Sandbox.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}
