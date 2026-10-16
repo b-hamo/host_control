@@ -56,6 +56,10 @@ router_plan은 기존처럼 plan_id가 필수다. 실행 요청 식별자는 pla
 - 동시에 하나의 plan만 활성화한다. 이전 plan이 살아 있으면 PLAN_ACTIVE,
   종료 정리가 확인되지 않았으면 CLEANUP_UNCONFIRMED로 다음 시작을 막는다.
 - router_stop 이후 기존 plan의 계획 등록/실행은 PLAN_STOPPED다. 상태와 검증된 결과는 유지한다.
+- 종료 plan의 status/result는 `stopped: true`를 표시한다. 완료 증거가 없는 실행은
+  receipt와 progress 모두 `UNKNOWN`이며, 실행 중이라는 뜻이나 재개 가능 상태가 아니다.
+  검증된 `SUCCEEDED`는 보존하고 task 완료 여부는 종료 시 확보된 결과들로 다시 계산한다.
+  기존 종료 스냅샷과 증거 조회 timeout 경로도 조회 시 보정하며 실행을 재전송하지 않는다.
 - 정상 stdio 종료는 모든 plan을 정리한다. 정상 재접속 시 이전 결과를 조회하고 새 작업을 시작할 수 있다.
 - 후속 plan 실행 중 MCP 프로세스 강제 종료 또는 시작 실패 후 정리 미확정은 자동 복구·재실행하지 않는다.
   보존된 예약은 조회 전용이며 새 작업도 차단한다. 운영자가 소유 Guest/Host 자원 정리를 확인해야 한다.

@@ -5,6 +5,7 @@ Stopped plans reopen query-only; missing completion evidence stays UNKNOWN.
 """
 
 import asyncio
+import copy
 from dataclasses import asdict, replace
 import hashlib
 import json
@@ -126,6 +127,39 @@ class RouterService:
             with self.db:
                 self.db.execute("INSERT OR REPLACE INTO retired_results VALUES (?,?)",
                                 (canonical, json.dumps(snapshot)))
+        # Every action must see the same final receipt set, including actions
+        # whose evidence was captured later than this snapshot.
+        with self.db:
+            for canonical, value in self.db.execute("SELECT canonical,value FROM retired_results").fetchall():
+                snapshot = json.loads(value)
+                snapshot["progress"] = self._retired_progress(snapshot["progress"])
+                self.db.execute("UPDATE retired_results SET value=? WHERE canonical=?",
+                                (json.dumps(snapshot), canonical))
+
+    def _retired_progress(self, progress):
+        """Project retired receipts without querying/restarting the execution Host.
+
+        Also repairs legacy snapshots and partial/timeout captures on read.
+        UNKNOWN describes missing execution evidence, not a resumable process.
+        """
+        progress = copy.deepcopy(progress)
+        states = {}
+        for aid, canonical in self.db.execute("SELECT DISTINCT action_id,canonical FROM submissions"):
+            cached = self._retired_result(canonical)
+            state = cached["receipt"]["state"] if cached else State.UNKNOWN
+            states[aid] = State.UNKNOWN if state in {State.ACCEPTED, State.RUNNING} else state
+        actions = progress["actions"]
+        for aid, action in actions.items():
+            if aid in states:
+                action["state"] = states[aid]
+            elif action["state"] in {State.ACCEPTED, State.RUNNING}:
+                action["state"] = State.UNKNOWN
+        for tid, task in progress["tasks"].items():
+            members = [a for a in actions.values() if a["task_id"] == tid]
+            task["complete"] = bool(members) and all(
+                actions.get(a["replacement"], {}).get("state") == State.SUCCEEDED
+                if a.get("replacement") else a["state"] == State.SUCCEEDED for a in members)
+        return progress
 
     async def _stop(self):
         if self._retirement is None:
@@ -252,9 +286,10 @@ class RouterService:
             cached = self._retired_result(canonical)
             receipt = cached["receipt"] if cached else asdict(Receipt(canonical, fp, State.UNKNOWN, "EXECUTION_UNCONFIRMED"))
             return {"ok": True, "plan_id": self.plan_id, "action_id": aid,
+                    "stopped": True,
                     "task_id": cached["task_id"] if cached else None,
                     "receipt": {**receipt, "request_id": rid},
-                    "progress": cached["progress"] if cached else self.router.snapshot()}
+                    "progress": self._retired_progress(cached["progress"] if cached else self.router.snapshot())}
         pending = self.jobs.get(aid)
         if pending is not None and not pending.done():
             receipt = Receipt(canonical, fp, State.ACCEPTED, "REQUEST_RESERVED")
