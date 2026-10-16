@@ -1,0 +1,29 @@
+{
+  "name": "router_start",
+  "description": "Explicitly start a NEW plan using a Host-registered profile. Reuse request_id after timeout to recover the same plan; a new request_id is required for genuinely new work. Never revives a stopped plan. Does not execute an action. Stop and confirm cleanup of the previous plan first.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "request_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 96
+      },
+      "profile": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+      }
+    },
+    "required": [
+      "request_id",
+      "profile"
+    ]
+  },
+  "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}
