@@ -259,6 +259,9 @@ def test_retired_export_rechecks_bytes_and_preserves_aliases(tmp_path):
             result = await service.call("router_result", {"request_id":"REQ-alias"})
             assert result["receipt"]["request_id"] == "REQ-alias"
             assert result["outputs"][0]["text"] == "verified"
+            assert result["stopped"] is True
+            assert result["progress"]["actions"][action.action_id]["state"] == "SUCCEEDED"
+            assert result["progress"]["tasks"][action.task_id]["complete"] is True
             output.write_bytes(b"changed")
             assert (await service.call("router_result", {"request_id":"REQ-one"}))["error"] == "RESULT_NOT_VERIFIED"
         finally:
