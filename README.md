@@ -471,3 +471,10 @@ Host가 거부하는 경우:
   그 Sandbox에서 하던 작업 상태는 화면에 남은 것만 이어진다
 - Sandbox 켜기에 실패한 세션은 다시 켜지 않는다. Codex를 다시 켜서 새 세션으로 시작한다
 - 승인 Workflow(B-8)는 `approver` 콜백 자리만 있다. 사용자에게 묻는 UI는 없으므로 승인 필요 도구는 지금은 거부된다
+
+## Router 연결에서 후속 작업 (#80)
+
+Router 전용 MCP는 `router_start`와 `router_list`를 제공한다. 기존 `--config` 연결에서도
+종료된 plan을 보존한 채 `default` 프로필로 새 plan/Sandbox를 시작할 수 있다.
+후속 도구 호출에는 반환된 plan_id를 명시한다. 여러 Host 프로필은 `--catalog`로 등록한다.
+사용 순서, 중복 요청과 정리 실패 계약은 [Router 후속 작업 문서](docs/router-followup.md)를 참고한다.

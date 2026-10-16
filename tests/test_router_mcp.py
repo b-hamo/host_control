@@ -185,7 +185,7 @@ def test_real_stdio_allowlist_local_result_and_restart(tmp_path):
         proc, client = await start(path)
         try:
             names = {t["name"] for t in (await client.rpc("tools/list"))["result"]["tools"]}
-            assert names == {"router_plan", "router_submit", "router_status", "router_result", "router_stop"}
+            assert names == {"router_plan", "router_submit", "router_status", "router_result", "router_stop", "router_start", "router_list"}
             for name in ("computer_type", "task_submit", "exec_command", "write_stdin", "artifact_export", "approve"):
                 assert (await client.call(name, {}))["error"] == "TOOL_NOT_EXPOSED"
             await client.call("router_plan", definitions([a, execute]))
