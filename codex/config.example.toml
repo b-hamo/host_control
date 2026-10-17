@@ -1,0 +1,20 @@
+# Codex 등록 예시 (팀 공용 Skill codex/skills/secure-sandbox-run 과 같이 씀)
+# %USERPROFILE%\.codex\config.toml 에 붙여 넣고 <나> 를 자기 Windows 사용자 이름으로 바꾼다. 경로는 / 로 쓴다.
+# 저장소 3개(host_control, sandbox_runner, sandbox_manager)는 Documents 아래에 받았다고 가정한다.
+#   --inbox          인터넷 파일·다운로드 폴더 파일을 Sandbox로 넣기 (inbox_download, inbox_import)
+#   --save-downloads 인터넷에서 받은 파일을 다운로드 폴더에도 저장, 세션이 끝나도 남김
+#   --agent-guard    AI가 혼자 Sandbox를 끝내거나 비슷한 파일을 또 받을 때 확인 창
+#   --shared         Sandbox 바탕화면 Shared -> 이 PC(실행 금지) -> 끝날 때 검사 후 "남길까요?"
+# inbox·shared 폴더는 sandbox_manager 의 tools/setup_inbox.ps1 을 한 번 돌려 만든다(실행 금지 권한 포함).
+
+[mcp_servers.scrp]
+command = 'C:/Users/<나>/Documents/host_control/.venv/Scripts/python.exe'
+args = ['C:/Users/<나>/Documents/host_control/host/mcp_server.py',
+        '--runner-exe', 'C:/Users/<나>/Documents/sandbox_runner/build/sandbox_runner.exe',
+        '--inbox', 'C:/Users/<나>/SecureCUA/codex-work/inbox',
+        '--save-downloads',
+        '--agent-guard',
+        '--shared', 'C:/Users/<나>/SecureCUA/codex-work/shared']
+default_tools_approval_mode = "approve"
+startup_timeout_sec = 60
+tool_timeout_sec = 120

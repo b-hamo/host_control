@@ -139,6 +139,23 @@ Codex가 `host/mcp_server.py`를 자식 프로세스로 켜고 stdin/stdout으�
 - stdout은 MCP 전용이다. 로그는 stderr와 `host/.logs/mcp_server.log`에 남는다
 - 오류는 MCP 도구 오류(`isError: true`)로 돌려주고, 내용은 Broker의 표준 오류 JSON이다
 
+### 코덱스로 쓰기: 팀 공용 Skill과 등록 (2026-10-17)
+
+코덱스에게 "7-Zip 받아서 설치해 줘"처럼 시키면 **이 PC가 받아서 다운로드 폴더에 저장 → Sandbox가 그 파일을
+`Input`에서 실행 → 설치 결과는 Sandbox 바탕화면 `Shared`로 이 PC에** 오게 하는 절차가 Skill
+`codex/skills/secure-sandbox-run/SKILL.md`에 있다(배주한 Skill + 곽재혁 `scrp-sandbox-execution`의 좋은 규칙을 합침).
+**팀원 모두 이 Skill 하나를 쓴다.** 코덱스는 저장소가 아니라 PC마다 `%USERPROFILE%\.codex\skills`를 읽으므로:
+
+1. 받는 폴더·공유 폴더 준비(한 번): sandbox_manager의 `tools\setup_inbox.ps1`
+2. Skill 넣기(처음, 그리고 `git pull`로 Skill이 바뀔 때마다): `powershell -ExecutionPolicy Bypass -File codex\install_skill.ps1`
+   — 이전 Skill은 `~/.codex/skill-backups`에 백업, 예전 `scrp-sandbox-execution`이 있으면 끄라고 알려 줌
+3. 코덱스 등록: `codex/config.example.toml`을 `~/.codex/config.toml`에 붙여 넣고 `<나>`를 바꿈
+   (`--inbox --save-downloads --agent-guard --shared`)
+4. 코덱스를 완전히 껐다 켜고 새 대화에서 "7-Zip 받아서 설치해 줘"
+
+Skill이 부르는 도구·옵션이 이 Host에 실제로 있는지는 `tests/test_codex_skill.py`가 확인한다. Host 도구를 바꾸면 Skill도
+같은 PR에서 고친다. Router 도구를 코덱스에 붙일 때도 이 Skill을 고친다(지금 Skill은 GUI 모드 도구만 쓴다).
+
 ### Codex에 연결하기
 
 `~/.codex/config.toml`을 고치지 않고 실행할 때만 붙이는 방법 (PowerShell, 경로는 본인 환경에 맞게):
