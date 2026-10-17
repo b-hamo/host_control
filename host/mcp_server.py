@@ -303,7 +303,8 @@ class HostBackend(threading.Thread):
                                                 shared_watcher=getattr(a, "shared_watcher", None),
                                                 finish_shared=getattr(a, "finish_shared", None),
                                                 shared_chooser=getattr(a, "shared_chooser", None)
-                                                or getattr(approver, "choose_shared", None))
+                                                or getattr(approver, "choose_shared", None),
+                                                shared_notify=getattr(approver, "notify_shared", None))
                 policy = None
                 if getattr(a, "sandbox_run", False):
                     # Router parts in GUI mode: its policy wraps the base one (Win+R only for an
