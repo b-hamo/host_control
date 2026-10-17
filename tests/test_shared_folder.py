@@ -52,11 +52,18 @@ def test_the_dialog_lists_the_files_and_the_three_answers():
     assert "예: 다운로드" in text and "아니요: 지움" in text and "무응답: 지우지 않고" in text
 
 
-def through_host(tmp_path, root, chooser, outcome):
-    """One session with --shared; finish_shared is faked but calls decide() like the real one."""
+def through_host(tmp_path, root, chooser, outcome, put_file=False):
+    """One session with --shared; finish_shared is faked but calls decide() like the real one.
+    put_file: a file is in the share when the session ends, so the question is asked before stop()."""
     fake = SharedManager(tmp_path / "sbx")
     Watcher.made = []
     finished, asked = [], []
+    real_stop = fake.stop
+
+    def stop(s, reason, *, emergency=False):
+        fake.calls.append(("stop_after_questions", len(asked)))
+        return real_stop(s, reason, emergency=emergency)
+    fake.stop = stop
 
     def finish(share, decide):
         result = {"share": str(share), "dest": None, "files": [{"name": "note.pdf", "size": 3, "sha256": "ab"}],
@@ -83,6 +90,9 @@ def through_host(tmp_path, root, chooser, outcome):
         await call("task_submit", {"goal": "PDF 받아서 남기기"})
         r, _, serving = await guest(*paths(tmp_path / "sbx"))
         during = await call("runtime_get_state", {})
+        if put_file:
+            from pathlib import Path
+            (Path(during["sandbox"]["shared"]["host_folder"]) / "note.pdf").write_bytes(b"pdf")
         await call("session_stop", {"reason": "TASK_COMPLETE"})
         await serving
         for _ in range(100):
@@ -118,3 +128,18 @@ def test_with_nobody_to_ask_a_clean_folder_is_held(tmp_path, root):
     share, finished, asked, after = through_host(tmp_path, root, False, None)
     assert finished == [(share, "hold")] and asked == []
     assert after["shared"]["at_end"]["status"] == "HELD"
+
+
+def test_with_files_the_question_comes_before_the_sandbox_is_stopped(tmp_path, root):
+    # 배주한 요청 2026-10-17: the keep/delete question about 1.5 s after the window closes, not after
+    # stop + scan. Asked once; the answer is applied only after the scan.
+    share, finished, asked, after = through_host(tmp_path, root, True, "keep", put_file=True)
+    assert len(asked) == 1 and asked[0]["before_scan"] is True
+    assert [f["name"] for f in asked[0]["files"]] == ["note.pdf"]
+    assert finished == [(share, "keep")]
+    assert after["shared"]["at_end"]["status"] == "EXPORTED"
+
+
+def test_the_early_question_says_the_scan_comes_next():
+    text = describe_shared({"files": [{"name": "note.pdf", "size": 3}], "share": "C:\w\S", "before_scan": True})
+    assert "끄는 대로 백신 검사" in text and "검사를 통과한 경우에만" in text and "통과했습니다" not in text

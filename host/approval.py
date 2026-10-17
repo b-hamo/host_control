@@ -101,13 +101,18 @@ def describe_shared(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str
     """--shared at session end: what the Sandbox saved in its shared folder passed the scan; keep it?"""
     files = summary.get("files") or []
     total = sum(f.get("size", 0) for f in files)
-    lines = ["Sandbox가 공유 폴더(바탕화면 Shared)에 저장한 파일이 있습니다. 백신 검사는 통과했습니다.", ""]
+    if summary.get("before_scan"):
+        first = "Sandbox가 공유 폴더(바탕화면 Shared)에 저장한 파일이 있습니다. Sandbox를 끄는 대로 백신 검사를 합니다."
+    else:
+        first = "Sandbox가 공유 폴더(바탕화면 Shared)에 저장한 파일이 있습니다. 백신 검사는 통과했습니다."
+    lines = [first, ""]
     lines += [f"  {_clean(f.get('name', ''))}  ({f.get('size', 0):,} bytes)" for f in files[:15]]
     if len(files) > 15:
         lines.append(f"  ... 외 {len(files) - 15}개")
     lines += [f"  합계 {len(files)}개, {total:,} bytes", "",
               "이 컴퓨터에 남길까요?",
-              "  예: 다운로드\\SandboxShared 폴더로 복사 (인터넷에서 받은 파일로 표시, 실행할 때 Windows가 한 번 더 물음)",
+              "  예: 다운로드\\SandboxShared 폴더로 복사 (인터넷에서 받은 파일로 표시, 실행할 때 Windows가 한 번 더 물음)"
+              + (" — 검사를 통과한 경우에만" if summary.get("before_scan") else ""),
               "  아니요: 지움",
               f"  취소 또는 {timeout_s:.0f}초 무응답: 지우지 않고 공유 폴더에 실행 금지 상태로 보관",
               f"  ({_clean(summary.get('share', ''))})"]
@@ -149,6 +154,16 @@ class DialogApprover:
         log.info("APPROVAL %s %s: %s", summary.get("tool"), summary.get("session_id"),
                  "approved" if approved else "denied")
         return approved
+
+    async def notify_shared(self, result: dict) -> None:
+        """The person said keep before the scan, but the scan did not pass: say it was not kept."""
+        text = "\n".join([
+            "공유 폴더 파일을 남기지 않았습니다. 백신 검사를 통과하지 못했습니다.", "",
+            f"검사 결과: {_clean(str(result.get('scan') or ''))}",
+            f"파일은 이 컴퓨터에서 실행할 수 없는 상태로 남아 있습니다: {_clean(result.get('share') or '')}"])
+        async with self._lock:
+            self._seq += 1
+            await asyncio.to_thread(self._ask_code, text, f"{SHARED_TITLE} #{self._seq}", 0x0)   # MB_OK
 
     async def choose_shared(self, summary: dict) -> str:
         """--shared at session end: "keep" (Yes), "delete" (No), "hold" (Cancel, no answer, or no dialog)."""

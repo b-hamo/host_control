@@ -91,7 +91,7 @@ class SandboxLauncher:
                  auto_recover: bool = True, runner_exit_wait_s: float = RUNNER_EXIT_WAIT_S,
                  inbox: Path | None = None, inbox_watcher=None,
                  shared_root: Path | None = None, shared_watcher=None, finish_shared=None,
-                 shared_chooser=None):
+                 shared_chooser=None, shared_notify=None):
         self.manager = manager
         self.inbox = Path(inbox) if inbox is not None else None
         self.shared_root = Path(shared_root) if shared_root is not None else None
@@ -102,6 +102,11 @@ class SandboxLauncher:
         # async (summary) -> "keep" | "delete" | "hold": the person at this computer (DialogApprover.choose_shared).
         # None: nobody to ask, so a clean folder is held where it is (배주한 결정 2026-10-15: no answer = hold).
         self._choose_shared = shared_chooser
+        # async (summary) -> None: tells the person a "keep" answer could not be honoured (scan found a
+        # problem). The question is asked as soon as the session starts to end, before the scan (배주한 요청
+        # 2026-10-17: about 1.5 s after the window is closed), so the scan result can only come after it.
+        self._notify_shared = shared_notify
+        self._early_choice: asyncio.Task | None = None
         self._shared_watcher = None
         # (manager, sandbox) -> object with start()/stop(); default: sandbox_manager.inbox.InboxWatcher
         self._make_watcher = inbox_watcher
@@ -226,10 +231,38 @@ class SandboxLauncher:
         self._shared_watcher = self._make_shared_watcher(self.manager, self.sandbox)
         self._shared_watcher.start()
 
+    async def _ask_shared_early(self) -> None:
+        """The session is ending: ask keep/delete now, while the Sandbox stops and the scan runs.
+
+        Asked once, only when the shared folder holds files. The answer is used after the scan: a folder
+        that is not clean is never kept, whatever the answer (the person is told)."""
+        if self.shared is None or self._choose_shared is None or self._early_choice is not None:
+            return
+        try:
+            from sandbox_manager.shared import list_files
+            files = await asyncio.to_thread(list_files, self.shared)
+        except Exception as e:  # noqa: BLE001 - the question then comes after the scan, as before
+            log.warning("SHARED %s: could not list it early: %s", self.session.identity[0], _describe(e))
+            return
+        if not files:
+            return
+        summary = {"tool": "shared_finish", "session_id": self.session.identity[0], "share": str(self.shared),
+                   "files": files, "before_scan": True}
+        self._early_choice = asyncio.get_running_loop().create_task(self._choose_shared(summary))
+        log.info("SHARED %s: asked keep/delete (%d files) while the Sandbox stops", summary["session_id"], len(files))
+
+    async def _early_answer(self) -> str:
+        try:
+            return await asyncio.shield(self._early_choice)
+        except Exception:  # noqa: BLE001 - no clear answer = hold
+            return "hold"
+
     def _end_shared(self, session_id: str, loop) -> None:
         """Session over (worker thread): scan the shared folder; for a clean one the person chooses keep
         (copied to Downloads\\SandboxShared), delete, or hold (no answer: left where nothing runs)."""
         def decide(result: dict) -> str:
+            if self._early_choice is not None:
+                return asyncio.run_coroutine_threadsafe(self._early_answer(), loop).result(130)
             if self._choose_shared is None:
                 return "hold"
             summary = {"tool": "shared_finish", "session_id": session_id, "share": result["share"],
@@ -249,6 +282,10 @@ class SandboxLauncher:
                 log.info("SHARED %s held where nothing runs (no keep/delete answer): %s", session_id, r["share"])
             if r["status"] in ("BLOCKED", "QUARANTINED"):
                 log.warning("SECURITY shared folder %s kept where nothing runs: %s", r["share"], r["scan"])
+                early = self._early_choice
+                if (early is not None and early.done() and not early.cancelled() and early.exception() is None
+                        and early.result() == "keep" and self._notify_shared is not None):
+                    asyncio.run_coroutine_threadsafe(self._notify_shared(r), loop).result(90)
         except Exception as e:  # noqa: BLE001 - the folder stays where nothing can run
             self.shared_result = {"status": "QUARANTINED", "share": str(self.shared), "dest": None, "files": [],
                                   "scan": f"error: {_describe(e)}", "events": []}
@@ -297,6 +334,7 @@ class SandboxLauncher:
             return
         self._window_stop_requested = True
         log.info("SANDBOX %s window closed by user; ending session", self.session.identity[0])
+        await self._ask_shared_early()               # the question first, then stop the Sandbox behind it
         try:
             if self.session.ready.is_set():
                 await self.session.terminate("USER_STOP")
@@ -315,7 +353,7 @@ class SandboxLauncher:
                     return
             except Exception as exc:
                 log.warning("Could not inspect Sandbox window; no stop requested: %s", exc)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)                 # window_state() only reads a field; the question follows fast
 
     async def _window_prevents_recovery(self) -> bool:
         # A disconnected Runner can trigger recovery while the window's close
@@ -443,6 +481,7 @@ class SandboxLauncher:
             self._finish = asyncio.get_running_loop().create_task(self._stop_and_clean())
 
     async def _stop_and_clean(self) -> None:
+        await self._ask_shared_early()               # "끝내" too: ask now, not after stop + scan
         # Never call stop() while start(), a recovery or mark_ready() is still running in its thread.
         for task in (self._launch, self._recovery, self._ready, self._window_watch):
             if task is not None and task is not asyncio.current_task():
