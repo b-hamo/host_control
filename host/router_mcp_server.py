@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from host.mcp_server import McpServer, _error_result  # noqa: E402
+from host.router_web_policy import WebScopeError  # noqa: E402
 
 
 TOOLS = ROOT / "schema" / "router-tools"
@@ -153,6 +154,8 @@ class RouterBackend(threading.Thread):
         async def dispatch():
             try:
                 return await self.service.call(tool, arguments)
+            except WebScopeError as exc:
+                return exc.body
             except (KeyError, TypeError, ValueError):
                 return {"ok": False, "error": "INVALID_ARGUMENT"}
             except Exception:

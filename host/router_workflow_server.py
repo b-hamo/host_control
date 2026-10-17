@@ -12,7 +12,7 @@ def tool_list():
     string = {'type': 'string', 'minLength': 1, 'maxLength': 8192}
     rid = {'type': 'string', 'pattern': '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$'}
     specs = [
-        ('router_read', 'Read a scoped mailbox: URI or HTTPS URL through Router. Query router_result for text and Host-owned source_id.',
+        ('router_read', 'Read a mailbox: URI or operator-permitted HTTP(S) URL through Router. Query router_result for text and Host-owned source_id.',
          {'request_id': rid, 'uri': string}, ['request_id', 'uri']),
         ('router_execute', 'Analyze a captured source in Windows Sandbox. For actual clipboard output use form powershell-command and its source_id. No Host execution location exists. A command-literal uses character offsets including its quotes; interactive NoExit is replaced by batch completion. Host operator policy must enable execution.',
          {'request_id': rid, 'source_id': rid,
@@ -61,12 +61,12 @@ class WorkflowBackend(RouterBackend):
         self.loop, self.stop_event = asyncio.get_running_loop(), asyncio.Event()
         doc = json.loads(self.config.read_text(encoding='utf-8'))
         allowed = {'directory', 'origins', 'runner_exe', 'sandbox_root', 'allow_execution'}
-        if set(doc) - {'mailbox', 'allow_gui', 'auto_analyze_clipboard'} != allowed or any(
+        if set(doc) - {'mailbox', 'allow_gui', 'auto_analyze_clipboard', 'browsing_policy', 'task_file'} != allowed or any(
                 type(doc.get(key, False)) is not bool for key in ('allow_execution', 'allow_gui', 'auto_analyze_clipboard')):
             raise ValueError('Invalid operator configuration')
         if type(doc['origins']) is not list or not all(isinstance(x, str) for x in doc['origins']):
             raise ValueError('Invalid origin scope')
-        for name in ('directory', 'mailbox', 'runner_exe', 'sandbox_root'):
+        for name in ('directory', 'mailbox', 'runner_exe', 'sandbox_root', 'task_file'):
             if name not in doc:
                 continue
             if not Path(doc[name]).is_absolute():

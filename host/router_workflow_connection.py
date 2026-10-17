@@ -10,10 +10,12 @@ from uuid import uuid4
 
 from host.router_workflow import RouterWorkflow
 from router.models import identifier
+from host.router_task_scope import load_task
 
 
 class WorkflowConnection:
     def __init__(self, **config):
+        self.task_file = config.pop('task_file', None)
         self.directory = Path(config.pop('directory'))
         self.directory.mkdir(parents=True, exist_ok=False)
         self.config = config
@@ -64,7 +66,13 @@ class WorkflowConnection:
                 await asyncio.gather(*list(current.followups), return_exceptions=True)
                 current = None
             if current is None:
-                current = RouterWorkflow(directory=self.directory / ('WORK-' + uuid4().hex), **self.config)
+                config = dict(self.config)
+                task = load_task(self.task_file) if self.task_file else None
+                if task:
+                    config.update(origins=task['origins'], browsing_policy='scoped')
+                current = RouterWorkflow(directory=self.directory / ('WORK-' + uuid4().hex), **config)
+                if task:
+                    current.audit('USER_TASK_SCOPE', **task)
                 self.workflows.append(current)
             if name == 'router_execute' and args['source_id'] not in current.authority.sources:
                 # Reuse captured data, never a retired execution/grant. Validate

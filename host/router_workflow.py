@@ -18,7 +18,6 @@ import re
 import socket
 import subprocess
 import time
-from urllib.parse import urlsplit
 from urllib.request import build_opener, HTTPRedirectHandler
 from uuid import uuid4
 
@@ -31,13 +30,20 @@ from host.router_local import LocalTools
 from host.router_mcp_service import RouterService
 from host.router_interactive import InteractiveRuntime
 from router.models import Action, Command, Location, Operation, Scope, Source, Task, identifier
+from host.router_web_policy import WebPolicy
 
 LIMIT = 1024 * 1024
 
 
 class NoRedirect(HTTPRedirectHandler):
+    def __init__(self, policy=None):
+        self.policy = policy
+
     def redirect_request(self, *args, **kwargs):
-        raise ValueError('Redirect needs a separately scoped read')
+        if self.policy is None:
+            raise ValueError('Redirect outside operator scope')
+        self.policy.require(args[5], 'redirect')
+        return super().redirect_request(*args, **kwargs)
 
 
 def script_from_source(text, form, start=None, end=None):
@@ -119,7 +125,8 @@ class WorkflowPort:
 class RouterWorkflow:
     def __init__(self, *, directory, mailbox=None, origins, runner_exe, sandbox_root,
                  allow_execution=False, allow_gui=False, auto_analyze_clipboard=False,
-                 runtime_factory=None, browser_factory=None):
+                 runtime_factory=None, browser_factory=None, browsing_policy='scoped'):
+        self.web_policy = WebPolicy(origins, browsing_policy)
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=False)
         self.data = self.directory / 'data'
@@ -142,6 +149,8 @@ class RouterWorkflow:
         self.closed = False
         from host.router_local_browser import LocalBrowser
         self.browser = (browser_factory or LocalBrowser)(self.private / 'browser', self.origins) if allow_gui else None
+        if self.browser is not None:
+            self.browser.policy = self.web_policy
         self.lock = asyncio.Lock()
         self.runtime_lock = asyncio.Lock()
         self.runtime_ready = asyncio.Event()
@@ -184,10 +193,8 @@ class RouterWorkflow:
             body = message.get_body(preferencelist=('plain', 'html'))
             return json.dumps({'id': name, 'subject': str(message['Subject']), 'from': str(message['From']),
                                'body': body.get_content(), 'trust': 'untrusted'}, ensure_ascii=False).encode()
-        u = urlsplit(uri)
-        if u.scheme != 'https' or u.username or u.password or u.fragment or f'{u.scheme}://{u.netloc}' not in self.origins:
-            raise ValueError('URL outside operator scope')
-        with build_opener(NoRedirect()).open(uri, timeout=20) as response:
+        self.web_policy.require(uri, 'read')
+        with build_opener(NoRedirect(self.web_policy)).open(uri, timeout=20) as response:
             raw = response.read(LIMIT + 1)
         if len(raw) > LIMIT:
             raise ValueError('Response too large')
@@ -398,15 +405,12 @@ class RouterWorkflow:
         if op not in required or set(args) != {'operation', 'request_id'} | required[op]:
             raise ValueError('Exact GUI arguments required')
         if op == 'navigate':
-            url = args['url']; parsed = urlsplit(url)
-            if (parsed.scheme != 'https' or parsed.username or parsed.password
-                    or f'{parsed.scheme}://{parsed.netloc}' not in self.origins
-                    or re.search(r'[\s"\x00-\x1f<>|]', url)):
-                raise ValueError('Navigation outside operator scope')
+            url = args['url']
+            self.web_policy.require(url, 'navigate')
         if op == 'click' and any(type(args[k]) is not int or not 0 <= args[k] <= 16383 for k in ('x','y')):
             raise ValueError('Invalid coordinates')
         aid = 'A-' + uuid4().hex
-        return Action(aid, aid, Operation.LOCAL_BROWSER, Scope(network=tuple(sorted(self.origins))), 'D-' + aid,
+        return Action(aid, aid, Operation.LOCAL_BROWSER, Scope(network=self.web_policy.scope), 'D-' + aid,
             locator=json.dumps({k: v for k, v in args.items() if k != 'request_id'}, sort_keys=True))
 
     def prepare_clipboard(self):
@@ -453,8 +457,12 @@ class RouterWorkflow:
             if len(self.requests) >= 128:
                 raise ValueError('Workflow request limit')
             if name == 'router_read':
+                if not args['uri'].startswith('mailbox:'):
+                    self.web_policy.require(args['uri'], 'read')
                 aid = 'A-' + uuid4().hex
-                action = Action(aid, aid, Operation.BROWSE, Scope(network=(args['uri'],)),
+                network = (self.web_policy.scope if self.web_policy.mode == 'web'
+                           and not args['uri'].startswith('mailbox:') else (args['uri'],))
+                action = Action(aid, aid, Operation.BROWSE, Scope(network=network),
                                 'D-' + aid, locator=args['uri'])
             elif name == 'router_gui':
                 action = self.prepare_gui(args)

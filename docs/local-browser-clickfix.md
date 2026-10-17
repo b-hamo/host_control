@@ -6,7 +6,7 @@ AGENTS.md or mail adapter is needed for this browser path.
 
 ## Contract
 
-- `router_gui`: an owned local Edge tab, scoped HTTPS navigation, screenshots and
+- `router_gui`: an owned local Edge tab, policy-checked web navigation, screenshots and
   pointer clicks against an observation ID. No keyboard, shell, arbitrary CDP,
   JavaScript evaluation, or desktop input tool is exposed.
 - `router_clipboard_read`: actual Windows Unicode clipboard captured after a
@@ -33,13 +33,14 @@ AGENTS.md or mail adapter is needed for this browser path.
 
 ## Operator configuration
 
-Run `python -m host.router_workflow_server --config <absolute JSON path>` with
-Host and Manager installed, or the workspace's `scripts/launch_router_workflow.py`.
+Run `python -I scripts/launch_router_workflow.py --config <absolute JSON path>`
+with Host dependencies and Manager installed.
 
 ```json
 {
   "directory": "C:/SCRP/runs/new-run",
-  "origins": ["https://your-authorized-test-site.example"],
+  "origins": [],
+  "browsing_policy": "web",
   "runner_exe": "C:/SCRP/sandbox_runner.exe",
   "sandbox_root": "C:/SCRP/sandbox",
   "allow_gui": true,
@@ -48,8 +49,28 @@ Host and Manager installed, or the workspace's `scripts/launch_router_workflow.p
 }
 ```
 
-The run directory must not exist. `mailbox` is optional. Origin scope is supplied
-by the operator, never widened by page instructions. The browser profile and
+The run directory must not exist. `mailbox` is optional. `browsing_policy: web`
+allows HTTP and HTTPS sites, cross-site navigation/redirects and web resources
+without per-domain registration. `origins` is not an allowlist in this mode.
+The presentation configuration instead uses a Host-owned task file and scoped
+origins; see `router-task-scope.md`. General web mode includes HTTP(S) intranet and
+tailnet sites; it is not a private-network firewall.
+
+Omitting the setting uses `scoped` HTTP(S)-origin allowlist mode.
+Invalid policy names fail closed. `file:`, `javascript:`, `data:`, OS protocol
+URLs, embedded credentials and malformed URLs are rejected. The same policy
+checks browser requests and read-tool redirects. The mode is operator config,
+never a tool argument or permission inferred from a webpage.
+
+Before clicking, Router confirms the observed top-level URL is unchanged and
+grants clipboard-write permission only to that HTTPS origin. It then observes
+the real Windows clipboard change; it does not manufacture clipboard contents.
+Every site uses the same capture/command intake/Router/Sandbox path. Unsupported
+command forms and ordinary copied text remain HELD; they are not run on Host.
+Automatic analysis applies to clipboard changes detected after Router clicks,
+not all background clipboard changes or user activity in unrelated browsers.
+
+The browser profile and
 captured files stay in the run directory. Call `router_stop` to close this owned
 browser and Sandbox; preserved evidence remains on Host. The MCP connection stays
 alive: a fresh work request ID creates a new workflow after confirmed cleanup.
@@ -98,8 +119,8 @@ is performed.
 This is enforcement for tools owned by Router, not an OS policy on other Host
 tools. It does not prevent unrelated shell/MCP clients, a malicious local process,
 browser exploits, or the user manually pasting into Run. The browser runs webpage
-JavaScript normally. CDP network interception checks HTTPS request origins and
-redirects; browser downloads are denied and new pages are closed while paused.
+JavaScript normally. CDP network interception checks the selected web policy;
+browser downloads are denied and new pages are closed while paused.
 Direct custom-protocol navigation is refused. Website-triggered OS protocol
 handlers and browser-native dialogs need dedicated adversarial validation before
 claiming all browser-mediated Host execution is prevented.

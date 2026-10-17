@@ -1,0 +1,11 @@
+{
+  "directory": "C:/SCRP/runs/presentation-001",
+  "task_file": "C:/SCRP/config/user-task.json",
+  "origins": [],
+  "browsing_policy": "scoped",
+  "runner_exe": "C:/SCRP/sandbox_runner.exe",
+  "sandbox_root": "C:/SCRP/sandbox",
+  "allow_gui": true,
+  "allow_execution": false,
+  "auto_analyze_clipboard": false
+}

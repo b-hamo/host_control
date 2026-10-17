@@ -13,8 +13,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from urllib.parse import urlsplit
 from uuid import uuid4
+from host.router_web_policy import WebPolicy
 
 
 def clipboard_snapshot():
@@ -55,6 +55,7 @@ class LocalBrowser:
         self.directory = Path(directory)
         self.directory.mkdir()
         self.origins = frozenset(origins)
+        self.policy = WebPolicy(origins)
         self.clipboard = clipboard
         self.ws = self.process = self.reader = None
         self.pending, self.tasks = {}, set()
@@ -63,12 +64,11 @@ class LocalBrowser:
         self.observation = None
         self.captured = None
         self.url = 'about:blank'
+        self.blocked_requests = []
         self.lock = asyncio.Lock()
 
     def allowed(self, url):
-        p = urlsplit(url)
-        return (p.scheme == 'https' and not p.username and not p.password
-                and f'{p.scheme}://{p.netloc}' in self.origins)
+        return self.policy.allowed(url)
 
     async def command(self, method, params=None, session=None):
         self.serial += 1
@@ -108,6 +108,15 @@ class LocalBrowser:
         p = msg['params']
         if msg['method'] == 'Fetch.requestPaused':
             permitted = self.allowed(p['request']['url'])
+            if not permitted:
+                from host.router_web_policy import WebScopeError
+                try:
+                    self.policy.require(p['request']['url'], 'browser_request')
+                except WebScopeError as exc:
+                    denial = exc.body
+                    if denial not in self.blocked_requests:
+                        self.blocked_requests.append(denial)
+                        self.blocked_requests = self.blocked_requests[-16:]
             await self.command('Fetch.continueRequest' if permitted else 'Fetch.failRequest',
                 {'requestId': p['requestId'], **({} if permitted else {'errorReason': 'BlockedByClient'})},
                 msg.get('sessionId'))
@@ -158,8 +167,8 @@ class LocalBrowser:
             await self.start()
             op = args['operation']
             if op == 'navigate':
-                if not self.allowed(args['url']):
-                    raise ValueError('Navigation outside operator scope')
+                self.policy.require(args['url'], 'navigate')
+                self.blocked_requests = []
                 self.captured = None
                 result = await self.command('Page.navigate', {'url': args['url']}, self.session)
                 if result.get('errorText'):
@@ -172,6 +181,15 @@ class LocalBrowser:
                     raise ValueError('Click outside owned browser viewport')
                 before = self.clipboard()
                 self.captured = None
+                tree = await self.command('Page.getFrameTree', session=self.session)
+                current_url = tree['frameTree']['frame']['url']
+                if current_url != self.url or not self.allowed(current_url):
+                    raise ValueError('Page changed; fresh observation required')
+                # Grant only the currently observed origin, not all sites. The
+                # real page still writes the clipboard in response to the click.
+                if current_url.startswith('https://'):
+                    await self.command('Browser.setPermission', {'permission': {'name': 'clipboard-write'},
+                        'setting': 'granted', 'origin': self.policy.origin(current_url)})
                 for kind in ('mousePressed', 'mouseReleased'):
                     await self.command('Input.dispatchMouseEvent', {'type': kind, 'x': args['x'],
                         'y': args['y'], 'button': 'left', 'clickCount': 1}, self.session)
@@ -193,7 +211,8 @@ class LocalBrowser:
             return {'contract': 'router-local-browser-v1', 'location': 'LOCAL', 'url': self.url,
                 'observation_id': self.observation, 'screenshot_path': str(path),
                 'screenshot_sha256': hashlib.sha256(raw).hexdigest(),
-                'clipboard_changed': self.captured is not None}
+                'clipboard_changed': self.captured is not None,
+                'blocked_requests': list(self.blocked_requests)}
 
     def read_clipboard(self):
         current = self.clipboard()
