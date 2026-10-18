@@ -365,10 +365,27 @@ def test_startup_failure_automatically_retires_real_host(tmp_path):
 
 
 def test_killed_stdio_keeps_reservation_without_replaying(tmp_path):
+    import os
+    import sys
+    from test_router_mcp import Client, SERVER
+
+    async def start_server(config):
+        # Kill the actual server, not Windows' venv redirector. Keep this
+        # test's import paths so the base interpreter uses the same packages.
+        executable = sys._base_executable if os.name == "nt" else sys.executable
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(os.path.abspath(p) for p in sys.path)}
+        proc = await asyncio.create_subprocess_exec(
+            executable, str(SERVER), "--config", str(config), env=env,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL)
+        client = Client(proc)
+        await client.rpc("initialize")
+        return proc, client
+
     async def run():
         ports = free_ports()
         path, _, action, _ = configured(tmp_path, ports)
-        proc, client = await start(path)
+        proc, client = await start_server(path)
         try:
             await client.call("router_plan", definitions([action]))
             await client.call("router_submit", {"request_id": "REQ-one", "action_id": action.action_id})
@@ -383,7 +400,7 @@ def test_killed_stdio_keeps_reservation_without_replaying(tmp_path):
             proc.kill()  # Only this test's child, without graceful EOF/finally.
             await asyncio.wait_for(proc.wait(), 10)
             assert_rebind(ports)
-            proc, client = await start(path)
+            proc, client = await start_server(path)
             assert (await client.call("router_plan", definitions([action])))["ok"]
             result = await client.call("router_submit", {"request_id": "REQ-one", "action_id": action.action_id})
             assert result["receipt"]["state"] == "UNKNOWN"

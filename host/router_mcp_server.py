@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from host.mcp_server import McpServer, _error_result  # noqa: E402
+from host.router_web_policy import WebScopeError  # noqa: E402
 
 
 TOOLS = ROOT / "schema" / "router-tools"
@@ -153,6 +154,8 @@ class RouterBackend(threading.Thread):
         async def dispatch():
             try:
                 return await self.service.call(tool, arguments)
+            except WebScopeError as exc:
+                return exc.body
             except (KeyError, TypeError, ValueError):
                 return {"ok": False, "error": "INVALID_ARGUMENT"}
             except Exception:
@@ -166,8 +169,11 @@ class RouterBackend(threading.Thread):
             return _error_result("ROUTER_TIMEOUT",
                                  "Reuse the same start request_id for router_start; otherwise query existing state; never replay execution", False,
                                  tool if tool in {"router_stop", "router_start"} else "router_status")
-        return {"content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False)}],
+        return {"content": self.result_content(body),
                 "isError": not body["ok"]}
+
+    def result_content(self, body):
+        return [{"type": "text", "text": json.dumps(body, ensure_ascii=False)}]
 
     def shutdown(self):
         if self.loop is not None and self.loop.is_running() and self.stop_event is not None:
@@ -187,7 +193,11 @@ def main():
     instructions = INSTRUCTIONS
     if args.catalog is not None:
         instructions += " Catalog mode requires explicit plan_id for every plan/submit/status/result/stop call."
-    server = McpServer(backend, tool_list(args.catalog is not None), instructions=instructions, strict_tools=True)
+    serve(backend, tool_list(args.catalog is not None), instructions)
+
+
+def serve(backend, tools, instructions=INSTRUCTIONS):
+    server = McpServer(backend, tools, instructions=instructions, strict_tools=True)
     try:
         while True:
             line = sys.stdin.buffer.readline(MAX_MESSAGE_BYTES + 1)

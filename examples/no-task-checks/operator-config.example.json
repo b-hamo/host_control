@@ -1,0 +1,11 @@
+{
+  "directory": "C:/SCRP/runs/no-task-checks-001",
+  "origins": [],
+  "browsing_policy": "web",
+  "task_checks": false,
+  "runner_exe": "C:/SCRP/sandbox_runner.exe",
+  "sandbox_root": "C:/SCRP/sandbox",
+  "allow_gui": true,
+  "allow_execution": true,
+  "auto_analyze_clipboard": false
+}

@@ -22,6 +22,9 @@ class Operation(StrEnum):
     EXECUTE = "execute"
     BUILD = "build"
     TEST = "test"
+    GUI = "gui"
+    LOCAL_BROWSER = "local_browser"
+    LOCAL_CLIPBOARD = "local_clipboard"
 
 
 EXECUTION = frozenset({Operation.EXECUTE, Operation.BUILD, Operation.TEST})
@@ -140,7 +143,7 @@ class Action:
     @property
     def location(self) -> Location:
         # Structured operation, never keywords, filename suffixes or Agent trust labels.
-        return Location.SANDBOX if self.operation in EXECUTION else Location.LOCAL
+        return Location.SANDBOX if self.operation in EXECUTION or self.operation == Operation.GUI else Location.LOCAL
 
     @property
     def access(self) -> str:

@@ -25,23 +25,27 @@ class Delegation:
 
 class Authority:
     def __init__(self, *, sources: tuple[Source, ...] = (), delegations: tuple[Delegation, ...] = (),
-                 verify_source: Callable[[Source], bool] | None = None, clock=time.time):
+                 verify_source: Callable[[Source], bool] | None = None, clock=time.time, task_checks=True):
+        if type(task_checks) is not bool:
+            raise ValueError("task_checks must be boolean")
+        self.task_checks = task_checks
         self.sources = {s.source_id: s for s in sources}
         self.delegations = {d.reference: d for d in delegations}
         self.verify_source = verify_source
         self.clock = clock
 
     def check(self, action: Action) -> str:
-        grant = self.delegations.get(action.delegation_ref)
-        if grant is None or grant.expires_at <= self.clock():
-            return "DELEGATION_MISSING_OR_EXPIRED"
-        if action.operation not in grant.operations or action.location not in grant.locations:
-            return "DELEGATION_OPERATION"
-        for name in ("reads", "writes", "network", "capabilities"):
-            if not set(getattr(action.scope, name)) <= set(getattr(grant.scope, name)):
-                return "DELEGATION_SCOPE"
-        if action.operation in EXECUTION and action.fingerprint not in grant.execution_fingerprints:
-            return "EXECUTION_NOT_DELEGATED"
+        if self.task_checks:
+            grant = self.delegations.get(action.delegation_ref)
+            if grant is None or grant.expires_at <= self.clock():
+                return "DELEGATION_MISSING_OR_EXPIRED"
+            if action.operation not in grant.operations or action.location not in grant.locations:
+                return "DELEGATION_OPERATION"
+            for name in ("reads", "writes", "network", "capabilities"):
+                if not set(getattr(action.scope, name)) <= set(getattr(grant.scope, name)):
+                    return "DELEGATION_SCOPE"
+            if (action.operation in EXECUTION or action.operation in {Operation.GUI, Operation.LOCAL_BROWSER, Operation.LOCAL_CLIPBOARD}) and action.fingerprint not in grant.execution_fingerprints:
+                return "EXECUTION_NOT_DELEGATED"
         supplied = {s.source_id: s for s in action.sources}
         visited, active = set(), set()
 

@@ -54,8 +54,8 @@ class HostGateway:
             return self._receipt(request, State.HELD, "POLICY_UNAVAILABLE")
         if reason != "ALLOW":
             return self._receipt(request, State.DENIED, reason)
-        grant = self.authority.delegations[action.delegation_ref]
-        if grant.approval_required:
+        grant = self.authority.delegations.get(action.delegation_ref)
+        if self.authority.task_checks and grant is not None and grant.approval_required:
             if self.approver is None or not await self.approver(request):
                 return self._receipt(request, State.DENIED, "APPROVAL_REQUIRED")
             # Files, policy and scope may have changed while the user was approving.
@@ -148,8 +148,12 @@ class HostGateway:
 
     async def read_result(self, receipt: Receipt) -> bytes:
         """Return a verified Local data result; never evaluate returned code/page text."""
-        if not await self.verify(receipt) or not receipt.execution_id.startswith("LOCAL-"):
+        if not await self.verify(receipt):
             raise ValueError("not a verified Local result")
+        if receipt.execution_id.startswith("GUI-") and self.sandbox is not None:
+            return await self.sandbox.read_result(receipt)
+        if not receipt.execution_id.startswith("LOCAL-"):
+            raise ValueError("not a data result")
         return self.local.results[receipt.evidence_ref]
 
     async def artifact(self, output_ref: str) -> Artifact:

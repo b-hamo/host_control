@@ -60,7 +60,7 @@ class RouterService:
     async def _result_data(self, receipt):
         if not await self.host.verify(receipt):
             raise ValueError("unverified result")
-        if receipt.execution_id.startswith("LOCAL-"):
+        if receipt.execution_id.startswith(("LOCAL-", "GUI-")):
             return {"text": (await self.host.read_result(receipt)).decode("utf-8")}
         outputs = []
         for art in receipt.artifacts:

@@ -45,7 +45,7 @@ def load(path: Path):
         raise ValueError("Host configuration too large")
     doc = json.loads(raw)
     exact(doc, {"version", "plan_id", "data_directory", "private_directory", "sources", "delegations",
-                "execution_action", "bindings", "host", "command_launch_enabled", "execution_approval"},
+                "execution_action", "bindings", "host", "command_launch_enabled", "execution_approval", "task_checks"},
           ("version", "plan_id", "data_directory", "private_directory", "sources", "delegations",
            "execution_action", "bindings", "host"))
     if doc["version"] != 1:
@@ -91,7 +91,8 @@ def load(path: Path):
             frozenset(strings(entry.get("execution_fingerprints", []))), entry.get("approval_required", False)))
     if len({g.reference for g in grants}) != len(grants):
         raise ValueError("duplicate trusted delegation")
-    authority = Authority(sources=tuple(records), delegations=tuple(grants), verify_source=verify)
+    authority = Authority(sources=tuple(records), delegations=tuple(grants), verify_source=verify,
+                          task_checks=doc.get('task_checks', True))
     execution = action(doc["execution_action"])
     bindings = tuple(InputBinding(exact(b, ("source_id", "host_path"), ("source_id", "host_path"))["source_id"],
                                   absolute(b["host_path"])) for b in doc["bindings"])
