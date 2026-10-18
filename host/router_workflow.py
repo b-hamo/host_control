@@ -145,6 +145,7 @@ class RouterWorkflow:
         self.runtime_factory = runtime_factory or InteractiveRuntime.open
         self.paths, self.reads, self.requests = {}, {}, {}
         self.captures = {}
+        self.capture_requests = {}
         self.execution = self.execution_action = None
         self.execution_identity = None
         self.binding = None
@@ -423,7 +424,7 @@ class RouterWorkflow:
 
     async def call(self, name, args):
         async with self.lock:
-            if name in ('router_status', 'router_result') and args['request_id'] in self.captures:
+            if name in ('router_status', 'router_result') and args['request_id'] in self.captures and args['request_id'] not in self.requests:
                 return {**self.captures[args['request_id']], 'stopped': self.service.stopped}
             if name in ('router_status', 'router_result', 'router_stop'):
                 result = await self.service.call(name, args)
@@ -450,17 +451,19 @@ class RouterWorkflow:
             if name not in ('router_read', 'router_execute', 'router_gui', 'router_clipboard_read', 'router_capture'):
                 self.audit('DIRECT_TOOL_DENIED', tool=name)
                 return {'ok': False, 'error': 'TOOL_NOT_EXPOSED'}
+            rid = args['request_id']; identifier(rid)
+            if name == 'router_capture' and rid in self.capture_requests:
+                if self.capture_requests[rid] != json.dumps([name, args], sort_keys=True):
+                    return {'ok': False, 'error': 'IDEMPOTENCY_CONFLICT'}
+                return {**self.captures[rid], 'stopped': self.service.stopped}
             if self.service.stopped:
                 return {'ok': False, 'error': 'PLAN_STOPPED'}
-            rid = args['request_id']; identifier(rid)
             signature = json.dumps([name, args], sort_keys=True)
-            if rid in self.requests:
+            if name != 'router_capture' and rid in self.requests:
                 if self.requests[rid] != signature:
                     return {'ok': False, 'error': 'IDEMPOTENCY_CONFLICT'}
-                if rid in self.captures:
-                    return dict(self.captures[rid])
                 return await self.service.call('router_status', {'request_id': rid})
-            if len(self.requests) >= 128:
+            if len(self.requests) + len(self.capture_requests) >= 128:
                 raise ValueError('Workflow request limit')
             if name == 'router_capture':
                 if not self.allow_external_capture:
@@ -475,7 +478,7 @@ class RouterWorkflow:
                 record = self.source(raw, 'agent-observed:' + args['source_url'])
                 self.audit('EXTERNAL_BROWSER_CAPTURE', source=asdict(record),
                            independently_verified=False)
-                self.requests[rid] = signature
+                self.capture_requests[rid] = signature
                 self.captures[rid] = {'ok': True, 'source': asdict(record),
                     'trust': 'external', 'independently_verified': False,
                     'execution_location': 'SANDBOX'}

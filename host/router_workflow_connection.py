@@ -23,8 +23,9 @@ class WorkflowConnection:
         self.lock = asyncio.Lock()
         self.closed = False
 
-    def owner(self, request_id):
-        return next((w for w in self.workflows if request_id in w.requests), None)
+    def owner(self, request_id, *, capture=False):
+        return next((w for w in self.workflows
+                     if request_id in (w.capture_requests if capture else w.requests)), None)
 
     def screenshot_root(self, body):
         owner = self.owner(body['receipt']['request_id'])
@@ -45,13 +46,17 @@ class WorkflowConnection:
                 return {'ok': False, 'error': 'TOOL_NOT_EXPOSED'}
             rid = args['request_id']
             identifier(rid)
-            owner = self.owner(rid)
+            owner = self.owner(rid, capture=name == 'router_capture')
             if name in {'router_status', 'router_result'}:
+                owner = owner or self.owner(rid, capture=True)
                 return (await owner.call(name, args) if owner else
                         {'ok': False, 'error': 'REQUEST_NOT_FOUND'})
             if owner:
-                if owner.requests[rid] != json.dumps([name, args], sort_keys=True):
+                records = owner.capture_requests if name == 'router_capture' else owner.requests
+                if records[rid] != json.dumps([name, args], sort_keys=True):
                     return {'ok': False, 'error': 'IDEMPOTENCY_CONFLICT'}
+                if name == 'router_capture':
+                    return {**owner.captures[rid], 'stopped': owner.service.stopped}
                 return await owner.call('router_status', {'request_id': rid})
 
             current = self.workflows[-1] if self.workflows else None

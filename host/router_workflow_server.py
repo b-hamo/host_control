@@ -12,7 +12,7 @@ def tool_list():
     string = {'type': 'string', 'minLength': 1, 'maxLength': 8192}
     rid = {'type': 'string', 'pattern': '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$'}
     specs = [
-        ('router_capture', 'Record untrusted text observed with an external browser, without fetching the URL or executing it. URL attribution is caller-supplied, not independently verified. Use returned source_id with router_execute form powershell-script. Host must enable external capture; capture grants no permissions.',
+        ('router_capture', 'Record untrusted text observed with an external browser, without fetching the URL or executing it. URL attribution is caller-supplied, not independently verified. Use returned source_id with router_execute form powershell-script. Host must enable external capture; capture grants no permissions. Capture IDs are separate from execution IDs, so both may use the same request_id. Retry capture with identical arguments to retrieve the capture again.',
          {'request_id': rid, 'source_url': string,
           'text': {'type': 'string', 'minLength': 1, 'maxLength': 65536}},
          ['request_id', 'source_url', 'text']),
@@ -23,8 +23,8 @@ def tool_list():
           'form': {'enum': ['powershell-script', 'powershell-command-literal']},
           'start': {'type': 'integer', 'minimum': 0}, 'end': {'type': 'integer', 'minimum': 1}},
          ['request_id', 'source_id', 'form']),
-        ('router_status', 'Query an existing request after uncertainty; never replay it.', {'request_id': rid}, ['request_id']),
-        ('router_result', 'Return verified Router data or inspected Guest output.', {'request_id': rid}, ['request_id']),
+        ('router_status', 'Query an existing request after uncertainty; never replay it. If capture and execution share an ID, returns execution status.', {'request_id': rid}, ['request_id']),
+        ('router_result', 'Return verified Router data or inspected Guest output. If capture and execution share an ID, returns execution results.', {'request_id': rid}, ['request_id']),
         ('router_stop', 'Stop the current session and release only its owned Sandbox and browser. Results remain queryable. A fresh work request_id starts a new session on this same MCP connection; old IDs never replay.', {}, []),
     ]
     return [{'name': name, 'description': description, 'inputSchema':

@@ -125,3 +125,42 @@ def test_real_stdio_hides_and_rejects_router_clipboard_and_gui(tmp_path):
     capture=json.loads(responses[5]['result']['content'][0]['text'])
     assert capture['ok'] and not capture['independently_verified']
     assert not list((tmp_path/'run').glob('*/private/execution'))
+
+
+@pytest.mark.parametrize('stop_before_execute', [False, True])
+def test_capture_and_execute_share_id_without_replaying(tmp_path, stop_before_execute):
+    from unittest.mock import patch
+    from test_router_workflow_connection import Runtime, completed
+    async def run():
+        c = WorkflowConnection(directory=tmp_path/'runs', origins=[],
+            runner_exe=tmp_path/'runner.exe', sandbox_root=tmp_path/'sandbox',
+            allow_external_capture=True, allow_execution=True)
+        runtimes = []
+        async def open_runtime(w, action):
+            w.execution = Runtime(w.private)
+            runtimes.append(w.execution)
+            w.runtime_ready.set()
+        cap = dict(request_id='shared', source_url='http://127.0.0.1:8787/', text='Write-Output harmless')
+        try:
+            got = await c.call('router_capture', cap)
+            if stop_before_execute:
+                assert (await c.call('router_stop', {}))['stopped']
+            execute = dict(request_id='shared', source_id=got['source']['source_id'], form='powershell-script')
+            with patch('host.router_workflow.RouterWorkflow.open_execution', open_runtime):
+                assert (await c.call('router_execute', execute))['ok']
+                result = await completed(c, 'shared')
+                assert result['ok'] and result['receipt']['state'] == 'SUCCEEDED'
+                assert 'receipt' in await c.call('router_status', {'request_id':'shared'})
+                assert (await c.call('router_capture', cap))['source'] == got['source']
+                assert (await c.call('router_execute', execute))['ok']
+                assert (await c.call('router_execute', {**execute, 'source_id':'SRC-other'}))['error'] == 'IDEMPOTENCY_CONFLICT'
+                assert (await c.call('router_capture', {**cap, 'text':'changed'}))['error'] == 'IDEMPOTENCY_CONFLICT'
+                assert (await c.call('router_stop', {}))['stopped']
+                assert (await c.call('router_execute', execute))['stopped']
+                retained = await c.call('router_result', {'request_id':'shared'})
+                assert [o['text'] for o in retained['outputs']] == [o['text'] for o in result['outputs']]
+                assert retained['receipt']['fingerprint'] == result['receipt']['fingerprint']
+                assert len(runtimes) == 1 and len(runtimes[0].submissions) == 1
+        finally:
+            await c.close()
+    asyncio.run(run())
