@@ -63,7 +63,10 @@
                 "browse",
                 "execute",
                 "build",
-                "test"
+                "test",
+                "gui",
+                "local_browser",
+                "local_clipboard"
               ]
             },
             "scope": {

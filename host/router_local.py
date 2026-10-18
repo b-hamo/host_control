@@ -12,10 +12,11 @@ from router.models import Action, Operation
 
 
 class LocalTools:
-    def __init__(self, root: Path, *, browse=None, search=None, max_bytes: int = 1024 * 1024):
+    def __init__(self, root: Path, *, browse=None, search=None, interaction=None, max_bytes: int = 1024 * 1024):
         self.root = root.resolve(strict=True)
         self.browse, self.search, self.max_bytes = browse, search, max_bytes
         self.results: dict[str, bytes] = {}
+        self.interaction = interaction
 
     def _path(self, value: str) -> Path:
         raw = Path(value)
@@ -50,6 +51,9 @@ class LocalTools:
                 raise ValueError("browser scope mismatch")
             if (self.browse if action.operation == Operation.BROWSE else self.search) is None:
                 raise ValueError("read-only browser provider unavailable")
+        elif action.operation in {Operation.LOCAL_BROWSER, Operation.LOCAL_CLIPBOARD}:
+            if self.interaction is None or action.scope.reads or action.scope.writes or action.inputs or action.outputs:
+                raise ValueError('Local interaction provider unavailable or invalid scope')
         else:
             raise ValueError("no Local execution tool")
         if action.scope.capabilities:
@@ -69,6 +73,8 @@ class LocalTools:
             data = path.read_bytes()
             if data != action.text.encode():
                 raise ValueError("write verification failed")
+        elif action.operation in {Operation.LOCAL_BROWSER, Operation.LOCAL_CLIPBOARD}:
+            data = await self.interaction(action)
         else:
             provider = self.browse if action.operation == Operation.BROWSE else self.search
             data = await provider(action)

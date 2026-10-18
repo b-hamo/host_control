@@ -154,7 +154,8 @@ Codex가 `host/mcp_server.py`를 자식 프로세스로 켜고 stdin/stdout으�
 4. 코덱스를 완전히 껐다 켜고 새 대화에서 "7-Zip 받아서 설치해 줘"
 
 Skill이 부르는 도구·옵션이 이 Host에 실제로 있는지는 `tests/test_codex_skill.py`가 확인한다. Host 도구를 바꾸면 Skill도
-같은 PR에서 고친다. Router 도구를 코덱스에 붙일 때도 이 Skill을 고친다(지금 Skill은 GUI 모드 도구만 쓴다).
+같은 PR에서 고친다. 일반 탐색은 기존 브라우저 도구를 사용할 수 있고, 페이지의 실행 요구는
+[브라우저→Sandbox 인계](docs/browser-sandbox-handoff.md)로 처리한다. 실행 위치·파일 반입·반출 검사를 유지한다.
 
 ### Codex에 연결하기
 

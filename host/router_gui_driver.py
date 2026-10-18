@@ -46,7 +46,8 @@ class GuiCommandDriver:
                 raise ValueError("driver already reserved for another request")
             return
         if (not self.supports(request) or broker.policy is not self.policy
-                or broker.launcher is None or broker.launcher.manager is not self.manager
+                or broker.launcher is None or not (broker.launcher.manager is self.manager
+                    or getattr(broker.launcher.manager, "owns", lambda _: False)(self.manager))
                 or broker.artifacts is None):
             raise ValueError("Host command composition is incomplete")
         if self.manager.authority.check(request.action) != "ALLOW":
