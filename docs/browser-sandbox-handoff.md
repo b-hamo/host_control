@@ -20,7 +20,9 @@ auto_analyze_clipboard를 true로 설정하면 시작을 거부한다. 페이지
 
 ## 호출
 
-1. 앱 내부 브라우저에서 복사한 뒤 `tab.clipboard.readText()`로 본문을 읽는다.
+1. **복사 버튼을 누르기 전에** `await tab.clipboard.writeText('')`로 브라우저 세션
+   클립보드를 초기화한다. 버튼 클릭 후 `tab.clipboard.readText()`로 본문을 읽는다.
+   클릭과 읽기 사이에는 초기화하지 않는다.
    빈 값이면 실행하지 않는다. 확보한 명령을 그대로 `router_capture(request_id, source_url, text)`에 전달한다.
 2. 반환된 source_id로 `router_execute(request_id, source_id, form="powershell-script")`를 호출한다.
    전체 명령줄도 PowerShell 스크립트 본문으로 실행된다. 지원하지 않는 셸은 변환해 실행하지 않는다.
@@ -80,3 +82,26 @@ request_id를 사용해도 충돌하지 않는다. 같은 캡처 ID로 다른 �
 상태·결과 조회는 같은 ID의 실행이 있으면 실행 결과를 우선한다. 캡처만 있으면
 캡처 결과를 반환한다. 원래 인수로 router_capture를 재호출하면 기존 source_id를
 그대로 반환한다. 종료 후에도 같은 실행 ID는 재실행하지 않는다.
+
+## 내부 브라우저 복사 순서
+
+사용자가 제공한 반복 재현 결과에서는 최초 클립보드 API 호출 전에 버튼으로 복사한
+내용이 readText()에 나타나지 않았고, 복사 전 writeText('') 호출로 해결됐다.
+이는 환경별 관찰에 따른 대응이며 브라우저 내부 구현의 원인을 소스로 확정한 것은 아니다.
+Router는 브라우저 API를 호출할 수 없으므로 아래 순서는 브라우저를 조작하는 에이전트가
+수행한다. MCP 도구 설명·초기 안내와 팀 스킬에도 동일한 순서를 명시한다.
+
+```javascript
+// tab과 copyButton은 현재 페이지에서 확인한 브라우저 탭과 복사 버튼이다.
+// 기존 브라우저 세션 클립보드 값을 비우므로 복사 직전에만 수행한다.
+await tab.clipboard.writeText('');
+await copyButton.click();
+await tab.playwright.domSnapshot();
+const text = await tab.clipboard.readText();
+if (!text.trim()) throw new Error('CLIPBOARD_CAPTURE_EMPTY');
+// text 원문을 변경하지 않고 router_capture의 text 인수에 전달한다.
+```
+
+빈 값이면 과거 명령·Host 클립보드로 대체하지 않는다. 복사 버튼을 다시 누르는 경우에도
+초기화 → 클릭 → 읽기 순서를 따른다. 페이지의 Copied 표시만으로 캡처 성공을 판단하지 않는다.
+이 변경은 Defender/AMSI 검사와 실행 권한을 변경하지 않는다.
