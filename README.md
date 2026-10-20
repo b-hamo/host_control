@@ -158,6 +158,12 @@ Skill이 부르는 도구·옵션이 이 Host에 실제로 있는지는 `tests/t
 
 ### Codex에 연결하기
 
+Host 재시작 후에도 같은 stdio 연결을 유지하려면 등록 인자에
+`--shared-runtime --shared-state <운영자 전용 절대 경로>`를 추가한다.
+이 모드에서는 stdin 종료가 클라이언트만 분리하며, 이후 요청이 새 Host에 재접속한다.
+응답을 잃은 실행 요청은 자동 재전송하지 않는다.
+설정과 제한 사항은 [MCP Host 재접속](docs/mcp-host-reconnect.md)을 참고한다.
+
 `~/.codex/config.toml`을 고치지 않고 실행할 때만 붙이는 방법 (PowerShell, 경로는 본인 환경에 맞게):
 
 ```powershell

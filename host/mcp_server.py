@@ -539,7 +539,13 @@ def _setup_logging(log_file: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from host.mcp_stdio import prepare_stdio
+    prepare_stdio()
     ap = argparse.ArgumentParser(description="SCRP MCP Server (WBS 5.7)")
+    ap.add_argument("--shared-runtime", action="store_true",
+                    help="keep stdio clients alive across shared Host restarts; never replay lost requests")
+    ap.add_argument("--shared-state", type=Path, default=None,
+                    help="private absolute directory for shared Host ownership and endpoint metadata")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=17443, help="wss port for the Runner (0 = any free port)")
     ap.add_argument("--upload-port", type=int, default=17444, help="https port for screenshot uploads (0 = any)")
@@ -590,6 +596,16 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--audit-dir", type=Path, default=HOST_DIR / ".audit")
     ap.add_argument("--log-file", type=Path, default=HOST_DIR / ".logs" / "mcp_server.log")
     args = ap.parse_args(argv)
+    if args.shared_runtime != (args.shared_state is not None):
+        ap.error("--shared-runtime and --shared-state must be used together")
+    if args.shared_state is not None:
+        if not args.shared_state.is_absolute():
+            ap.error("--shared-state must be absolute")
+        state = args.shared_state.resolve()
+        for mapped in (args.inbox, args.shared):
+            if mapped is not None and (state.is_relative_to(mapped.resolve())
+                                      or mapped.resolve().is_relative_to(state)):
+                ap.error("--shared-state must be separate from inbox/shared")
     if args.runner_exe is not None:
         # The Sandbox Manager says where the bootstrap goes and which address the Runner dials.
         if args.advertise_address or args.bootstrap_out:
@@ -635,7 +651,13 @@ def main(argv: list[str] | None = None) -> None:
         shared_description(tools)
     if args.save_downloads:
         save_downloads_description(tools)
-    server = McpServer(McpRuntime(args, HostBackend), tools, strict_tools=True)
+    def build_server():
+        return McpServer(McpRuntime(args, HostBackend), tools, strict_tools=True)
+    if args.shared_runtime:
+        from host.mcp_shared import run
+        run(args, build_server)
+        return
+    server = build_server()
     log.info("MCP server up (pid %s), %d tools", __import__("os").getpid(), len(server.tools))
     out = sys.stdout.buffer
     try:
