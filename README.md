@@ -46,13 +46,14 @@ VM 및 창 backend와 Defender 판정/사용자 선택은 테스트 대역이다
 | `host/mcp_server.py` | MCP Server: Codex가 자식 프로세스로 켜고 stdio로 도구를 부르는 창구 | 5.7 |
 | `host/inbox_download.py` | 받는 폴더(inbox)로 내려받기: Host가 https로 받고 실행은 Sandbox에서만. 다운로드 폴더에 이미 있는 파일은 `inbox_import`로 복사 | 5.9 |
 | `host/sandbox_run.py` | 받은 파일을 Sandbox 안에서 실행 (GUI 모드 + Router 부품): 정확한 명령 하나만 Win+R로 → 영수증 확인 (승인 없음, 기록) | 7.x |
+| `host/router_capture.py` | 웹 페이지 명령 기록 (`router_capture`, #94): AI가 본 글자와 Host가 직접 읽은 클립보드를 따로 해시해 보관. `router_execute`가 같은 Sandbox에서 분석 | 7.x |
 | `host/artifacts.py` | 파일 반출 (artifact-export-v1): 후보 등록, 승인 후 업로드 권한, 결과 대조, 검사, 최종 공개, 취소 | 5.8 |
 | `host/telemetry.py` | Telemetry 채널 (`/scrp/v1/telemetry`): 후보 SECURITY_EVENT 수신, EVENT_ACK | 5.8 |
 | `host/artifact_scan.py` | 반출 전 검사: 형식 정책(UTF-8 TXT) + 백신 (기본 미설정 = 차단) | 5.8 |
 | `host/approval.py` | 사용자 승인 창 (Host 화면) | 5.6 |
 | `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
-| `host/tool_catalog.py` | 도구 18개 목록, 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/tool_catalog.py` | 도구 20개 목록(GUI 18 + `router_capture`·`router_execute`), 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
 | `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
 | `host/tool_availability.py` | 도구 노출 규칙 (표준 라이브러리만 사용, MCP Server가 빠르게 뜨도록) | 5.7 |
@@ -154,8 +155,8 @@ Codex가 `host/mcp_server.py`를 자식 프로세스로 켜고 stdin/stdout으�
 4. 코덱스를 완전히 껐다 켜고 새 대화에서 "7-Zip 받아서 설치해 줘"
 
 Skill이 부르는 도구·옵션이 이 Host에 실제로 있는지는 `tests/test_codex_skill.py`가 확인한다. Host 도구를 바꾸면 Skill도
-같은 PR에서 고친다. 일반 탐색은 기존 브라우저 도구를 사용할 수 있고, 페이지의 실행 요구는
-[브라우저→Sandbox 인계](docs/browser-sandbox-handoff.md)로 처리한다. 실행 위치·파일 반입·반출 검사를 유지한다.
+같은 PR에서 고친다. 일반 탐색은 이 PC의 브라우저로 하고, 페이지가 실행을 요구하는 명령은
+[웹 페이지 명령 분석](#웹-페이지-명령-분석-router_capture--router_execute-94)으로 같은 Sandbox에서 처리한다.
 
 ### Codex에 연결하기
 
@@ -277,7 +278,7 @@ powershell -ExecutionPolicy Bypass -File <sandbox_manager>\tools\setup_inbox.ps1
 ### 받은 파일 실행 (sandbox_run): GUI 모드 + Router 부품
 
 GUI 모드 한 세션 안에서 **받기 → Sandbox에서 실행 → 그 창을 화면 조작**까지 이어서 한다.
-Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서버(`router_mcp_server.py`)는 그대로 둔다.
+Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서버는 #94에서 이 서버로 합치고 지웠다.
 
 ```powershell
 # Codex 등록 인자에 추가 (--inbox, --artifact-export와 같이)
@@ -324,6 +325,34 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 
 실제 Sandbox 확인: Sandbox가 켜진 뒤 ZoomIt 받기 → `sandbox_run` → Sandbox 안에서 ZoomIt 창이 뜸(실행 기록·도우미·해시 확인 사본·프로세스 확인).
 내 PC로 가져와 직접 실행하려면 `inbox_finish`로 남길 파일을 고르고, Host 화면 승인 창에서 사람이 허락한다(`P-INBOX-KEEP`).
+
+### 웹 페이지 명령 분석 (router_capture → router_execute, #94)
+
+"Win+R을 누르고 붙여 넣으세요" 같은 페이지(ClickFix)의 명령을 **이 PC에서는 읽기만, 실행은 같은 Sandbox에서만** 한다.
+예전 Router 전용 서버 두 개(`router_mcp_server.py`, `router_workflow_server.py`)를 이 GUI 모드 서버로 합쳤다
+([설계](docs/unified-router-design.md)). Sandbox를 따로 띄우지 않으므로, 실행 뒤 뜬 창을 `computer_*`로 이어서 조작한다.
+
+```powershell
+# --sandbox-run과 같이
+--runner-exe <sandbox_runner.exe> --inbox <받는 폴더> --artifact-export --sandbox-run --router-capture
+```
+
+```
+[이 PC]    브라우저로 페이지 열기 → 복사 버튼 → 클립보드 → router_capture(clipboard=true): Host가 읽어서 기록
+                                                              │
+[Sandbox]  router_execute: 파생 스크립트를 inbox로 → sandbox_run과 같은 Win+R 실행 → 영수증 → sandbox_run_status
+```
+
+| 단계 | 누가 | 무엇을 |
+|---|---|---|
+| 기록 | Agent → Host | `router_capture(request_id, source_url, text, clipboard)`. `text`는 Agent가 본 글자, `clipboard=true`면 **Host가 이 PC 클립보드를 직접 읽는다**. 둘 다 따로 저장·SHA-256(`CAP-0001-AGENT`, `CAP-0001-CLIP`)하고 같은지(`agent_text_matches_clipboard`)를 남긴다. ClickFix는 보이는 글자와 복사되는 명령이 달라서, 다르면 Host가 읽은 쪽을 쓰라고 알린다. URL은 열지 않고, 쿼리는 지운다. 원문은 세션 전용 폴더(`artifact_dir/<세션>/captures`)에만, 감사 기록에는 길이·해시만 |
+| 파생 | Host | `router_execute(request_id, source_id, form)`. 캡처를 **데이터로만** 변환해 PowerShell 스크립트(UTF-8 BOM)를 받는 폴더에 둔다. `powershell-script`(전체가 스크립트), `powershell-command`(`powershell ... -Command "..."`/`-EncodedCommand` 한 줄, Host가 읽은 클립보드 출처만), `powershell-command-literal`(페이지 코드 안 작은따옴표 문자열). **클립보드 출처는 `powershell-command`로만** 실행한다: 사용자가 따로 복사해 둔 글자가 스크립트로 돌지 않게 |
+| 출처 | Host | 파생 스크립트(`CAP-0001-CLIP-PS1`)의 부모는 캡처. `Authority`가 둘 다 지금 바이트로 다시 해시한다. 어느 쪽이 바뀌어도 실행 전·Enter 직전에 거부(`REASSESSMENT_REQUIRED`) |
+| 실행·결과 | Host → Runner → Host | `sandbox_run`과 같다(`P-ROUTER-EXECUTE`, 승인 창 없음, 세 입력만, 영수증). 상태는 `sandbox_run_status` |
+| 중복 | Host | 같은 `request_id`·같은 인자 = 같은 결과(다시 실행하지 않음), 다른 인자 = `IDEMPOTENCY_CONFLICT`. 캡처 ID와 실행 ID는 따로 |
+| 끝난 뒤 | Host | 세션이 끝나도 `sandbox_run_status`와 같은 `request_id`의 재요청은 보존된 결과를 돌려준다. 영수증 없는 실행은 Enter를 보냈으면 `UNKNOWN`, 아니면 `FAILED`. 새 작업은 `task_submit`부터 |
+
+클립보드 기록은 그 순간의 내용이다. 다른 프로그램이 그 사이에 클립보드를 바꾸지 않았다는 증명은 아니다(순번 `clipboard_sequence`만 남긴다).
 
 ## 파일 반출 (artifact-export-v1)
 
@@ -481,7 +510,7 @@ Host가 거부하는 경우:
 - 후보 무효화 메시지가 계약에 없어서 `artifact_list`는 "보고된 후보" 목록이다. 지워지거나 바뀐 파일은 반출할 때 Runner가 거부한다
 - 반출은 한 번에 하나만 (`ARTIFACT_BUSY`). 후보·전송 상태는 메모리에만 있다 (Host를 다시 켜면 새로 시작)
 - 받는 폴더는 폴더째 연결이다(사본 아님). 링크는 1초 안에 지우지만 그 사이는 열려 있을 수 있다 → Codex `-s read-only` 전제
-- 내려받은 파일을 넣은 세션의 "외부 출처" 표시(Router 오염 규칙)는 아직 없다. 실행 명령 검사는 Router 작업에서 붙인다
+- 내려받은 파일을 넣은 세션의 "외부 출처" 표시(Router 오염 규칙)는 아직 없다
 - MCP Server 1개 = 세션 1개. Codex를 다시 켜면 새 세션이 만들어지고 Sandbox도 다시 접속해야 한다
 - Codex가 MCP Server를 강제로 죽이면(stdin을 닫지 않고) Sandbox가 남는다. 다음 `task_submit` 때 Sandbox Manager가
   켠 Host가 죽은 세션의 Sandbox를 먼저 정리하고 시작한다 (손으로 켠 Sandbox는 건드리지 않고 거부)
@@ -489,10 +518,3 @@ Host가 거부하는 경우:
   그 Sandbox에서 하던 작업 상태는 화면에 남은 것만 이어진다
 - Sandbox 켜기에 실패한 세션은 다시 켜지 않는다. Codex를 다시 켜서 새 세션으로 시작한다
 - 승인 Workflow(B-8)는 `approver` 콜백 자리만 있다. 사용자에게 묻는 UI는 없으므로 승인 필요 도구는 지금은 거부된다
-
-## Router 연결에서 후속 작업 (#80)
-
-Router 전용 MCP는 `router_start`와 `router_list`를 제공한다. 기존 `--config` 연결에서도
-종료된 plan을 보존한 채 `default` 프로필로 새 plan/Sandbox를 시작할 수 있다.
-후속 도구 호출에는 반환된 plan_id를 명시한다. 여러 Host 프로필은 `--catalog`로 등록한다.
-사용 순서, 중복 요청과 정리 실패 계약은 [Router 후속 작업 문서](docs/router-followup.md)를 참고한다.

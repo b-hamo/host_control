@@ -1,6 +1,6 @@
-# Router를 SCRP MCP 하나로 통합 (설계 초안, #94)
+# Router를 SCRP MCP 하나로 통합 (#94)
 
-상태: 초안. 8절의 결정 사항을 반영했다.
+상태: 구현(자동화 시험까지). 실제 Windows Sandbox 시험과 11절 보류 항목이 남았다.
 
 ## 1. 문제
 
@@ -49,20 +49,20 @@ router_capture ─▶ 캡처 원문 ─▶ router_execute ─▶ 파생 .ps1 ─
 
 | 도구 | 하는 일 | 상태·결과 조회 |
 |---|---|---|
-| `router_capture` (신규, feat/91에서 이동) | 원문 텍스트와 출처 URL을 세션 전용 폴더에 저장, SHA-256으로 `Source` 등록(origin `external`). URL을 열거나 실행하지 않는다. 권한을 주지 않는다 | 같은 인자로 재호출하면 원래 기록 반환 |
-| `router_execute` (신규) | 캡처 원문에서 스크립트를 뽑아(`script_from_source`, `decode_powershell` 재사용) 파생 `.ps1`을 inbox에 쓰고, 부모가 캡처인 `Source`로 등록한 뒤 `SandboxRunner`로 실행 | `sandbox_run_status` 재사용 |
+| `router_capture` (`host/router_capture.py`) | `text`(Agent가 본 글자)와 `clipboard=true`(Host가 이 PC 클립보드를 직접 읽음)를 따로 세션 전용 폴더(`artifact_dir/<세션>/captures`)에 저장, SHA-256으로 `Source` 등록(`CAP-0001-AGENT`, `CAP-0001-CLIP`, origin `external`). 둘이 같은지(`agent_text_matches_clipboard`) 남기고, 다르면 Host가 읽은 쪽을 쓰라고 알린다. URL을 열거나 실행하지 않는다. 권한을 주지 않는다 | 같은 인자로 재호출하면 원래 기록 반환 |
+| `router_execute` (`SandboxRunner.plan_capture`) | 캡처에서 스크립트를 뽑아(`script_from_source`, `decode_powershell`) 파생 `.ps1`(UTF-8 BOM)을 inbox에 쓰고, 부모가 캡처인 `Source`(`CAP-0001-CLIP-PS1`)로 등록한 뒤 `SandboxRunner`로 실행. 클립보드 출처는 `powershell-command` 형식으로만 | `sandbox_run_status` 재사용 |
 
 - 웹 탐색은 지금처럼 내 PC(Local)에서 한다. Router 기준(탐색 = Local)을 따른다.
   `router_capture`는 브라우저와 무관하게 텍스트를 받으므로 Edge, Chrome, 코덱스 내장 브라우저 어디서 본 명령이든 기록할 수 있다.
 - 실행 위치는 Sandbox 하나뿐이다. Host 실행 대체 경로는 없다.
-- 두 도구는 `--router-capture` 같은 Host 옵션으로만 켠다. 기본은 꺼져 있다(`sandbox_run`과 같은 방식).
+- 두 도구는 `--router-capture`(`--sandbox-run` 필요)로만 켠다. 기본은 꺼져 있다. 정책 `P-ROUTER-CAPTURE`, `P-ROUTER-EXECUTE`(둘 다 ALLOW, 승인 창 없음).
 - 기존 `router_status/result/stop`은 GUI 모드의 `sandbox_run_status`, `session_stop`으로 대신한다.
 
 ## 5. 출처 체인
 
 ```
-CAP-0001  origin=external  reference=capture:<출처 URL>   sha256(원문)
-   └─ DRV-0001  origin=generated  parents=(CAP-0001)  sha256(파생 .ps1)
+CAP-0001-CLIP      origin=external   reference=clipboard:host:<순번>:<출처 URL>  sha256(원문)
+   └─ CAP-0001-CLIP-PS1  origin=generated  parents=(CAP-0001-CLIP)            sha256(파생 .ps1)
 ```
 
 - `Authority.check`는 부모까지 재귀로 확인한다. 실행 `Action.sources`에 두 출처를 모두 넣는다.
@@ -85,9 +85,9 @@ CAP-0001  origin=external  reference=capture:<출처 URL>   sha256(원문)
 |---|---|
 | 그대로 재사용 | `SandboxRunner`(plan/start/status/영수증 검증), `RouterGuiPolicy`, `Authority`/`Delegation`, inbox 기록, 반출 검사, 감사 기록, 세션 수명주기 |
 | feat/91에서 이동 | `script_from_source`, `router_command_intake.decode_powershell`, 캡처·실행 요청 ID 분리(#92), 클립보드 초기화 안내(#93) |
-| feat/91에서 이동 + 확장 | `router_local_browser.py`의 Host 브라우저 탭과 클립보드 확인. 지금은 Edge만 찾으므로 Chrome도 찾도록 넓힌다(둘 다 Chromium이라 같은 실행 옵션) |
-| 삭제 | `router_mcp_server.py`, `router_workflow_server.py`와 이 두 서버에만 쓰이는 모듈·시험·실행 스크립트. Router workflow의 별도 Host·Sandbox 생성(`open_execution`), plan 단위 수명주기(`router_start/stop`) |
-| 남김 | `router/` 엔진·모델과 `router_authority`, `router_gui_policy`, `router_command_bundle` 등 `sandbox_run`이 쓰는 부품 |
+| feat/91에서 이동 | `router_local_browser.clipboard_snapshot`(Host 클립보드 읽기)만 `router_capture.py`로. Router가 직접 띄우는 Edge 탭(`router_gui`)은 #91에서 이미 꺼져 있었고 옮기지 않았다. 탐색은 Agent가 쓰는 브라우저(Edge, Chrome, 코덱스 내장)로 하므로 브라우저 종류와 무관하다 |
+| 삭제 | 서버 2개(`router_mcp_server.py`, `router_workflow_server.py`)와 그 서버에만 쓰이던 `router_mcp_service`, `router_connection`, `router_provisioning`, `router_codec`, `router_runtime`, `router_workflow`, `router_workflow_connection`, `router_interactive`, `router_local_browser`, `router_task_scope`, `router_web_policy`, 시험 11개, `scripts/launch_router_workflow.py`, `scripts/verify_browser_handoff_live.py`, `schema/router-tools/`, `schema/router-list.json`, `schema/router-start.json`, 관련 문서 4개 |
+| 남김 | `router/` 엔진·모델, `router_authority`, `router_gui_policy`, `router_command_bundle`, `router_command_intake`(`sandbox_run`이 씀). 지금은 어디서도 부르지 않지만 단위 시험이 있는 `router_gateway`, `router_ledger`, `router_local`, `router_sandbox`, `router_gui_driver`, `router_inputs`도 남겼다(11절) |
 
 ## 8. 결정 사항
 
@@ -105,6 +105,8 @@ CAP-0001  origin=external  reference=capture:<출처 URL>   sha256(원문)
    ```
 3. **기존 Router 서버: 삭제.** `router_mcp_server.py`, `router_workflow_server.py`를 지운다.
    이 서버를 쓰는 실험 브랜치(#89 등)는 통합 뒤 SCRP MCP 기준으로 다시 맞춘다.
+4. **클립보드 출처는 `powershell-command`로만 실행** (구현 중 추가). 클립보드에는 사용자가 따로 복사한 글자(비밀번호 등)가
+   있을 수 있다. 완전한 `powershell ... -Command/-EncodedCommand` 한 줄(ClickFix가 넣는 형태)만 실행하고, 원문은 Agent에게 돌려주지 않는다(해시만).
 
 ## 9. 작업 단계 (PR 단위)
 
@@ -124,3 +126,14 @@ CAP-0001  origin=external  reference=capture:<출처 URL>   sha256(원문)
 - 실제 Guest: 이미 떠 있는 Sandbox에서 캡처 → 실행 → 영수증 SUCCEEDED → 같은 Sandbox에서 GUI 조작.
   새 Sandbox가 생기지 않았는지(`wsb list`) 확인한다.
 - 모의 시험 결과를 실제 Guest 증거로 표현하지 않는다.
+
+## 11. 보류 (결정 필요)
+
+1. **남은 Router 부품 6개**(`router_gateway`, `router_ledger`, `router_local`, `router_sandbox`, `router_gui_driver`, `router_inputs`)와
+   `router/engine.py`의 `Router` 클래스: 서버를 지운 뒤 부르는 곳이 없다. 지울지, 다음 단계(plan 단위 작업)를 위해 남길지.
+2. **코덱스 내장 브라우저의 복사가 Windows 클립보드에 닿는지**: 실제 코덱스 앱에서 확인하지 않았다. 닿지 않으면 그 브라우저에서는
+   `clipboard=true`가 빈 값이 되고, `text`(Agent가 본 글자)만 남는다.
+3. **클립보드 읽은 시점 증명**: 순번(`clipboard_sequence`)만 남긴다. feat/91 Edge 탭처럼 "복사 버튼 클릭 뒤 바뀌었다"를 확인하려면
+   클릭 전 순번을 먼저 받는 단계가 더 필요하다.
+4. **`router_read`(메일함·HTTP 읽기)**: 옮기지 않았다. 발표용 메일 시나리오가 필요하면 Local 읽기 도구로 따로 넣는다.
+5. **팀 등록 예시(`codex/config.example.toml`)에 `--artifact-export --sandbox-run --router-capture`를 기본으로 넣을지.**
