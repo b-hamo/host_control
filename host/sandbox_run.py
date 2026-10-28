@@ -132,6 +132,7 @@ class Run:
     last_input: str | None = None
     task: asyncio.Task | None = None
     exports: set = field(default_factory=set)
+    origin: dict | None = None         # router_execute: request_id and the capture it analyzes
 
     @property
     def evidence_name(self) -> str:
@@ -148,6 +149,8 @@ class Run:
 
     def view(self) -> dict:
         v = {"run_id": self.run_id, "file": self.file, "state": self.state, "reason": self.reason}
+        if self.origin is not None:
+            v.update(self.origin)
         if self.exit_code is not None:
             v["exit_code"] = self.exit_code
         if self.stdout is not None:
@@ -158,8 +161,11 @@ class Run:
 
 
 class SandboxRunner:
-    def __init__(self, inbox: Path, *, base_policy: Policy | None = None, clock=time.time):
+    def __init__(self, inbox: Path, *, base_policy: Policy | None = None, clock=time.time, captures=None):
         self.inbox = Path(inbox)
+        # host/router_capture.py CaptureStore (--router-capture). None: no router_* tools.
+        self.captures = captures
+        self._requests: dict[str, tuple[str, str]] = {}       # router_execute request_id -> (signature, run_id)
         self.authority = Authority(verify_source=self._verify_source, clock=clock)
         # Installed as the Broker's policy (mcp_server.py): the base Policy outside a launch.
         self.policy = RouterGuiPolicy(self.authority, base=base_policy or Policy(), command_launch_enabled=True)
@@ -185,6 +191,8 @@ class SandboxRunner:
         self.authority.sources[source_id] = src
 
     def _verify_source(self, src: Source) -> bool:
+        if self.captures is not None and src.source_id in self.captures.sources:
+            return self.captures.verify(src)                 # the page text, as captured
         path = self._paths.get(src.source_id)
         if path is None:
             return False
@@ -225,6 +233,74 @@ class SandboxRunner:
         shown = {"run_id": run_id, "file": path.name, "source": src.reference.removeprefix("download:"),
                  "sha256": src.sha256, "command": list2cmdline([exe, *argv])}
         return run, shown
+
+    # -- a captured web page command (router_execute, #94) -------------------
+    def repeated(self, args: dict) -> Run | None:
+        """The run an earlier router_execute with this request_id started; never a second run."""
+        known = self._requests.get(args["request_id"])
+        if known is None:
+            return None
+        if known[0] != json.dumps(args, sort_keys=True):
+            raise RunError("IDEMPOTENCY_CONFLICT", f"{args['request_id']} was already used with other arguments; "
+                                                   "use a new request_id for new work")
+        return self.runs[known[1]]
+
+    def plan_capture(self, args: dict, identity: tuple) -> tuple[Run, dict]:
+        """A PowerShell script derived from a capture, put in the inbox and run like a downloaded .ps1.
+
+        The capture stays the parent source: Authority checks both SHA-256 values again before
+        the run and right before Enter. The script is derived as data on the Host, never run here."""
+        from host.router_command_intake import decode_powershell, script_from_source
+        if self.captures is None:
+            raise RunError("POLICY_DENIED", "router_execute is not enabled on this Host (--router-capture)")
+        known = self.captures.sources.get(args["source_id"])
+        if known is None:
+            raise RunError("INVALID_ARGUMENT", f"{args['source_id']!r} is not a router_capture source of this "
+                                               "session; use the source_id router_capture returned")
+        capture = known[0]
+        if not self.captures.verify(capture):
+            raise RunError("POLICY_DENIED", f"{capture.source_id} changed after it was captured; capture it again")
+        form = args["form"]
+        try:
+            text = self.captures.text(capture.source_id)
+            if form == "powershell-command":
+                if capture.source_id not in self.captures.from_clipboard or "start" in args or "end" in args:
+                    raise ValueError("powershell-command needs a source the Host read from the clipboard itself, "
+                                     "used in full")
+                script, transform = decode_powershell(text)
+            else:
+                script, transform = script_from_source(text, form, args.get("start"), args.get("end"))
+        except ValueError as e:
+            raise RunError("INVALID_ARGUMENT", f"cannot derive a script from {capture.source_id}: {e}") from None
+        data = b"\xef\xbb\xbf" + script.encode("utf-8")      # BOM: Windows PowerShell 5.1 reads it as UTF-8
+        if not script.strip() or len(data) > 65536:
+            raise RunError("INVALID_ARGUMENT", "the derived script is empty or larger than 64 KiB")
+        try:
+            path = place(self.inbox, f"{capture.source_id}.ps1", data)
+        except OSError as e:
+            raise RunError("RUNTIME_UNAVAILABLE", f"could not put the script in the inbox ({e.__class__.__name__})")
+        derived = Source(f"{capture.source_id}-PS1", f"derived:{capture.source_id}:{transform['transform']}",
+                         hashlib.sha256(data).hexdigest(), "generated", (capture.source_id,))
+        self._paths[derived.source_id] = path
+        self.authority.sources[derived.source_id] = derived
+        self.authority.sources[capture.source_id] = capture
+        target = str(GUEST_INPUT / path.name)
+        exe, argv = POWERSHELL, ("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", target)
+        self._seq += 1
+        run_id = f"RUN-{self._seq:04d}"
+        scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
+        # The script first: the helper waits for sources[0] in Desktop\Input.
+        action = Action(run_id, "router-execute", Operation.EXECUTE, scope, run_id, sources=(derived, capture),
+                        command=Command(exe, argv, str(GUEST_INPUT), derived.source_id), outputs=("stdout",))
+        origin = {"request_id": args["request_id"], "source_id": capture.source_id,
+                  "script_source_id": derived.source_id, "transform": transform["transform"]}
+        run = Run(run_id, action, path.name, uuid4().hex[:16], identity, origin=origin)
+        shown = {"run_id": run_id, "file": path.name, "source": capture.reference, "source_id": capture.source_id,
+                 "sha256": derived.sha256, "command": list2cmdline([exe, *argv]), "transform": transform["transform"]}
+        return run, shown
+
+    def bind_request(self, args: dict, run: Run) -> None:
+        self._requests[args["request_id"]] = (json.dumps(args, sort_keys=True), run.run_id)
 
     # -- delegation, transport, launch --------------------------------------
     async def start(self, broker, run: Run) -> Run:
