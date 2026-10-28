@@ -87,7 +87,7 @@ CAP-0001-CLIP      origin=external   reference=clipboard:host:<순번>:<출처 U
 | feat/91에서 이동 | `script_from_source`, `router_command_intake.decode_powershell`, 캡처·실행 요청 ID 분리(#92), 클립보드 초기화 안내(#93) |
 | feat/91에서 이동 | `router_local_browser.clipboard_snapshot`(Host 클립보드 읽기)만 `router_capture.py`로. Router가 직접 띄우는 Edge 탭(`router_gui`)은 #91에서 이미 꺼져 있었고 옮기지 않았다. 탐색은 Agent가 쓰는 브라우저(Edge, Chrome, 코덱스 내장)로 하므로 브라우저 종류와 무관하다 |
 | 삭제 | 서버 2개(`router_mcp_server.py`, `router_workflow_server.py`)와 그 서버에만 쓰이던 `router_mcp_service`, `router_connection`, `router_provisioning`, `router_codec`, `router_runtime`, `router_workflow`, `router_workflow_connection`, `router_interactive`, `router_local_browser`, `router_task_scope`, `router_web_policy`, 시험 11개, `scripts/launch_router_workflow.py`, `scripts/verify_browser_handoff_live.py`, `schema/router-tools/`, `schema/router-list.json`, `schema/router-start.json`, 관련 문서 4개 |
-| 남김 | `router/` 엔진·모델, `router_authority`, `router_gui_policy`, `router_command_bundle`, `router_command_intake`(`sandbox_run`이 씀). 지금은 어디서도 부르지 않지만 단위 시험이 있는 `router_gateway`, `router_ledger`, `router_local`, `router_sandbox`, `router_gui_driver`, `router_inputs`도 남겼다(11절) |
+| 남김 | `router/` 엔진·모델, `router_authority`, `router_gui_policy`, `router_command_bundle`, `router_command_intake`(`sandbox_run`이 씀). 지금은 어디서도 부르지 않지만 단위 시험이 있는 `router_gateway`, `router_ledger`, `router_local`, `router_sandbox`, `router_gui_driver`, `router_inputs`도 "현재 미사용"으로 남겼다(8절 5) |
 
 ## 8. 결정 사항
 
@@ -107,6 +107,12 @@ CAP-0001-CLIP      origin=external   reference=clipboard:host:<순번>:<출처 U
    이 서버를 쓰는 실험 브랜치(#89 등)는 통합 뒤 SCRP MCP 기준으로 다시 맞춘다.
 4. **클립보드 출처는 `powershell-command`로만 실행** (구현 중 추가). 클립보드에는 사용자가 따로 복사한 글자(비밀번호 등)가
    있을 수 있다. 완전한 `powershell ... -Command/-EncodedCommand` 한 줄(ClickFix가 넣는 형태)만 실행하고, 원문은 Agent에게 돌려주지 않는다(해시만).
+5. **남은 Router 부품: 남기고 "현재 미사용" 표시.** `router_gateway`, `router_ledger`, `router_local`, `router_sandbox`,
+   `router_gui_driver`, `router_inputs`와 `router/engine.py`의 `Router` 클래스는 지금 어디서도 부르지 않는다.
+   Router 구조(관문의 위임·출처 확인) 설명과 다음 단계(plan 단위 작업)를 위해 단위 시험과 함께 남긴다.
+6. **팀 등록 예시에 기본으로 켬.** `codex/config.example.toml`에 `--artifact-export --artifact-scanner amsi --sandbox-run --router-capture`.
+   켜지 않으면 팀원 PC에서 Router 도구가 보이지 않는다(원래 문제). 이 PC 백신이 AMSI에 응답하지 않으면 실행 결과가 HELD가 된다.
+7. **병합 순서: #95 먼저.** 이 브랜치가 그 위에 맞춘다(`mcp_server.py` 한 곳 충돌).
 
 ## 9. 작업 단계 (PR 단위)
 
@@ -127,13 +133,11 @@ CAP-0001-CLIP      origin=external   reference=clipboard:host:<순번>:<출처 U
   새 Sandbox가 생기지 않았는지(`wsb list`) 확인한다.
 - 모의 시험 결과를 실제 Guest 증거로 표현하지 않는다.
 
-## 11. 보류 (결정 필요)
+## 11. 보류
 
-1. **남은 Router 부품 6개**(`router_gateway`, `router_ledger`, `router_local`, `router_sandbox`, `router_gui_driver`, `router_inputs`)와
-   `router/engine.py`의 `Router` 클래스: 서버를 지운 뒤 부르는 곳이 없다. 지울지, 다음 단계(plan 단위 작업)를 위해 남길지.
-2. **코덱스 내장 브라우저의 복사가 Windows 클립보드에 닿는지**: 실제 코덱스 앱에서 확인하지 않았다. 닿지 않으면 그 브라우저에서는
+1. **코덱스 내장 브라우저의 복사가 Windows 클립보드에 닿는지**: 실제 코덱스 앱에서 확인하지 않았다. 닿지 않으면 그 브라우저에서는
    `clipboard=true`가 빈 값이 되고, `text`(Agent가 본 글자)만 남는다.
-3. **클립보드 읽은 시점 증명**: 순번(`clipboard_sequence`)만 남긴다. feat/91 Edge 탭처럼 "복사 버튼 클릭 뒤 바뀌었다"를 확인하려면
+2. **클립보드 읽은 시점 증명**: 순번(`clipboard_sequence`)만 남긴다. feat/91 Edge 탭처럼 "복사 버튼 클릭 뒤 바뀌었다"를 확인하려면
    클릭 전 순번을 먼저 받는 단계가 더 필요하다.
-4. **`router_read`(메일함·HTTP 읽기)**: 옮기지 않았다. 발표용 메일 시나리오가 필요하면 Local 읽기 도구로 따로 넣는다.
-5. **팀 등록 예시(`codex/config.example.toml`)에 `--artifact-export --sandbox-run --router-capture`를 기본으로 넣을지.**
+3. **`router_read`(메일함·HTTP 읽기)**: 옮기지 않았다. 발표용 메일 시나리오가 필요하면 Local 읽기 도구로 따로 넣는다.
+4. **실제 Windows Sandbox 시험.**

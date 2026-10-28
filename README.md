@@ -151,7 +151,8 @@ Codex가 `host/mcp_server.py`를 자식 프로세스로 켜고 stdin/stdout으�
 2. Skill 넣기(처음, 그리고 `git pull`로 Skill이 바뀔 때마다): `powershell -ExecutionPolicy Bypass -File codex\install_skill.ps1`
    — 이전 Skill은 `~/.codex/skill-backups`에 백업, 예전 `scrp-sandbox-execution`이 있으면 끄라고 알려 줌
 3. 코덱스 등록: `codex/config.example.toml`을 `~/.codex/config.toml`에 붙여 넣고 `<나>`를 바꿈
-   (`--inbox --save-downloads --agent-guard --shared`)
+   (`--inbox --save-downloads --agent-guard --shared --artifact-export --artifact-scanner amsi --sandbox-run --router-capture`;
+   마지막 넷은 #94부터. 이 PC 백신이 AMSI에 응답하지 않으면 Sandbox 실행 결과가 `HELD`)
 4. 코덱스를 완전히 껐다 켜고 새 대화에서 "7-Zip 받아서 설치해 줘"
 
 Skill이 부르는 도구·옵션이 이 Host에 실제로 있는지는 `tests/test_codex_skill.py`가 확인한다. Host 도구를 바꾸면 Skill도
