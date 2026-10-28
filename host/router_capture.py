@@ -14,8 +14,11 @@ GUI mode (mcp_server.py --router-capture), next to sandbox_run:
   that inside the Sandbox only.
 - The source URL is the Agent's attribution, not verified here.
 
-Clipboard provenance is a moment in time, not proof that no other program
-wrote to the clipboard meanwhile.
+Copy timing: ``mark=true`` before clicking the page's copy button records the
+clipboard's sequence number (nothing else); the capture with ``after_mark``
+then requires that the clipboard changed since. That shows the text arrived
+after the mark, i.e. with the click, not that no other program wrote to the
+clipboard in between.
 """
 
 from __future__ import annotations
@@ -72,6 +75,12 @@ def clipboard_snapshot() -> dict:
         user.CloseClipboard()
 
 
+def clipboard_sequence() -> int:
+    """This computer's clipboard sequence number: changes whenever the clipboard does. Reads no content."""
+    import ctypes
+    return ctypes.WinDLL("user32").GetClipboardSequenceNumber()
+
+
 def page_url(url: str) -> str:
     """The attribution as recorded: http(s), no credentials, no query (a signed URL's query is a secret)."""
     try:
@@ -84,10 +93,11 @@ def page_url(url: str) -> str:
 
 
 class CaptureStore:
-    def __init__(self, directory: Path, *, clipboard=clipboard_snapshot):
+    def __init__(self, directory: Path, *, clipboard=clipboard_snapshot, sequence=clipboard_sequence):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.clipboard = clipboard
+        self.clipboard, self.sequence = clipboard, sequence
+        self.marks: dict[str, int] = {}                    # mark request_id -> clipboard sequence
         self.sources: dict[str, tuple[Source, Path]] = {}
         self.from_clipboard: set[str] = set()              # source_ids the Host read itself
         self._requests: dict[str, tuple[str, dict]] = {}   # request_id -> (signature, result)
@@ -106,18 +116,34 @@ class CaptureStore:
             if known != signature:
                 raise CaptureError("IDEMPOTENCY_CONFLICT", f"{request_id} was already used with other arguments")
             return {**result, "repeated": True}            # the same capture, never taken again
-        text, use_clipboard = args.get("text"), bool(args.get("clipboard"))
-        if text is None and not use_clipboard:
-            raise CaptureError("INVALID_ARGUMENT", "give the text you saw, clipboard=true, or both")
+        text, use_clipboard, after = args.get("text"), bool(args.get("clipboard")), args.get("after_mark")
         if len(self._requests) >= MAX_CAPTURES:
             raise CaptureError("POLICY_DENIED", f"at most {MAX_CAPTURES} captures per session")
         url = page_url(args["source_url"])
+        if args.get("mark"):
+            if text is not None or use_clipboard or after is not None:
+                raise CaptureError("INVALID_ARGUMENT", "mark=true takes only request_id and source_url")
+            self.marks[request_id] = self.sequence()
+            result = {"request_id": request_id, "mark_id": request_id, "source_url": url,
+                      "clipboard_sequence": self.marks[request_id],
+                      "next": "click the page's copy button, then call router_capture with clipboard=true and "
+                              f"after_mark={request_id!r}"}
+            self._requests[request_id] = (signature, result)
+            return dict(result)
+        if text is None and not use_clipboard:
+            raise CaptureError("INVALID_ARGUMENT", "give the text you saw, clipboard=true, or both")
+        if after is not None and (not use_clipboard or after not in self.marks):
+            raise CaptureError("INVALID_ARGUMENT", "after_mark needs clipboard=true and a mark_id from router_capture "
+                                                   "with mark=true in this session")
         clip = None
         if use_clipboard:
             clip = self.clipboard()
             if not clip["text"]:
                 raise CaptureError("INVALID_ARGUMENT", "the clipboard holds no text: click the page's copy button "
                                                        "first, then capture")
+            if after is not None and clip["sequence"] == self.marks[after]:
+                raise CaptureError("INVALID_ARGUMENT", "the clipboard has not changed since the mark: the page's copy "
+                                                       "button did not copy anything; nothing was captured")
         self._seq += 1
         base = f"CAP-{self._seq:04d}"
         shown = []
@@ -133,6 +159,8 @@ class CaptureStore:
         result = {"request_id": request_id, "source_id": primary.source_id, "sources": shown, "source_url": url,
                   "trust": "external", "source_url_verified": False, "execution_location": "SANDBOX",
                   "clipboard_read_by_host": host is not None,
+                  # True: changed after the mark (copied with the click). None: no mark, timing unknown.
+                  "copied_after_mark": True if after is not None else None,
                   "agent_text_matches_clipboard": (None if agent is None or host is None
                                                    else agent.sha256 == host.sha256)}
         if result["agent_text_matches_clipboard"] is False:

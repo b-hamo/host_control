@@ -353,7 +353,10 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 | 중복 | Host | 같은 `request_id`·같은 인자 = 같은 결과(다시 실행하지 않음), 다른 인자 = `IDEMPOTENCY_CONFLICT`. 캡처 ID와 실행 ID는 따로 |
 | 끝난 뒤 | Host | 세션이 끝나도 `sandbox_run_status`와 같은 `request_id`의 재요청은 보존된 결과를 돌려준다. 영수증 없는 실행은 Enter를 보냈으면 `UNKNOWN`, 아니면 `FAILED`. 새 작업은 `task_submit`부터 |
 
-클립보드 기록은 그 순간의 내용이다. 다른 프로그램이 그 사이에 클립보드를 바꾸지 않았다는 증명은 아니다(순번 `clipboard_sequence`만 남긴다).
+복사 시점: 복사 버튼을 누르기 **전에** `router_capture(mark=true)`로 클립보드 순번만 적어 두고, 누른 뒤
+`router_capture(clipboard=true, after_mark=<그 id>)`로 읽으면 순번이 바뀌었는지 확인한다. 안 바뀌었으면(복사가 안 됨) 아무것도
+기록하지 않고 거부한다. 결과의 `copied_after_mark`가 `true`면 "누른 뒤에 들어온 내용", `null`이면 표시 없이 읽은 것.
+그 사이 다른 프로그램이 클립보드를 쓰지 않았다는 증명은 아니다.
 
 ## 파일 반출 (artifact-export-v1)
 

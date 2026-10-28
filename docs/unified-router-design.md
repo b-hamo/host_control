@@ -113,6 +113,8 @@ CAP-0001-CLIP      origin=external   reference=clipboard:host:<순번>:<출처 U
 6. **팀 등록 예시에 기본으로 켬.** `codex/config.example.toml`에 `--artifact-export --artifact-scanner amsi --sandbox-run --router-capture`.
    켜지 않으면 팀원 PC에서 Router 도구가 보이지 않는다(원래 문제). 이 PC 백신이 AMSI에 응답하지 않으면 실행 결과가 HELD가 된다.
 7. **병합 순서: #95 먼저.** 이 브랜치가 그 위에 맞춘다(`mcp_server.py` 한 곳 충돌).
+8. **복사 시점 확인 추가** (구현 중 추가). `router_capture(mark=true)`로 클릭 전 클립보드 순번만 적고,
+   `after_mark`로 읽을 때 순번이 바뀌었는지 확인한다. 안 바뀌었으면 거부(사용자가 예전에 복사한 글자를 캡처하지 않게).
 
 ## 9. 작업 단계 (PR 단위)
 
@@ -137,7 +139,6 @@ CAP-0001-CLIP      origin=external   reference=clipboard:host:<순번>:<출처 U
 
 1. **코덱스 내장 브라우저의 복사가 Windows 클립보드에 닿는지**: 실제 코덱스 앱에서 확인하지 않았다. 닿지 않으면 그 브라우저에서는
    `clipboard=true`가 빈 값이 되고, `text`(Agent가 본 글자)만 남는다.
-2. **클립보드 읽은 시점 증명**: 순번(`clipboard_sequence`)만 남긴다. feat/91 Edge 탭처럼 "복사 버튼 클릭 뒤 바뀌었다"를 확인하려면
-   클릭 전 순번을 먼저 받는 단계가 더 필요하다.
-3. **`router_read`(메일함·HTTP 읽기)**: 옮기지 않았다. 발표용 메일 시나리오가 필요하면 Local 읽기 도구로 따로 넣는다.
-4. **실제 Windows Sandbox 시험.**
+2. **`router_read`(메일함·HTTP 읽기)**: 옮기지 않았다. 발표용 메일 시나리오가 필요하면 Local 읽기 도구로 따로 넣는다.
+3. **실제 Windows Sandbox 시험.** 이 PC에서 시작 단계에 방화벽 규칙이 현재 Default Switch 어댑터에 묶여 있지 않아
+   멈췄다(관리자 권한으로 고친 뒤 다시).

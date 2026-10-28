@@ -15,6 +15,7 @@ from host.mcp_server import HostBackend, load_tool_list
 from host.policy import Policy
 from host.router_capture import CaptureError, CaptureStore, page_url
 from host.sandbox_run import RunError, SandboxRunner
+from host.tool_catalog import ToolCatalog
 from test_inbox_download import InboxManager, Watcher, downloader, server  # noqa: F401
 from test_sandbox_launch import args as launch_args, paths, run
 from test_sandbox_run import ID, Approver, FakeBroker, PassScanner, artifact_guest
@@ -34,11 +35,15 @@ class Clipboard:
 
 
 def store(tmp_path, text=COPIED):
-    return CaptureStore(tmp_path / "captures", clipboard=Clipboard(text))
+    clip = Clipboard(text)
+    return CaptureStore(tmp_path / "captures", clipboard=clip, sequence=lambda: clip.sequence)
 
 
 def capture(cs, rid="C1", **kw):
-    return cs.capture({"request_id": rid, "source_url": "https://fake-captcha.example/verify?t=SECRET", **kw})
+    # As the Broker passes them: validated, defaults filled in
+    args = ToolCatalog().validate("router_capture", {"request_id": rid,
+                                                     "source_url": "https://fake-captcha.example/verify?t=SECRET", **kw})
+    return cs.capture(args)
 
 
 # --------------------------------------------------------------------- capture
@@ -105,6 +110,31 @@ def test_a_changed_capture_file_no_longer_verifies(tmp_path):
     assert cs.verify(src)
     path.write_text("powershell -Command \"evil\"", encoding="utf-8")
     assert not cs.verify(src)
+
+
+def test_a_mark_before_the_click_shows_the_text_arrived_with_the_click(tmp_path):
+    cs = store(tmp_path, text="what the user copied earlier")
+    mark = capture(cs, "M1", mark=True)
+    assert mark["mark_id"] == "M1" and mark["clipboard_sequence"] == 41 and cs.clipboard.reads == 0   # no content read
+    with pytest.raises(CaptureError) as e:                          # copy button did nothing: never the old text
+        capture(cs, "C1", clipboard=True, after_mark="M1")
+    assert "has not changed" in e.value.message and not list((tmp_path / "captures").iterdir())
+    cs.clipboard.text, cs.clipboard.sequence = COPIED, 42           # the page's copy button
+    got = capture(cs, "C2", clipboard=True, after_mark="M1", text=SHOWN)
+    assert got["copied_after_mark"] is True and got["source_id"] == "CAP-0001-CLIP"
+    assert capture(cs, "C3", clipboard=True)["copied_after_mark"] is None          # no mark: timing unknown
+
+
+@pytest.mark.parametrize("kw", [
+    {"mark": True, "clipboard": True}, {"mark": True, "text": "x"},
+    {"clipboard": True, "after_mark": "NOPE"}, {"text": "x", "after_mark": "M1"},
+])
+def test_mark_arguments_are_strict(tmp_path, kw):
+    cs = store(tmp_path)
+    capture(cs, "M1", mark=True)
+    with pytest.raises(CaptureError) as e:
+        capture(cs, "C9", **kw)
+    assert e.value.code == "INVALID_ARGUMENT"
 
 
 def test_page_url_keeps_only_scheme_host_and_path():
