@@ -38,6 +38,18 @@ def assert_rebind(ports):
             sock.close()
 
 
+async def assert_rebind_after_exit(ports, within=5.0):
+    """Windows frees a killed process's sockets shortly after its exit is reported."""
+    deadline = asyncio.get_running_loop().time() + within
+    while True:
+        try:
+            return assert_rebind(ports)
+        except OSError:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise
+            await asyncio.sleep(.05)
+
+
 def configured(tmp_path, ports):
     tmp_path.mkdir(exist_ok=True)
     path, config, action, execution = configuration(tmp_path)
@@ -399,7 +411,7 @@ def test_killed_stdio_keeps_reservation_without_replaying(tmp_path):
             before = output.stat().st_mtime_ns
             proc.kill()  # Only this test's child, without graceful EOF/finally.
             await asyncio.wait_for(proc.wait(), 10)
-            assert_rebind(ports)
+            await assert_rebind_after_exit(ports)
             proc, client = await start_server(path)
             assert (await client.call("router_plan", definitions([action])))["ok"]
             result = await client.call("router_submit", {"request_id": "REQ-one", "action_id": action.action_id})

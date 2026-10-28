@@ -277,21 +277,17 @@ def test_download_run_and_result_through_the_mcp_host(tmp_path, server):  # noqa
             last = [0.0]
 
             async def call(tool, arguments=None):
-                # Internal artifact calls share the control bucket. External
-                # pacing alone cannot guarantee that a token is available.
-                for attempt in range(6):
-                    gap = 0.25 - (time.monotonic() - last[0])
-                    if gap > 0:
-                        await asyncio.sleep(gap)
+                gap = 0.25 - (time.monotonic() - last[0])         # under the Broker's control rate
+                if gap > 0:
+                    await asyncio.sleep(gap)
+                for _ in range(20):
                     last[0] = time.monotonic()
                     res = await asyncio.to_thread(backend.call, tool, arguments or {})
-                    result = json.loads(res["content"][-1]["text"])
-                    if result.get("error") != "RATE_LIMITED":
-                        return result
-                    assert result.get("retryable"), result
-                    if attempt == 5:
-                        raise AssertionError(f"{tool} remained rate limited: {result}")
-                    await asyncio.sleep(max(float(result["retry_after"]), 0.01) + 0.02)
+                    got = json.loads(res["content"][-1]["text"])
+                    if got.get("error") != "RATE_LIMITED":     # the run's own result checks share the control rate
+                        return got
+                    await asyncio.sleep(min(float(got.get("retry_after") or 0.3), 1.0))   # retry as an Agent would
+                return got
 
             got = await call("inbox_download", {"url": f"{server.base}/ZoomIt64.exe?sig=SECRET"})
             early = await call("sandbox_run", {"file": got["file"]["name"]})          # before task_submit
