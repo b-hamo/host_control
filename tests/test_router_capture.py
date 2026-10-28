@@ -414,3 +414,28 @@ def test_capture_and_execute_ids_are_separate(tmp_path):
     runner = SandboxRunner(inbox, captures=cs)
     plan, _ = runner.plan_capture(execute_args(rid="SAME"), ID)                # #92: no clash
     assert plan.view()["request_id"] == "SAME" and cs.query("SAME")["source_id"] == "CAP-0001-CLIP"
+
+
+def test_other_inputs_wait_for_the_launch_then_the_same_sandbox_is_worked_as_usual(tmp_path):
+    runner, _, _ = runner_with_capture(tmp_path)
+    seen = []
+
+    def interleave():
+        async def other_agent_input():
+            seen.append(runner.policy.decide("computer_click", {"x": 1, "y": 1}).rule_id)
+        asyncio.get_running_loop().create_task(other_agent_input())
+    class YieldingBroker(FakeBroker):                                 # a real Broker awaits the Runner
+        async def call(self, tool, args):
+            await asyncio.sleep(0)
+            return await super().call(tool, args)
+    broker = YieldingBroker(runner, hooks={"computer_hotkey": interleave})
+
+    async def go():
+        plan, _ = runner.plan_capture(execute_args(), ID)
+        r = await runner.start(broker, plan)
+        await r.task
+        return r
+    r = asyncio.run(go())
+    assert r.state == "RUNNING"
+    assert seen == ["P-ROUTER-LAUNCH-BOUNDARY"]                       # refused while the launch holds the input
+    assert runner.policy.decide("computer_click", {"x": 1, "y": 1}).result == "ALLOW"   # then the GUI as usual
