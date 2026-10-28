@@ -65,6 +65,9 @@ class McpRuntime:
                     return self._state(args)
                 if tool == "session_stop":
                     return success(stopped=True, reason=args["reason"], host_released=True)
+                answer = self._ended_query(backend, tool, args)
+                if answer is not None:
+                    return answer
                 if tool != "task_submit":
                     return _error_result("SESSION_TERMINATED", "Submit a new task before using this runtime",
                                          False, "task_submit")
@@ -100,6 +103,28 @@ class McpRuntime:
                                          "runtime_get_state")
                 return success(stopped=True, reason=args["reason"], host_released=True)
             return result
+
+    @staticmethod
+    def _ended_query(backend, tool, args):
+        """Results of the ended session stay readable; nothing is started or run again (#94)."""
+        from host.mcp_server import _error_result
+        final = getattr(backend, "final_runs", None)
+        if not final:
+            return None
+        if tool == "sandbox_run_status":
+            view = final["runs"].get(args["run_id"])
+            if view is None:
+                return _error_result("INVALID_ARGUMENT", "no such run in the ended session", False, "fix_arguments")
+            return success(**view, session_ended=True)
+        known = {"router_capture": final["captures"], "router_execute": final["requests"]}.get(tool, {})
+        if args.get("request_id") not in known:
+            return None
+        signature, value = known[args["request_id"]]
+        if signature != json.dumps(args, sort_keys=True, **({"ensure_ascii": False} if tool == "router_capture" else {})):
+            return _error_result("IDEMPOTENCY_CONFLICT", f"{args['request_id']} was already used with other arguments",
+                                 False, "fix_arguments")
+        body = value if tool == "router_capture" else final["runs"][value]
+        return success(**body, repeated=True, session_ended=True)
 
     def _state(self, args):
         from host.mcp_server import _error_result

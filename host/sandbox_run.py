@@ -302,6 +302,21 @@ class SandboxRunner:
     def bind_request(self, args: dict, run: Run) -> None:
         self._requests[args["request_id"]] = (json.dumps(args, sort_keys=True), run.run_id)
 
+    def snapshot(self) -> dict:
+        """What queries may still see after the session ended (McpRuntime). Nothing continues or
+        restarts: a run without its receipt is UNKNOWN if Enter was sent, otherwise it never ran."""
+        runs = {}
+        for run in self.runs.values():
+            view = run.view()
+            if view["state"] in ("ACCEPTED", "RUNNING"):
+                if run.dispatched:
+                    view.update(state="UNKNOWN", reason="SESSION_ENDED_RESULT_UNCONFIRMED")
+                else:
+                    view.update(state="FAILED", reason="SESSION_ENDED_BEFORE_LAUNCH")
+            runs[run.run_id] = view
+        return {"runs": runs, "requests": dict(self._requests),
+                "captures": self.captures.snapshot() if self.captures is not None else {}}
+
     # -- delegation, transport, launch --------------------------------------
     async def start(self, broker, run: Run) -> Run:
         if self._launching is not None:

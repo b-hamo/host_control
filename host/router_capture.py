@@ -141,6 +141,10 @@ class CaptureStore:
         self._requests[request_id] = (signature, result)
         return dict(result)
 
+    def snapshot(self) -> dict:
+        """request_id -> (signature, result), for queries after the session ended."""
+        return dict(self._requests)
+
     def query(self, request_id: str) -> dict | None:
         known = self._requests.get(request_id)
         return None if known is None else {**known[1], "repeated": True}

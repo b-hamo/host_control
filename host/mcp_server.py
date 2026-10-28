@@ -168,6 +168,7 @@ class HostBackend(threading.Thread):
         self._calls = set()
         self.retire_on_end = False                 # general MCP owns retirement; Router owns its own
         self.final_status = None
+        self.final_runs = None                     # sandbox_run/router_* results, queryable after the end
         self.cleanup_confirmed = False
 
     def run(self) -> None:
@@ -189,6 +190,8 @@ class HostBackend(threading.Thread):
                 self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             if self.session is not None:
                 self.final_status = self.session.status()
+            if self.runner is not None:
+                self.final_runs = self.runner.snapshot()
             self.loop.close()
             self.cleanup_confirmed = (self.launcher is None or self.launcher.sandbox is None or
                                       (self.launcher.cleanup_result is not None and

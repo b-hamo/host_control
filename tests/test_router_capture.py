@@ -330,3 +330,87 @@ def test_router_tools_are_listed_only_when_switched_on(tmp_path):
                         "--log-file", str(tmp_path / "m.log")],
                        capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
     assert r.returncode == 2 and "--router-capture needs --sandbox-run" in r.stderr
+
+
+# --------------------------------------------------------------------- after the session ended
+def test_snapshot_keeps_results_and_never_leaves_a_run_running(tmp_path):
+    runner, _, _ = runner_with_capture(tmp_path)
+    broker = FakeBroker(runner)
+
+    async def go():
+        plan, _ = runner.plan_capture(execute_args(), ID)
+        r = await runner.start(broker, plan)
+        runner.bind_request(execute_args(), r)
+        await r.task
+        return r
+    r = asyncio.run(go())
+    assert r.state == "RUNNING"
+    snap = runner.snapshot()
+    assert snap["runs"][r.run_id]["state"] == "UNKNOWN"                       # Enter was sent; result unknown
+    assert snap["runs"][r.run_id]["reason"] == "SESSION_ENDED_RESULT_UNCONFIRMED"
+    assert snap["requests"]["X1"][1] == r.run_id and "C1" in snap["captures"]
+    assert r.state == "RUNNING"                                                 # the snapshot changes nothing
+
+
+class EndedBackend:
+    """What McpRuntime sees once a Host retired: no thread, results kept in final_runs."""
+
+    def __init__(self, final_runs):
+        from types import SimpleNamespace
+        self.final_runs, self.cleanup_confirmed, self.error = final_runs, True, None
+        self.session, self.final_status, self.calls = SimpleNamespace(terminated=True), {}, []
+
+    def is_alive(self):
+        return False
+
+    def shutdown(self):
+        pass
+
+    def call(self, tool, args):
+        self.calls.append(tool)
+        raise AssertionError("an ended Host is never called")
+
+
+def test_results_stay_queryable_after_the_session_ended_without_running_again(tmp_path):
+    from host.mcp_runtime import McpRuntime
+    runner, cs, _ = runner_with_capture(tmp_path)
+    broker = FakeBroker(runner)
+
+    async def go():
+        plan, _ = runner.plan_capture(execute_args(), ID)
+        r = await runner.start(broker, plan)
+        runner.bind_request(execute_args(), r)
+        await r.task
+        return r
+    r = asyncio.run(go())
+    ended = EndedBackend(runner.snapshot())
+    rt = McpRuntime(SimpleArgs(), lambda config: pytest.fail("no new Host for a query"))
+    rt.backend = ended
+
+    def call(tool, arguments):
+        return json.loads(rt.call(tool, arguments)["content"][-1]["text"])
+    status = call("sandbox_run_status", {"run_id": r.run_id})
+    assert status["ok"] and status["state"] == "UNKNOWN" and status["session_ended"]
+    again = call("router_execute", execute_args())
+    assert again["ok"] and again["repeated"] and again["run_id"] == r.run_id
+    assert call("router_execute", execute_args(form="powershell-script"))["error"] == "IDEMPOTENCY_CONFLICT"
+    cap = call("router_capture", {"request_id": "C1", "source_url": "https://fake-captcha.example/verify?t=SECRET",
+                                  "text": SHOWN, "clipboard": True})
+    assert cap["ok"] and cap["source_id"] == "CAP-0001-CLIP" and cap["session_ended"]
+    assert call("router_execute", execute_args(rid="NEW"))["error"] == "SESSION_TERMINATED"   # new work: task_submit
+    assert call("sandbox_run_status", {"run_id": "RUN-0099"})["error"] == "INVALID_ARGUMENT"
+    assert ended.calls == []
+
+
+class SimpleArgs:
+    session = None
+
+
+def test_capture_and_execute_ids_are_separate(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    cs = store(tmp_path)
+    capture(cs, "SAME", clipboard=True)
+    runner = SandboxRunner(inbox, captures=cs)
+    plan, _ = runner.plan_capture(execute_args(rid="SAME"), ID)                # #92: no clash
+    assert plan.view()["request_id"] == "SAME" and cs.query("SAME")["source_id"] == "CAP-0001-CLIP"
