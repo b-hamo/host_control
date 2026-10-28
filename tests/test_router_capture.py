@@ -144,6 +144,7 @@ def test_the_copied_command_becomes_a_script_in_the_inbox_bound_to_its_capture(t
     (execute_args(source_id="CAP-0001-AGENT"), "INVALID_ARGUMENT"),           # -Command only from the clipboard
     (execute_args(source_id="CAP-0001-AGENT", form="powershell-script"), None),   # a script: allowed
     (execute_args(form="powershell-command-literal", start=0, end=5), "INVALID_ARGUMENT"),
+    (execute_args(form="powershell-script"), "INVALID_ARGUMENT"),            # clipboard: never as a raw script
 ])
 def test_what_may_be_derived(tmp_path, args, code):
     runner, _, _ = runner_with_capture(tmp_path)

@@ -261,10 +261,15 @@ class SandboxRunner:
         if not self.captures.verify(capture):
             raise RunError("POLICY_DENIED", f"{capture.source_id} changed after it was captured; capture it again")
         form = args["form"]
+        clipboard = capture.source_id in self.captures.from_clipboard
         try:
             text = self.captures.text(capture.source_id)
+            if clipboard and form != "powershell-command":
+                # The clipboard may hold something the user copied, not the page: only a complete
+                # powershell -Command/-EncodedCommand line (what ClickFix copies) is ever run from it.
+                raise ValueError("a clipboard capture runs only as powershell-command")
             if form == "powershell-command":
-                if capture.source_id not in self.captures.from_clipboard or "start" in args or "end" in args:
+                if not clipboard or "start" in args or "end" in args:
                     raise ValueError("powershell-command needs a source the Host read from the clipboard itself, "
                                      "used in full")
                 script, transform = decode_powershell(text)
