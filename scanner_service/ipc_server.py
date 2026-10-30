@@ -51,7 +51,7 @@ PAYLOAD_KEYS = {
     "HEALTH_CHECK": {"selftest"},
     "BEGIN_UPLOAD": {"file_name", "size", "sha256"},
     "WRITE_CHUNK": {"offset", "data"},
-    "COMPLETE_UPLOAD": set(),
+    "COMPLETE_UPLOAD": {"sha256"},
     "SCAN": set(),
     "GET_STATUS": set(),
     "PUBLISH": {"approval"},
@@ -188,7 +188,7 @@ class RequestHandler:
             job = m.write_chunk(ident, jid, payload.get("offset"), raw)
             return {"job_id": job.job_id, "state": job.state.value, "received_bytes": job.received}
         if command == "COMPLETE_UPLOAD":
-            return m.complete_upload(ident, jid).view()
+            return m.complete_upload(ident, jid, payload.get("sha256")).view()
         if command == "SCAN":
             return m.start_scan(ident, jid).view()
         if command == "GET_STATUS":

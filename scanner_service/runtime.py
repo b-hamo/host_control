@@ -163,6 +163,7 @@ class ScannerRuntime:
             "token": token_info(),
             "defender": self.scanner.health(),
             "publish": {"enabled": self.publisher.enabled, "approval_mode": self.publisher.approval.mode,
+                        "export_root": str(self.publisher.export_root) if self.publisher.export_root else None,
                         "problem": self.publisher.problem},
             "jobs": self.manager.counts(),
             "quarantine": {"reserved_bytes": self.quarantine.reserved},

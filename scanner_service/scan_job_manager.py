@@ -140,7 +140,7 @@ class ScanJobManager:
             raise ScannerError("INVALID_ARGUMENT", "size must be a non-negative integer")
         if size > self.config.max_file_bytes:
             raise ScannerError("FILE_TOO_LARGE", f"more than {self.config.max_file_bytes} bytes")
-        if not isinstance(sha, str) or not SHA256_RE.fullmatch(sha):
+        if sha is not None and (not isinstance(sha, str) or not SHA256_RE.fullmatch(sha)):
             raise ScannerError("INVALID_ARGUMENT", "sha256 must be 64 lower-case hex characters")
         key = (ident.session_id, ident.runtime_id)
         stale: list[Job] = []
@@ -176,7 +176,8 @@ class ScanJobManager:
             except OSError:
                 pass                                 # an orphan directory; sweep() removes it
             raise refuse
-        log.info("JOB %s created: %s size=%d sha256=%s…", job.job_id, ident.log_fields(), size, sha[:12])
+        log.info("JOB %s created: %s size=%d sha256=%s", job.job_id, ident.log_fields(), size,
+                 sha[:12] + "…" if sha else "(declared at completion)")
         self._audit(job, "created")
         return job
 
@@ -204,8 +205,16 @@ class ScanJobManager:
         self._fail(job, S.FAILED, fatal.code, fatal.message)
         raise fatal
 
-    def complete_upload(self, ident: Identity, job_id) -> Job:
+    def complete_upload(self, ident: Identity, job_id, sha256=None) -> Job:
+        """sha256: the uploader's hash of the bytes it sent, when it was not known at BEGIN_UPLOAD
+        (a streaming sender). Declared twice, both must agree; declared never, refused."""
         job = self._get(ident, job_id)
+        if sha256 is not None and (not isinstance(sha256, str) or not SHA256_RE.fullmatch(sha256)):
+            raise ScannerError("INVALID_ARGUMENT", "sha256 must be 64 lower-case hex characters")
+        if sha256 is None and job.declared_sha256 is None:
+            raise ScannerError("INVALID_ARGUMENT", "sha256 is required (it was not declared at BEGIN_UPLOAD)")
+        if sha256 is not None and job.declared_sha256 is not None and sha256 != job.declared_sha256:
+            raise ScannerError("HASH_MISMATCH", "sha256 differs from the one declared at BEGIN_UPLOAD")
         with job.io_lock:
             with self._lock:
                 if job.state == S.CREATED:
@@ -214,7 +223,7 @@ class ScanJobManager:
                     raise ScannerError("INVALID_STATE", f"job is {job.state.value}")
             st = self.quarantine.get_job(job.job_id)
             try:
-                size, sha = self.quarantine.finalize_upload(st, job.declared_sha256)
+                size, sha = self.quarantine.finalize_upload(st, job.declared_sha256 or sha256)
             except ScannerError as e:
                 err = e
             else:

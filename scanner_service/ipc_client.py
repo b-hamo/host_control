@@ -45,9 +45,10 @@ def service_pid(name: str = SERVICE_NAME) -> int | None:
 
 class ScannerClient:
     def __init__(self, pipe_name: str = PIPE_NAME, *, timeout_s: float = 30.0, expected_server_pid: int | None = None,
-                 max_response_bytes: int = 1024 * 1024):
+                 max_response_bytes: int = 1024 * 1024, connect_timeout_s: float | None = None):
         self.pipe_name = pipe_name
         self.timeout_s = timeout_s
+        self.connect_timeout_s = timeout_s if connect_timeout_s is None else connect_timeout_s
         self.expected_server_pid = expected_server_pid
         self.max_response_bytes = max_response_bytes
         self.handle = None
@@ -60,7 +61,7 @@ class ScannerClient:
         self.close()
 
     def connect(self) -> None:
-        deadline = time.monotonic() + self.timeout_s
+        deadline = time.monotonic() + self.connect_timeout_s
         while True:
             try:
                 self.handle = win32file.CreateFile(
@@ -115,6 +116,9 @@ class ScannerClient:
         if job_id is not None:
             req["job_id"] = job_id
         resp = self.send(req)
+        if resp.get("request_id") != req["request_id"] or resp.get("protocol_version") != PROTOCOL_VERSION:
+            self.close()                             # out of step with the server: never reuse this connection
+            raise ConnectionError(f"response does not answer request {req['request_id']}")
         if resp.get("status") != "OK":
             err = resp.get("error") or {}
             raise ScannerError(err.get("code", "UNKNOWN"), err.get("message", ""), retryable=bool(err.get("retryable")))

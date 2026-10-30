@@ -488,3 +488,22 @@ def test_config_file(tmp_path):
         load_config(p)
     assert make_config(tmp_path).log_dir == tmp_path / "State" / "logs"
     assert FINISHED                                                  # imported for the state table
+
+
+# ----------------------------------------------------------------------------- streaming uploads (Host side)
+def test_sha256_may_be_declared_when_the_upload_completes(tmp_path):
+    """A streaming sender (the Host's HTTPS receiver) knows the hash only at the end."""
+    m = make_manager(tmp_path)
+    job = m.begin_upload(IDENT, {"file_name": "a.txt", "size": len(TEXT)})
+    m.write_chunk(IDENT, job.job_id, 0, TEXT)
+    assert err(m.complete_upload, IDENT, job.job_id).code == "INVALID_ARGUMENT"      # declared nowhere
+    assert job.state == S.RECEIVING
+    m.complete_upload(IDENT, job.job_id, hashlib.sha256(TEXT).hexdigest())
+    assert job.state == S.RECEIVED and job.sha256 == hashlib.sha256(TEXT).hexdigest()
+    other = m.begin_upload(replace(IDENT, artifact_id="ART-2"), {"file_name": "a.txt", "size": 3})
+    m.write_chunk(other.identity, other.job_id, 0, b"abc")
+    assert err(m.complete_upload, other.identity, other.job_id, "0" * 64).code == "HASH_MISMATCH"
+    assert other.outcome == S.FAILED
+    both = begin(m, ident=replace(IDENT, artifact_id="ART-3"))                     # declared at BEGIN too
+    m.write_chunk(both.identity, both.job_id, 0, TEXT)
+    assert err(m.complete_upload, both.identity, both.job_id, "1" * 64).code == "HASH_MISMATCH"
