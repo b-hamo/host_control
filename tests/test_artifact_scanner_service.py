@@ -5,12 +5,11 @@ scan → user approval already given → PUBLISH by the service → Host check �
 
 The service runs in this process (scanner_service ScannerRuntime on a unique pipe, the same code
 as the installed service) with FakeScanner in place of MpCmdRun. The installed service itself is
-used only with SCANNER_SERVICE_TESTS=1 (installer/install.ps1 first, with -ExportRoot).
+used in tests/test_scanner_integration.py.
 """
 
 import asyncio
 import hashlib
-import os
 import secrets
 import sys
 import time
@@ -30,22 +29,23 @@ from test_artifact_export import HANGUL_TXT, TEXT, Approver, Host, candidate_id 
 from host.artifact_scan import DefenderServiceScanner  # noqa: E402
 from host.artifacts import _check_published, _remove_if_same  # noqa: E402
 from host.scanner_client import ScannerServiceClient, ScannerServiceError, job_identity  # noqa: E402
-from scanner_service.defender_scanner import eicar  # noqa: E402
 from scanner_service.models import Verdict  # noqa: E402
-from scanner_service.runtime import ScannerRuntime  # noqa: E402
+from scanner_service.runtime import ScannerRuntime, token_info  # noqa: E402
 
-REAL = os.environ.get("SCANNER_SERVICE_TESTS") == "1"
 
 
 class Service:
     """A SecureArtifactScanner runtime in this process, publishing into the Host's export folder."""
 
     def __init__(self, tmp_path: Path, fake: FakeScanner, export_root: Path | None = None, **cfg):
+        if token_info()["is_admin"]:
+            pytest.skip("elevated: the in-process service would run as an administrator, which the Host "
+                        "(correctly) refuses; run these as a standard user")
         self.pipe = r"\\.\pipe\sas-host-" + secrets.token_hex(5)
         export_root = export_root or tmp_path / "exp"
         export_root.mkdir(parents=True, exist_ok=True)
-        self.config = replace(make_config(tmp_path / "svc", max_file_bytes=1024 * 1024, max_chunk_bytes=256 * 1024,
-                                          max_request_bytes=512 * 1024, **cfg),
+        cfg = {"max_file_bytes": 1024 * 1024, "max_chunk_bytes": 256 * 1024, "max_request_bytes": 512 * 1024, **cfg}
+        self.config = replace(make_config(tmp_path / "svc", **cfg),
                               export_root=export_root, pipe_name=self.pipe)
         self.fake = fake
         self.rt = ScannerRuntime(self.config, scanner=fake, dev_mode=True)
@@ -438,38 +438,4 @@ def test_response_must_name_the_requested_job(tmp_path, service):
     assert e.value.code == "RESPONSE_MISMATCH"
 
 
-# --------------------------------------------------------------------- the installed Windows service
-real = pytest.mark.skipif(not REAL, reason="set SCANNER_SERVICE_TESTS=1 (installed SecureArtifactScanner, "
-                                           "-ExportRoot = the folder the test reads from the service)")
-
-
-@real
-def test_installed_service_exports_clean_text_and_blocks_eicar(tmp_path):
-    scanner = DefenderServiceScanner()                                    # the real pipe, server PID checked
-    health = run(scanner.client.health())
-    export_root = Path(health["publish"]["export_root"])
-    session = "SES-INT-" + secrets.token_hex(3).upper()
-
-    async def body():
-        host = Host(tmp_path, approver=Approver(), scanner=scanner, export_dir=export_root, session=session)
-        r, serving = await host.start()
-        _, _, clean = await export_one(host, r, "통합시험.txt", TEXT, timeout=180)
-        _, _, bad = await export_one(host, r, "eicar.txt", eicar(), timeout=180)
-        await host.close(serving)
-        return clean, bad
-
-    clean, bad = run(body(), timeout=420)
-    try:
-        assert clean["status"] == "EXPORTED", clean
-        exported = Path(clean["export_path"])
-        assert exported.read_bytes() == TEXT and exported.parent.parent.name == session
-        assert "Microsoft Defender" in clean["result"]["detail"]
-        assert bad["status"] == "BLOCKED" and bad["result"]["code"] == "MALWARE_DETECTED", bad
-        assert not (export_root / session / bad["artifact_id"]).exists() or \
-            not list((export_root / session / bad["artifact_id"]).iterdir())
-        assert no_host_file(tmp_path)
-    finally:
-        for p in sorted((export_root / session).rglob("*"), reverse=True) if (export_root / session).exists() else []:
-            p.unlink() if p.is_file() else p.rmdir()
-        if (export_root / session).exists():
-            (export_root / session).rmdir()
+# The installed service itself: tests/test_scanner_integration.py
