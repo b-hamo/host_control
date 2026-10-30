@@ -17,7 +17,6 @@ new jobs, running scans cancelled, bounded waits) happens on the service thread.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 import time

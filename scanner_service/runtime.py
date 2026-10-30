@@ -63,6 +63,21 @@ def _sys_path_inside_bundle() -> bool | None:
     return all(os.path.normcase(os.path.abspath(p)).startswith(base) for p in sys.path if p)
 
 
+def _pywin32_files() -> dict:
+    """Where the pywin32 extension modules and DLLs this process uses were loaded from."""
+    import pywintypes
+    import servicemanager
+    import win32api
+    import win32file
+    out = {m.__name__: getattr(m, "__file__", None) for m in (pywintypes, win32api, win32file, servicemanager)}
+    try:
+        h = win32api.GetModuleHandle(f"pywintypes{sys.version_info[0]}{sys.version_info[1]}.dll")
+        out["pywintypes_dll"] = win32api.GetModuleFileName(h)
+    except Exception:  # noqa: BLE001
+        out["pywintypes_dll"] = None
+    return out
+
+
 def token_info() -> dict:
     """Who this process really runs as, read from its own token."""
     import win32api
@@ -172,7 +187,8 @@ class ScannerRuntime:
                        "max_request_bytes": c.max_request_bytes, "max_active_jobs": c.max_active_jobs,
                        "scan_timeout_s": c.scan_timeout_s},
             "python": {"version": sys.version.split()[0], "frozen": bool(getattr(sys, "frozen", False)),
-                       "executable": sys.executable, "sys_path_ok": _sys_path_inside_bundle()},
+                       "executable": sys.executable, "sys_path_ok": _sys_path_inside_bundle(),
+                       "pywin32_modules": _pywin32_files()},
         }
 
     def stop(self, timeout_s: float = 20.0) -> None:
