@@ -148,8 +148,12 @@ class HostGateway:
 
     async def read_result(self, receipt: Receipt) -> bytes:
         """Return a verified Local data result; never evaluate returned code/page text."""
-        if not await self.verify(receipt) or not receipt.execution_id.startswith("LOCAL-"):
+        if not await self.verify(receipt):
             raise ValueError("not a verified Local result")
+        if receipt.execution_id.startswith("GUI-") and self.sandbox is not None:
+            return await self.sandbox.read_result(receipt)
+        if not receipt.execution_id.startswith("LOCAL-"):
+            raise ValueError("not a data result")
         return self.local.results[receipt.evidence_ref]
 
     async def artifact(self, output_ref: str) -> Artifact:

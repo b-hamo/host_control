@@ -1,6 +1,0 @@
-{
-  "name": "router_stop",
-  "description": "Stop this plan's Sandbox and execution Host, releasing its control/upload listeners. Confirm stopped before ending the Agent session. Further plans/submissions for this plan are durably refused; use router_start for genuinely new work after cleanup. Status and verified results remain queryable after reconnect without starting a Host. Missing evidence stays UNKNOWN. Cleanup failure is not success. Never affects another plan's session.",
-  "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}},
-  "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false}
-}

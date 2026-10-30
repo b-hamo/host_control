@@ -10,9 +10,28 @@ import pytest
 from host.mcp_runtime import McpRuntime
 from host.mcp_server import HostBackend, McpServer, guard_descriptions, load_tool_list
 from test_mcp_server import Client, SERVER, stop
-from test_router_retirement import assert_rebind, free_ports
 from test_sandbox_launch import args, FakeError
 from test_sandbox_recovery import RecoveringManager
+
+
+def free_ports():
+    with socket.socket() as first, socket.socket() as second:
+        first.bind(("127.0.0.1", 0))
+        second.bind(("127.0.0.1", 0))
+        return first.getsockname()[1], second.getsockname()[1]
+
+
+def assert_rebind(ports):
+    sockets = []
+    try:
+        for port in ports:
+            sock = socket.socket()
+            sockets.append(sock)
+            sock.bind(("127.0.0.1", port))
+            sock.listen()
+    finally:
+        for sock in sockets:
+            sock.close()
 
 
 def body(result):

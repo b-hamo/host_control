@@ -13,15 +13,19 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-MASKED_FIELDS = {"computer_type": ("text",)}
+MASKED_FIELDS = {"computer_type": ("text",), "router_capture": ("text",)}
 
 
 def mask(tool: str, args: dict) -> dict:
     out = dict(args)
-    if tool == "inbox_download" and isinstance(out.get("url"), str):
-        from urllib.parse import urlsplit, urlunsplit
-        u = urlsplit(out["url"])                   # a signed URL's query is a credential: keep it out
-        out["url"] = urlunsplit((u.scheme, u.netloc.rpartition("@")[2], u.path, "", ""))
+    for tool_name, key in (("inbox_download", "url"), ("router_capture", "source_url")):
+        if tool == tool_name and isinstance(out.get(key), str):
+            from urllib.parse import urlsplit, urlunsplit
+            try:
+                u = urlsplit(out[key])             # a signed URL's query is a credential: keep it out
+                out[key] = urlunsplit((u.scheme, u.netloc.rpartition("@")[2], u.path, "", ""))
+            except ValueError:
+                out[key] = "<unparsable URL>"
     for field in MASKED_FIELDS.get(tool, ()):
         if isinstance(out.get(field), str):
             raw = out[field].encode("utf-8")

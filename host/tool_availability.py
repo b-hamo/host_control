@@ -27,6 +27,9 @@ REQUIRED_CAPABILITY = {
     # Host feature too (--sandbox-run): runs inbox downloads inside the Sandbox, with approval.
     "sandbox_run": "host.sandbox_run",
     "sandbox_run_status": "host.sandbox_run",
+    # Host feature (--router-capture, #94): web page commands as data, analyzed only in the Sandbox.
+    "router_capture": "host.router",
+    "router_execute": "host.router",
 }
 # Tools whose backend is not built yet. Hidden rather than failing late (B-11).
 NOT_YET_AVAILABLE: dict[str, str] = {}

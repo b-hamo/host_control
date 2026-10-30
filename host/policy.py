@@ -65,6 +65,13 @@ class Policy:
             # inbox_finish keep). The run is still bound to the Host's own download record and
             # exact command, and its source, command and receipt are recorded.
             return Decision("ALLOW", "P-SANDBOX-RUN", "runs a received file inside the Sandbox only; recorded")
+        if tool == "router_capture":
+            # #94: stores web page text as untrusted data; opens nothing, runs nothing.
+            return Decision("ALLOW", "P-ROUTER-CAPTURE", "records web page text as untrusted data; runs nothing")
+        if tool == "router_execute":
+            # #94: same rule as sandbox_run. The script derived from a capture runs inside the
+            # Sandbox only, bound to the SHA-256 of the capture and of the script.
+            return Decision("ALLOW", "P-ROUTER-EXECUTE", "analyzes a captured command inside the Sandbox only; recorded")
         if tool in self.require_approval_for:
             return Decision("REQUIRE_APPROVAL", "P-APPROVE-SENSITIVE", f"{tool} needs user approval")
         return Decision("ALLOW", "P-ALLOW-DEFAULT", "no rule restricts this call")

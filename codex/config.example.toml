@@ -5,6 +5,10 @@
 #   --save-downloads 인터넷에서 받은 파일을 다운로드 폴더에도 저장, 세션이 끝나도 남김
 #   --agent-guard    AI가 혼자 Sandbox를 끝내거나 비슷한 파일을 또 받을 때 확인 창
 #   --shared         Sandbox 바탕화면 Shared -> 이 PC(실행 금지) -> 끝날 때 검사 후 "남길까요?"
+#   --artifact-export --artifact-scanner amsi
+#                    Sandbox 실행 결과(영수증·출력)를 검사해서 받기. amsi = 이 PC 백신(Defender)으로 검사
+#   --sandbox-run    받은 파일을 Sandbox 안에서 정확한 명령으로 실행(sandbox_run)
+#   --router-capture 웹 페이지 명령(ClickFix)을 기록하고 같은 Sandbox에서 분석(router_capture, router_execute, #94)
 # inbox·shared 폴더는 sandbox_manager 의 tools/setup_inbox.ps1 을 한 번 돌려 만든다(실행 금지 권한 포함).
 
 [mcp_servers.scrp]
@@ -14,7 +18,10 @@ args = ['C:/Users/<나>/Documents/host_control/host/mcp_server.py',
         '--inbox', 'C:/Users/<나>/SecureCUA/codex-work/inbox',
         '--save-downloads',
         '--agent-guard',
-        '--shared', 'C:/Users/<나>/SecureCUA/codex-work/shared']
+        '--shared', 'C:/Users/<나>/SecureCUA/codex-work/shared',
+        '--artifact-export', '--artifact-scanner', 'amsi',
+        '--sandbox-run',
+        '--router-capture']
 default_tools_approval_mode = "approve"
 startup_timeout_sec = 60
 tool_timeout_sec = 120
