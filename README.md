@@ -62,7 +62,7 @@ VM 및 창 backend와 Defender 판정/사용자 선택은 테스트 대역이다
 | `host/session_registry.py` | 세션 등록부. 세션별 1회용 bootstrap token 발급·확인 | 4.6 |
 | `host/tls.py` | TLS 설정(최소 TLS 1.2), 개발용 자체 서명 인증서 생성 | 4.6 |
 | `host/bootstrap.py` | Runner가 읽을 bootstrap 설정 파일 생성 | 4.6 |
-| `scanner_service/` | **SecureArtifactScanner**: 반출 후보를 격리·Defender(MpCmdRun) 검사·폐기하는 별도 Windows 서비스 (`NT SERVICE\SecureArtifactScanner`, Named Pipe). 아직 Host와 연결 전 | 5.8 |
+| `scanner_service/` | **SecureArtifactScanner**: 반출 후보를 격리·Defender(MpCmdRun) 검사·공개·폐기하는 별도 Windows 서비스 (`NT SERVICE\SecureArtifactScanner`, Named Pipe). `--artifact-scanner defender-service`로 사용 | 5.8 |
 | `installer/` | SecureArtifactScanner 빌드(PyInstaller onedir)·설치·검증·제거 스크립트 | 5.8 |
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
@@ -375,10 +375,12 @@ codex ... -c "mcp_servers.scrp.args=['$server', '--runner-exe', '<sandbox_runner
 **공개 순서:** 받은 파일을 다른 프로그램이 쓰지 못하게 잠근 채 해시를 다시 확인하고, 같을 때만 결과 폴더로 옮기며 동시에 `EXPORTED`가 된다.
 그 전까지 `artifact_list`는 `SCANNING`이고 결과 폴더에도 파일이 없다.
 
-**검사 서비스 (SecureArtifactScanner, 연결 전):** 같은 검사를 Host 프로세스 밖, 관리자 권한 없는 가상 서비스 계정에서
-Microsoft Defender `MpCmdRun.exe`로 하는 별도 Windows 서비스. 작업마다 새 격리 폴더, Named Pipe(`scanner-ipc-v1`)로만 통신.
-이번 단계는 서비스 단독이고, 위 반출 흐름(`artifacts.py`·`upload_server.py`)은 바뀌지 않았다.
-설계·설치·판정 기준·API 계약: [scanner_service/README.md](scanner_service/README.md).
+**`--artifact-scanner defender-service`:** 수신·검사·공개를 Host 프로세스 밖의 SecureArtifactScanner Windows 서비스
+(관리자 권한 없는 `NT SERVICE\SecureArtifactScanner`, Microsoft Defender `MpCmdRun.exe`)가 한다. HTTPS 수신 규칙·빈 201·
+`ARTIFACT_RESULT` 대조·승인 창은 그대로이고, 본문은 Host 파일 없이 64 KiB씩 Named Pipe로 서비스 Job에 들어간다.
+검사 통과 + 승인 뒤 서비스가 `--export-dir`에 공개하고, Host가 그 파일(경로·링크·해시)을 다시 확인한 뒤에만 `EXPORTED`.
+서비스가 없거나 다른 폴더로 공개하도록 설치됐으면 `artifact_export`는 승인 창 전에 `SCANNER_UNAVAILABLE`.
+서비스 설치: `installer\install.ps1 -ExportRoot <--export-dir와 같은 폴더>`. 설계·판정 기준·연동 계약: [scanner_service/README.md](scanner_service/README.md) §15.
 
 ## Runner가 접속하는 방법
 

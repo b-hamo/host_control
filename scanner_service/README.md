@@ -106,9 +106,9 @@ C:\ProgramData\SecureRuntime\Quarantine\
 | 명령 | 필요한 값 | payload | 결과 |
 |---|---|---|---|
 | `HEALTH_CHECK` | – | `{"selftest": true}`(선택: EICAR 자체 시험 즉시 실행) | 버전, PID, 토큰, Defender 상태, 공개 설정, Job 수, 복구 결과, 한도 |
-| `BEGIN_UPLOAD` | 4개 식별자 (job_id 금지) | `file_name`(표시·형식 검사용), `size`, `sha256` | Job (job_id는 서비스가 발급) |
+| `BEGIN_UPLOAD` | 4개 식별자 (job_id 금지) | `file_name`(표시·형식 검사용), `size`, `sha256`(선택: 모르면 생략) | Job (job_id는 서비스가 발급) |
 | `WRITE_CHUNK` | 식별자 + job_id | `offset`, `data`(base64, ≤256 KiB) | `received_bytes` |
-| `COMPLETE_UPLOAD` | 식별자 + job_id | – | Job (`RECEIVED`) |
+| `COMPLETE_UPLOAD` | 식별자 + job_id | `sha256`(BEGIN에서 생략했으면 필수, 둘 다 주면 같아야 함) | Job (`RECEIVED`) |
 | `SCAN` | 식별자 + job_id | – | Job (`SCANNING`, 백그라운드 검사. `GET_STATUS`로 확인) |
 | `GET_STATUS` | 식별자 + job_id | – | Job |
 | `PUBLISH` | 식별자 + job_id | `approval` (§12) | Job (`outcome: EXPORTED`, `export_path`) |
@@ -218,19 +218,31 @@ powershell -ExecutionPolicy Bypass -File installer\uninstall.ps1
 
 의존성: 서비스 실행 `pywin32==312` (Windows 전용, `requirements.txt`에 플랫폼 표시), 빌드 `pyinstaller==6.22.3`·`pyinstaller-hooks-contrib==2026.9` (`installer/requirements-build.txt`). Host 공통 의존성(jsonschema·websockets·cryptography·sandbox_manager)은 서비스에 필요 없다.
 
-## 15. 후속 Artifact Broker 통합 API 계약
+## 15. Artifact Broker 연동 (`--artifact-scanner defender-service`)
 
-1. Host가 HTTPS로 받은 파일(크기·SHA-256 확정, `ArtifactGrants.receive`)을 `BEGIN_UPLOAD`(같은 크기·SHA-256, `file_name` = 후보의 `relative_path`) → `WRITE_CHUNK`(≤256 KiB) → `COMPLETE_UPLOAD`. 식별자: `session_id`·`runtime_id`·`generation` = Host `Identity`, `artifact_id` = `ART-000001` 형식.
-2. `SCAN` 후 `GET_STATUS` 폴링(0.2~1초). `SCANNED`면 통과, `outcome: BLOCKED`면 `error.code`를 Broker의 `BLOCKED` 결과 코드로 그대로 사용(`MALWARE_DETECTED`, `SCAN_ERROR`, `SCAN_TIMEOUT`, `SCANNER_UNAVAILABLE`, `SCAN_UNVERIFIABLE`, `FORMAT_NOT_ALLOWED`, `NOT_UTF8`, `CONTENT_CHANGED`, `CONTENT_REMOVED`).
-3. 승인은 지금처럼 Broker가 받고(승인 창), `PUBLISH`에 위 승인 객체를 넣는다. 결과 `export_path`를 Agent에게 준다. 현재 Broker의 Export 폴더(`host/.exports/`)를 `-ExportRoot`로 지정한다.
-4. 세션 종료·세대 변경·Telemetry 끊김: `ABORT scope=session` (세대는 새 `BEGIN_UPLOAD`가 자동 처리).
-5. 연결 실패·`SERVICE_STOPPING`·`retryable` 오류는 반출 실패(재시도 가능)로, 그 밖의 오류는 차단으로 처리. 서비스가 없으면 반출하지 않는다.
-6. AMSI 검사(`host/artifact_scan.py`)는 이 단계에서 지우지 않았다. 둘 다 쓸지, Defender 서비스로 바꿀지는 통합 단계에서 정한다.
+구현: `host/scanner_client.py`(비동기 파이프 클라이언트), `host/artifacts.py`(수신·공개), `host/artifact_scan.py`(`DefenderServiceScanner`), `host/mcp_server.py`(옵션·상태 확인).
+
+1. **상태 확인**: Host 시작 때와 15초마다 `HEALTH_CHECK`. 서비스 계정이 정확히 `NT SERVICE\SecureArtifactScanner`이고 관리자·LocalSystem이 아님, 중지 중 아님, Defender 사용 가능, 공개 가능, 서비스의 `export_root`가 Host의 `--export-dir`과 같아야 "사용 가능". 아니면 `artifact_export`가 **승인 창을 띄우기 전에** `SCANNER_UNAVAILABLE`(재시도 가능)로 거부된다. 시작 때 같은 session_id로 남은 이전 Job은 `ABORT scope=session`.
+2. **수신**: 기존 HTTPS 검사(인증·token·기한·크기·Content-Type, 1회용 grant)는 그대로. 본문은 Host 파일(`.part`) 없이 64 KiB씩 한 파이프 연결로 `BEGIN_UPLOAD`(크기, `file_name` = 후보 `relative_path`) → `WRITE_CHUNK` → `COMPLETE_UPLOAD`(`sha256` = Host가 흘려보내며 계산한 해시. 서비스가 자기 계산과 비교). 응답의 크기·해시가 Host 값과 다르면 실패. 성공해야 기존과 같은 빈 201. grant에 `scanner_job_id`가 붙는다.
+   - 서비스 없음·바쁨(`SCANNER_UNAVAILABLE`, `STORAGE_FULL` 등) → 503, `FILE_TOO_LARGE` → 413, 그 밖 → 500. 실패하면 Job은 `ABORT`.
+   - 업로드 완료 순간 실시간 보호가 거부(`MALWARE_DETECTED`·`CONTENT_REMOVED`·`CONTENT_CHANGED`) → 수신은 201, 검사 결과가 그 코드로 `BLOCKED`(재시도 불가).
+3. **결과 대조**: `ARTIFACT_RESULT`와 수신 기록 대조는 기존 그대로. 어긋나면 Job `ABORT`.
+4. **검사**: `SCAN` → `GET_STATUS` 폴링(0.25초, Host 제한 300초 — 서비스의 MpCmdRun 120초 + 자체 시험). `SCANNED`이고 크기·SHA-256이 Host 기록과 같고 판정 `CLEAN`일 때만 통과. `BLOCKED`면 서비스의 `error.code` 그대로(`MALWARE_DETECTED`, `SCAN_ERROR`, `SCAN_TIMEOUT`, `SCANNER_UNAVAILABLE`, `SCAN_UNVERIFIABLE`, `FORMAT_NOT_ALLOWED`, `NOT_UTF8`, `CONTENT_CHANGED`), 그 밖(취소·실패·연결 끊김)은 `SCAN_ERROR`/`SCANNER_UNAVAILABLE`. Host 시간 초과면 `SCAN_TIMEOUT` + `ABORT`.
+5. **공개**: 사용자 승인은 기존대로 grant 발급 전에 받았다. 그 뒤 `PUBLISH`(승인 객체 = job·artifact·session·SHA-256). 서비스가 `<export_dir>\<session>\<artifact>\<안전한 이름>`에 쓰면 Host가 다시 확인: 예상 경로와 같음, 링크 아님, 잠근 채 해시·크기가 받은 바이트와 같음 → 그때만 `EXPORTED`. 확인 실패나 공개 중 취소면 그 파일(같은 바이트일 때만)을 지우고 `FAILED PUBLISH_FAILED`. 같은 Job 재공개는 서비스가 `ALREADY_PUBLISHED`로 거부.
+6. **취소**: 세션 종료·세대 변경·Telemetry 끊김·Control 끊김 → 기존 `cancel_identity` / `_end` → grant 취소 → Job `ABORT`(백그라운드, 실패해도 서비스의 만료가 정리).
+7. 모든 파이프 호출은 `asyncio.to_thread`로 실행해 Host 이벤트 루프를 막지 않는다. 연결 대기는 2초(서비스 없음은 빨리 실패), 요청 I/O는 30초. 응답의 `request_id`와 job·session·runtime·generation·artifact를 모두 확인한다. 실제 서비스면 파이프 서버 PID가 SCM의 서비스 PID와 같아야 한다.
+8. 기존 `none`·`amsi` 모드는 바뀌지 않았다(파일 경로·검사·공개 모두 기존 코드).
+
+실행 예: 서비스를 Host의 export 폴더로 설치하고 같은 폴더를 준다.
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\install.ps1 -ExportRoot C:\Users\<user>\...\host_control\host\.exports
+python host\mcp_server.py ... --artifact-export --artifact-scanner defender-service
+```
 
 ## 16. 보안상 한계와 미검증 사항
 
 - ACL·가상 계정은 샌드박스가 아니다(§4). 서비스 프로세스가 공격당하면 그 계정 권한은 그대로 쓰인다.
-- 승인은 Host 주장 방식(§12): 파이프에 접근할 수 있는 Host 사용자 권한의 프로그램이면 승인을 만들 수 있다. 위조 방지는 Broker 통합 단계 과제.
+- 승인은 Host 주장 방식(§12): 파이프에 접근할 수 있는 Host 사용자 권한의 프로그램이면 승인을 만들 수 있다. Broker 연동 후에도 승인 창은 Host 안에 있으므로 서비스가 따로 확인할 방법은 없다(같은 사용자 권한 경계).
 - Export Root는 사용자 폴더이므로 같은 사용자가 공개된 파일을 나중에 바꿀 수 있다(공개 시점까지만 보장).
 - MpCmdRun을 강제 종료해도 Defender 엔진(MsMpEng, SYSTEM)의 진행 중 검사는 멈추지 않을 수 있다(판정은 이미 `TIMEOUT`으로 차단).
 - 탐지 이벤트는 "검사 시작 2초 전 이후 + 경로 일치"로 연결한다. 같은 경로를 동시에 다른 경로로 검사하는 일은 없지만(작업마다 랜덤 폴더), 이벤트 지연이 2초를 넘으면 그 이벤트는 못 볼 수 있다. 그 경우에도 Defender가 파일을 삭제·격리했다면 파일 사라짐으로 잡힌다.
