@@ -19,6 +19,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows service
 pytest.importorskip("win32file")
 
 from scanner_service import defender_scanner as ds  # noqa: E402
+from scanner_service import winfile as ds_winfile  # noqa: E402
 from scanner_service.defender_scanner import (DefenderScanner, DefenderUnavailable, DetectionLogUnavailable,  # noqa: E402
                                               ProcessResult, run_process, status_problem,
                                               verify_trusted_executable)
@@ -91,6 +92,17 @@ def test_exit_code_zero_but_file_removed_is_a_detection(tmp_path):
     s, target = scanner(tmp_path, res(0, b"(localized text the scanner does not understand)"))
     target.unlink()
     assert s.scan_file(target).verdict == Verdict.DETECTED
+
+
+def test_file_being_removed_is_a_detection(tmp_path, monkeypatch):
+    """As the service account the EICAR file is delete-pending after the scan: attributes are refused."""
+    s, target = scanner(tmp_path, res(0, b""))
+
+    def refused(path):
+        raise PermissionError(0, "access denied", str(path), 5)
+    monkeypatch.setattr(ds_winfile, "attributes", refused)
+    out = s.scan_file(target)
+    assert out.verdict == Verdict.DETECTED and out.evidence["file_present"] is False
 
 
 def test_detection_event_wins_over_a_clean_looking_output(tmp_path):

@@ -236,4 +236,15 @@ powershell -ExecutionPolicy Bypass -File installer\uninstall.ps1
 - 탐지 이벤트는 "검사 시작 2초 전 이후 + 경로 일치"로 연결한다. 같은 경로를 동시에 다른 경로로 검사하는 일은 없지만(작업마다 랜덤 폴더), 이벤트 지연이 2초를 넘으면 그 이벤트는 못 볼 수 있다. 그 경우에도 Defender가 파일을 삭제·격리했다면 파일 사라짐으로 잡힌다.
 - 자체 시험은 Defender의 위협 알림을 6시간마다(그리고 재시작 후 첫 검사 때) 만든다.
 - 다른 백신이 주 백신이라 Defender가 수동 모드이면 모든 검사가 차단된다(의도된 동작).
-- 미검증(실제 환경에서 아직 하지 못한 것)은 작업 보고서와 `build\verify-report.txt`에 남긴다. 특히 Python이 없는 별도 PC에서의 설치·실행, Defender가 꺼진 PC, 실제 재부팅.
+- 미검증: Python이 없는 **별도 PC**에서의 설치·실행(개발 PC에서는 번들 안 경로만 쓰는 것을 확인), Defender가 꺼졌거나 다른 백신이 주 백신인 PC(단위 테스트로만), 실제 Windows 재부팅(프로세스 강제 종료로 대신 확인), 디스크가 실제로 가득 찬 상황(한도 설정으로만).
+
+## 17. 실제 Windows 검증 결과 (2026-10-30, Windows 11 Pro 10.0.26200, Defender 4.18.26100.4 / sig 1.463.31.0)
+
+`installer\install.ps1 -ExportRoot build\verify-exports` → `installer\verify.ps1 -Publish -Restart -CrashTest` (관리자):
+
+- 계정: `sc qc` `SERVICE_START_NAME : NT SERVICE\SecureArtifactScanner`, `Win32_Service.StartName`·실행 프로세스 사용자 동일, SID 유형 `UNRESTRICTED`, 필요 권한 2개만
+- 토큰(서비스가 스스로 읽음): `is_admin=False`, Administrators 그룹 없음, LocalSystem 아님, 무결성 0x3000(서비스 계정 기본값), 권한 `SeChangeNotifyPrivilege, SeImpersonatePrivilege`만
+- ACL: 설치 폴더·실행 파일·config.json은 관리자만 쓰기, SecureRuntime·ScannerService·logs·work·Quarantine은 SYSTEM·Administrators·서비스만, 상속 차단
+- 기능: frozen 실행(설치 폴더, `sys.path` 번들 안), 정상 TXT → CLEAN → SCANNED → DISPOSED, EICAR → `BLOCKED MALWARE_DETECTED (Virus:DOS/EICAR_Test_File)`, 공개 → `EXPORTED`, 검사 후 격리 저장소 0개
+- `Restart-Service` 뒤 새 프로세스·정상 중지 기록, 프로세스 강제 종료 뒤 SCM 재시작·비정상 종료 감지
+- 발견해 고친 것: 서비스 계정에서는 EICAR 파일이 Defender 삭제 대기 상태가 되어 파일 속성 조회가 `WinError 5`로 거부됨 → 처음엔 `SCAN_ERROR`(반출은 막혔지만 원인 오표시), 이제 탐지로 판정. SCM의 세 번째 실패 조치는 120초 뒤라서 `-CrashTest` 대기를 150초로 늘림

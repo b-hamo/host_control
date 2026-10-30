@@ -188,6 +188,21 @@ def test_format_policy_first(tmp_path, name, data, code):
     assert m.scanner.scanned == []                    # not even handed to Defender
 
 
+@pytest.mark.parametrize("winerror, code", [(225, "MALWARE_DETECTED"), (226, "MALWARE_DETECTED"),
+                                             (5, "CONTENT_REMOVED")])
+def test_real_time_protection_refusing_reads(tmp_path, monkeypatch, winerror, code):
+    """Seen as the service account: the EICAR upload reopens fine, then reading it fails with 225."""
+    m = make_manager(tmp_path)
+    job = upload(m)
+
+    def refuse(st):
+        raise OSError(0, "virus", str(st.payload_path), winerror)
+    monkeypatch.setattr(m.quarantine, "read_payload", refuse)
+    m.start_scan(IDENT, job.job_id)
+    wait_state(job, ("DISPOSED",))
+    assert job.outcome == S.BLOCKED and job.error["code"] == code and m.scanner.scanned == []
+
+
 def test_file_changed_after_scan_is_not_published(tmp_path, monkeypatch):
     m = make_manager(tmp_path)
     job = scanned(m)

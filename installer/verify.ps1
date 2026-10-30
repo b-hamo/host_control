@@ -164,8 +164,9 @@ if ($Restart) {
 if ($CrashTest) {
     $w = Get-CimInstance Win32_Service -Filter "Name='$Name'"
     Stop-Process -Id $w.ProcessId -Force
-    Add-Result "INFO" "INFO" "killed pid $($w.ProcessId); waiting for the SCM to restart the service (failure action: 5 s)"
-    $deadline = (Get-Date).AddSeconds(90)
+    # failure actions restart after 5 s / 30 s / 120 s (the count resets after a day): wait past the longest
+    Add-Result "INFO" "INFO" "killed pid $($w.ProcessId); waiting up to 150 s for the SCM to restart the service"
+    $deadline = (Get-Date).AddSeconds(150)
     do { Start-Sleep -Seconds 2; $w3 = Get-CimInstance Win32_Service -Filter "Name='$Name'" } while (
         ($w3.State -ne "Running" -or $w3.ProcessId -eq $w.ProcessId -or -not $w3.ProcessId) -and (Get-Date) -lt $deadline)
     Check "6. restarted by the SCM after a kill" ($w3.State -eq "Running" -and $w3.ProcessId -ne $w.ProcessId) "$($w3.State), pid $($w3.ProcessId)"

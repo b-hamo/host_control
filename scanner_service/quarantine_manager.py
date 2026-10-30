@@ -245,8 +245,11 @@ class QuarantineManager:
         """None if the locked file is still the received bytes at its place; else why not."""
         if st.lock_handle is None:
             return "file is not locked"
-        if winfile.attributes(st.payload_path) is None:
-            return "removed"
+        try:
+            if winfile.attributes(st.payload_path) is None:
+                return "removed"
+        except OSError as e:
+            return f"unreadable (winerror {getattr(e, 'winerror', None)}; delete pending?)"
         try:
             probe = winfile.open_entry(st.payload_path)
         except OSError as e:

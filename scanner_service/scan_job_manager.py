@@ -31,7 +31,7 @@ from scanner_service.artifact_publisher import ArtifactPublisher, PublishCancell
 from scanner_service.config import ScannerConfig
 from scanner_service.models import (BLOCK_CODES, FINISHED, SHA256_RE, Identity, Job, JobState, ScannerError,
                                     ScanOutcome, Verdict, check_transition)
-from scanner_service.quarantine_manager import QuarantineManager
+from scanner_service.quarantine_manager import VIRUS_ERRORS, QuarantineManager
 
 log = logging.getLogger("scanner.jobs")
 audit = logging.getLogger("scanner.audit")
@@ -281,7 +281,19 @@ class ScanJobManager:
 
     def _scan_steps(self, job: Job) -> tuple[JobState, str | None, str | None]:
         st = self.quarantine.get_job(job.job_id)
-        data = self.quarantine.read_payload(st)
+        try:
+            data = self.quarantine.read_payload(st)
+        except OSError as e:
+            # Real-time protection can let the file be opened and then refuse to read it (seen as the
+            # service account: winerror 225). That is a detection, not a scanner failure.
+            winerror = getattr(e, "winerror", None)
+            found = self._detections(job, st)
+            if winerror in VIRUS_ERRORS or found:
+                why = ", ".join(found) if found else f"read refused (winerror {winerror})"
+                job.scan = ScanOutcome(Verdict.DETECTED, f"Defender real-time protection: {why}", threats=found,
+                                       evidence={"read_winerror": winerror})
+                return S.BLOCKED, "MALWARE_DETECTED", job.scan.detail
+            return S.BLOCKED, "CONTENT_REMOVED", f"quarantined file can no longer be read (winerror {winerror})"
         if hashlib.sha256(data).hexdigest() != job.sha256:
             return S.BLOCKED, "CONTENT_CHANGED", "quarantined file changed before the scan"
         bad = check_format(job.file_name, data)

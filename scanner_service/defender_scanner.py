@@ -458,7 +458,11 @@ class DefenderScanner:
                     return True, "real-time protection refused the EICAR test file in quarantine"
                 return False, f"self-test file not written ({e})"
             self.sleep(0.5)
-            if winfile.attributes(target) is None:
+            try:
+                gone = winfile.attributes(target) is None
+            except OSError:
+                gone = True                               # being removed by real-time protection
+            if gone:
                 return True, "real-time protection removed the EICAR test file from quarantine"
             outcome = self._scan(target, cancel)
             if outcome.verdict == Verdict.DETECTED:
@@ -517,7 +521,10 @@ class DefenderScanner:
             log_error = None
         except DetectionLogUnavailable as e:
             events, log_error = None, str(e)
-        present = winfile.attributes(path) is not None
+        try:
+            present = winfile.attributes(path) is not None
+        except OSError:
+            present = False          # delete pending (Defender is removing it while we hold it) or refused
         evidence = {"output_threats": output_threats, "output_no_threats_line": output_clean,
                     "detection_events": None if events is None else len(events), "file_present": present}
         if log_error:
