@@ -62,6 +62,8 @@ VM 및 창 backend와 Defender 판정/사용자 선택은 테스트 대역이다
 | `host/session_registry.py` | 세션 등록부. 세션별 1회용 bootstrap token 발급·확인 | 4.6 |
 | `host/tls.py` | TLS 설정(최소 TLS 1.2), 개발용 자체 서명 인증서 생성 | 4.6 |
 | `host/bootstrap.py` | Runner가 읽을 bootstrap 설정 파일 생성 | 4.6 |
+| `scanner_service/` | **SecureArtifactScanner**: 반출 후보를 격리·Defender(MpCmdRun) 검사·폐기하는 별도 Windows 서비스 (`NT SERVICE\SecureArtifactScanner`, Named Pipe). 아직 Host와 연결 전 | 5.8 |
+| `installer/` | SecureArtifactScanner 빌드(PyInstaller onedir)·설치·검증·제거 스크립트 | 5.8 |
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
 | `schema/` | Host ↔ Runner 메시지 규격. **Runner도 이 파일을 기준으로 구현** | 2.2, 2.3 |
@@ -372,6 +374,11 @@ codex ... -c "mcp_servers.scrp.args=['$server', '--runner-exe', '<sandbox_runner
 
 **공개 순서:** 받은 파일을 다른 프로그램이 쓰지 못하게 잠근 채 해시를 다시 확인하고, 같을 때만 결과 폴더로 옮기며 동시에 `EXPORTED`가 된다.
 그 전까지 `artifact_list`는 `SCANNING`이고 결과 폴더에도 파일이 없다.
+
+**검사 서비스 (SecureArtifactScanner, 연결 전):** 같은 검사를 Host 프로세스 밖, 관리자 권한 없는 가상 서비스 계정에서
+Microsoft Defender `MpCmdRun.exe`로 하는 별도 Windows 서비스. 작업마다 새 격리 폴더, Named Pipe(`scanner-ipc-v1`)로만 통신.
+이번 단계는 서비스 단독이고, 위 반출 흐름(`artifacts.py`·`upload_server.py`)은 바뀌지 않았다.
+설계·설치·판정 기준·API 계약: [scanner_service/README.md](scanner_service/README.md).
 
 ## Runner가 접속하는 방법
 
