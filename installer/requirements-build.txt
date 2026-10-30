@@ -1,0 +1,4 @@
+# Build-only dependencies for SecureArtifactScanner.exe (installer/build.ps1). Windows x64, Python 3.13.
+pywin32==312
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
