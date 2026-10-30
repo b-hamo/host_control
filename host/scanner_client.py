@@ -20,6 +20,7 @@ import asyncio
 import base64
 import logging
 import threading
+import time
 
 from scanner_service.config import PIPE_NAME
 from scanner_service.ipc_client import ScannerClient, service_pid
@@ -62,6 +63,8 @@ class ScannerServiceClient:
         self.verify_server = verify_server
         self.timeout_s = timeout_s
         self.connect_timeout_s = connect_timeout_s    # a missing service must fail fast (a PUT is waiting)
+        self._aborts: set[threading.Thread] = set()
+        self._aborts_lock = threading.Lock()
 
     # -- plumbing (worker threads) ---------------------------------------------
     def _open(self) -> ScannerClient:
@@ -127,7 +130,7 @@ class ScannerServiceClient:
 
     def abort_soon(self, ident: JobIdentity, job_id: str, reason: str) -> None:
         """Fire and forget (from synchronous cancel paths). A failure is only logged: the service
-        expires abandoned jobs by itself (upload idle timeout, job lifetime)."""
+        expires abandoned jobs by itself (upload idle timeout, job lifetime). drain() waits for them."""
         def run():
             try:
                 self._job("ABORT", ident, job_id, {"reason": reason[:200]})
@@ -135,7 +138,23 @@ class ScannerServiceClient:
             except ScannerServiceError as e:
                 if e.code not in ("JOB_NOT_FOUND",):
                     log.warning("SCANNER job %s not aborted: %s", job_id, e)
-        threading.Thread(target=run, name="scanner-abort", daemon=True).start()
+            finally:
+                with self._aborts_lock:
+                    self._aborts.discard(threading.current_thread())
+        t = threading.Thread(target=run, name="scanner-abort", daemon=True)
+        with self._aborts_lock:
+            self._aborts.add(t)
+        t.start()
+
+    def drain(self, timeout_s: float) -> int:
+        """Wait (bounded) for abort_soon() calls still running, e.g. before the Host process exits.
+        Returns how many are still unfinished."""
+        deadline = time.monotonic() + timeout_s
+        with self._aborts_lock:
+            pending = list(self._aborts)
+        for t in pending:
+            t.join(max(0.0, deadline - time.monotonic()))
+        return sum(t.is_alive() for t in pending)
 
     def upload(self, ident: JobIdentity) -> "UploadStream":
         return UploadStream(self, ident)

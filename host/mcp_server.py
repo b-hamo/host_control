@@ -183,6 +183,11 @@ class HostBackend(threading.Thread):
             if self.session is not None:
                 self.final_status = self.session.status()
             self.loop.close()
+            service = getattr(getattr(self.artifacts, "grants", None), "service", None)
+            if service is not None:                    # defender-service: let the last ABORTs reach the service
+                left = service.drain(5.0)
+                if left:
+                    log.warning("%d scanner job abort(s) unfinished at exit; the service expires them", left)
             self.cleanup_confirmed = (self.launcher is None or self.launcher.sandbox is None or
                                       (self.launcher.cleanup_result is not None and
                                        not self.launcher.cleanup_result.get("failed")))
