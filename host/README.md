@@ -129,6 +129,9 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
 | `tests/test_sandbox_run.py` | 받은 파일 실행: 받은 파일만·정확한 명령 표시·바뀐 파일 거부, 실행은 세 입력만(Win+R은 `POL-0.1.1`부터 Agent에게도 허용), Enter 직전 파일·도우미 변조 시 Enter 안 보냄, 영수증 대조, 자기 결과만 승인 없이 반출, MCP 전 구간(승인 창 없음·감사·도우미 삭제), 옵션 |
 | `tests/test_inbox_download.py` | 내려받기: 공개 https만·사설/메타데이터 주소 거부, 확인한 IP로만 접속(두 번째 DNS 없음), 리다이렉트 검사, 크기·개수 한도, 이름 정리·덮어쓰기 없음·MOTW, zip 안 풂, 실행 금지 시험, MCP 경로(정책·감사·쿼리 제거·받는 폴더 연결·감시 시작/종료), 잘못된 옵션 |
+| `tests/test_scanner_client.py` | `scanner_client.py`를 스크립트형 가짜 파이프 서버로: 다른 요청·다른 Job의 응답, 끊김·무응답, 서비스 없음, 이벤트 루프 비차단, 종료 전 ABORT 완료 |
+| `tests/test_scanner_security.py` | `defender-service`의 공격·장애: 업로드 중단, 파이프 단절, 한도·용량, 승인 없음, 다른 세션·세대, 공개 중 취소·실패, 공개 파일 ACL, 링크, Host 종료 |
+| `tests/test_scanner_integration.py` | 실제 Windows (환경 변수로 켬): MpCmdRun 판정 근거, 설치된 서비스를 일반 사용자로(ACL·패키징·전 구간), 관리자로(중지·강제 종료·재설치). `scanner_service/README.md` §18 |
 | `tests/test_artifact_scanner_service.py` | `defender-service` 반출: HTTPS → 파이프 → 서비스 Job(프로세스 안 서비스, 가짜 Defender), 한글·빈·큰 파일, 판정별 차단, 시간 초과, 해시 불일치, 서비스 없음·다른 공개 폴더·중간 중단, 수신 규칙, 결과 불일치, 채널 끊김·세션 종료, 재공개 거부. `SCANNER_SERVICE_TESTS=1`이면 설치된 실제 서비스로 정상 TXT·EICAR |
 | `tests/test_artifact_export.py` | 파일 반출: Runner 계약 예제 14개, bootstrap 선택, token 종류 분리, Telemetry 없으면 READY 안 됨, 중복 후보, 한글·빈 파일 반출(바이트·해시 일치, 빈 201), 승인 거부, 검사 통과·차단·오류·시간 초과·형식, Runner 거부·결과 불일치·결과 없음, 채널·연결 끊김·세션 종료 취소, 수신 거부 코드, AMSI EICAR 자체 시험 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |

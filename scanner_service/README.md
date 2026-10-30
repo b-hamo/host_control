@@ -260,3 +260,83 @@ python host\mcp_server.py ... --artifact-export --artifact-scanner defender-serv
 - 기능: frozen 실행(설치 폴더, `sys.path` 번들 안), 정상 TXT → CLEAN → SCANNED → DISPOSED, EICAR → `BLOCKED MALWARE_DETECTED (Virus:DOS/EICAR_Test_File)`, 공개 → `EXPORTED`, 검사 후 격리 저장소 0개
 - `Restart-Service` 뒤 새 프로세스·정상 중지 기록, 프로세스 강제 종료 뒤 SCM 재시작·비정상 종료 감지
 - 발견해 고친 것: 서비스 계정에서는 EICAR 파일이 Defender 삭제 대기 상태가 되어 파일 속성 조회가 `WinError 5`로 거부됨 → 처음엔 `SCAN_ERROR`(반출은 막혔지만 원인 오표시), 이제 탐지로 판정. SCM의 세 번째 실패 조치는 120초 뒤라서 `-CrashTest` 대기를 150초로 늘림
+
+## 18. 보안 검증·통합 테스트 (작업 3, 2026-10-30, 같은 PC: Windows 11 Pro 26200, 12 논리 코어, Defender 4.18.26100.4 / sig 1.463.31.0)
+
+### 테스트 구성
+
+| 파일 | 무엇을 | 언제 실행 |
+|---|---|---|
+| `tests/test_scanner_service.py`, `test_quarantine_manager.py`, `test_scanner_recovery.py`, `test_defender_scanner.py` | 서비스 단위(상태 전이, 격리, 링크, 판정 규칙, 복구, IPC) | 항상 (Windows) |
+| `tests/test_scanner_client.py` | Host 파이프 클라이언트 + 스크립트형 가짜 파이프 서버: 다른 요청의 응답, 다른 Job의 응답, 끊김, 무응답, 서비스 없음, 다른 프로세스의 파이프, 오류 코드, 이벤트 루프 비차단, 종료 전 ABORT 완료 | 항상 (Windows) |
+| `tests/test_artifact_scanner_service.py` | Host ↔ 프로세스 안 서비스(가짜 Defender) 전 구간 | 항상 (Windows, 일반 사용자) |
+| `tests/test_scanner_security.py` | 업로드 중단, 파이프 단절, 서비스 한도·용량, 승인 없음, 다른 세션·세대, 공개 중 취소(늦은 성공 응답), 공개 실패, 공개 파일 ACL·해시, 링크·정션, Host 종료 | 항상 (Windows, 일반 사용자; 심볼릭 링크 1건은 권한 필요) |
+| `tests/test_scanner_integration.py` | 실제 MpCmdRun / 설치된 서비스(일반 사용자) / 서비스 중지·강제 종료·제거 후 재설치(관리자) | `SCANNER_DEFENDER_TESTS=1` / `SCANNER_SERVICE_TESTS=1` / `SCANNER_SERVICE_ADMIN_TESTS=1` |
+| `tests/scanner_perf.py` | 성능 측정 도구 (테스트 아님, 관리자) | 수동 |
+
+일반 CI(비 Windows)에서는 위 파일이 전부 건너뛰어진다(`sys.platform`, pywin32). 관리자 권한으로 pytest를 돌릴 때는 `--basetemp <별도 폴더>`를 준다: 관리자가 만든 `pytest-current` 링크는 다음 일반 사용자 실행을 접근 거부로 망친다(실제로 겪음, 정리함).
+
+### 결과
+
+| 항목 | 결과 | 근거 |
+|---|---|---|
+| 가상 계정·관리자 아님 | 통과 | `sc qc`, 프로세스 사용자, 서비스 자기 토큰(`is_admin=False`, Administrators 그룹 없음, 권한 2개) |
+| ACL (일반 사용자 차단) | 통과 | 일반 사용자로 격리 저장소·logs 목록, config.json 읽기, 설치 폴더 쓰기, exe 덮어쓰기, 격리 폴더 생성 → 모두 `PermissionError` |
+| 서비스 계정의 정상 접근 | 통과 | 업로드·검사·삭제 후 `cleanup_error` 없음 |
+| PyInstaller onedir·pywin32 DLL | 통과 | frozen, `sys.path`와 `pywintypes313.dll`·`win32api/win32file/servicemanager.pyd` 모두 설치 폴더 안 |
+| 설치·제거·재설치 | 통과 | 제거 후 서비스·설치 폴더·격리 저장소 없음, Export Root의 기존 파일 유지, 재설치 후 정상 |
+| 서비스 중지 시 정리 | 통과 | 받은 Job이 있는 상태에서 중지 → 격리 저장소 비움, 실행 표시 `running=false`, 프로세스·파이프 사라짐 |
+| 정상 TXT 검사·반출 | 통과 | 실제 서비스 + Host: 0 바이트·1 MiB TXT `EXPORTED`, 바이트·SHA-256 일치 |
+| EICAR 탐지·반출 차단 | 통과 | 아래 판정 근거 |
+| 검사 실패·시간 초과 차단 | 통과 | 실제 MpCmdRun 시간 초과 → `TIMEOUT`, 프로세스 종료 확인. 없는 파일 → exit 2 `ERROR` |
+| 무결성(검사 전후 SHA-256) | 통과 | 서비스가 다른 해시를 보고·검사 후 내용 변경 → `CONTENT_CHANGED`, 공개 없음 |
+| 다른 세션·런타임·세대 접근 | 통과 | `JOB_NOT_FOUND`, 새 세대가 옛 Job 취소, 옛 세대 요청 `STALE_GENERATION` |
+| 승인 없는 반출 | 통과 | 승인 거부 → Runner 요청·업로드·서비스 Job 모두 없음 |
+| 업로드 token 만료·재사용, `ARTIFACT_RESULT` 불일치 | 통과 | 410·409, `RESULT_MISMATCH` 후 Job 폐기 |
+| 공개 실패·중복 공개·늦은 성공 응답 | 통과 | `PUBLISH_FAILED` 파일 없음, `ALREADY_PUBLISHED`, 공개 중 세션 종료(서비스가 rename 전·후) → 파일 남지 않음 |
+| 공개 파일 ACL | 통과 | 모두 상속 ACE, Everyone·Users·인증된 사용자·익명 쓰기 없음 |
+| 서비스 강제 종료(검사 중) | 통과 | 재시작 후 `previous_run_unclean`, 남은 Job 폐기, 옛 Job `JOB_NOT_FOUND`; Host가 기다리던 반출은 `BLOCKED`, 파일 없음 |
+| 파이프 단절·HTTPS 업로드 중단·Host 종료·세션 종료·Telemetry 끊김·검사 중 취소 | 통과 | 매번 `EXPORTED` 아님, 격리 저장소 비움, Host 파일 없음 |
+| `none`·`amsi`·`defender-service` 회귀 | 통과 | 전체 642 통과 / 23 건너뜀(선택 실행분, 위에서 따로 통과) |
+
+### EICAR와 판정 근거 (실측)
+
+| 대상 | MpCmdRun 종료 코드 | 출력 | 파일 | 탐지 이벤트 | 판정 |
+|---|---|---|---|---|---|
+| 정상 TXT | 0 | `found no threats` | 남음 | 0건 | CLEAN |
+| EICAR (사용자 계정, 직접) | **0** | `found 1 threats`, `Cleaning finished` | **삭제됨** | 1116 `Virus:DOS/EICAR_Test_File`, 경로 = 검사 파일 | DETECTED |
+| 없는 파일 | 2 | `hr = 0x80070002` | – | – | ERROR |
+| EICAR (서비스 계정) | – | – | 삭제 대기 / 읽기 거부(실시간 보호) | 1116 | DETECTED → `BLOCKED MALWARE_DETECTED` |
+
+같은 시간대에 다른 경로로 조회하면 탐지 이벤트는 0건이었다(이벤트는 경로로 정확히 연결됨). 종료 코드만 보면 정상과 EICAR를 구분할 수 없다는 것을 실측으로 확인했다.
+
+### 성능 (`tests/scanner_perf.py`, 각 3회 중앙값, 관리자 실행)
+
+| 지표 | 값 |
+|---|---|
+| 서비스 시작: SCM 시작 → RUNNING / → 첫 HEALTH_CHECK | 0.43 s / 0.44 s |
+| HEALTH_CHECK | 4 ms |
+| EICAR 자체 시험 (시작 후 첫 검사 때, 6시간마다) | 10.9 s |
+| 파이프 업로드 1 KiB / 64 KiB / 256 KiB / 1 MiB | 14 / 14 / 18 / 42 ms |
+| 검사 SCAN → SCANNED (크기 무관) | 2.09–2.11 s (MpCmdRun 자체 0.05 s + 탐지 이벤트 대기 2 s) |
+| 임시 디렉터리 폐기 (ABORT → 폴더 없음) | 5–7 ms |
+| Host 전 구간 1 MiB: HTTPS+파이프 전송 | 56 ms |
+| Host 전 구간 1 MiB: `artifact_export` → `EXPORTED` | 2.61 s (최대 2.90 s) |
+| 동시 4 × 1 MiB (동시 검사 2개 한도) | 전체 4.34 s, Job별 검사 2.09–4.22 s |
+| 그동안 서비스 프로세스 | CPU 평균 0.8 % / 최대 3.7 % (머신 전체 대비), 메모리 35.7 MiB |
+| 그동안 MsMpEng | CPU 평균 0.1 % / 최대 1.2 %, 메모리 225 MiB |
+
+검사 시간의 대부분은 Defender가 탐지 이벤트를 쓰는 시간을 기다리는 `event_settle_s`(2초)다. 줄이면 빨라지지만 탐지 이벤트를 놓칠 위험이 커진다(그 경우에도 파일 삭제로 잡히지만, 근거가 하나 줄어든다).
+
+### 발견한 결함과 수정
+
+1. **Host 종료 시 ABORT 유실 가능**: 취소 요청을 데몬 스레드로 보내서, Host 프로세스가 바로 끝나면 서비스에 닿지 못할 수 있었다(서비스 만료로 15분 뒤에야 정리). → `ScannerServiceClient.drain()`, Host 종료 때 최대 5초 기다림. 테스트 `test_aborts_finish_before_the_host_exits`, `test_host_exit_during_a_scan_reaches_the_service`.
+2. (배포) **서명 없는 실행 파일은 App Control이 켜진 PC에서 실행 불가**: Python 없는 환경 검증용 Windows Sandbox(사용자 모드 코드 무결성 강제)에서 `SecureArtifactScanner.exe`가 "An Application Control policy has blocked this file"로 차단됨(로컬 복사본도 동일). 코드 결함은 아니지만 배포 조건이다.
+3. (테스트) 관리자 pytest가 남긴 `pytest-current` 링크 → `--basetemp` 안내.
+
+### 미검증 (성공으로 표시하지 않음)
+
+- **Python이 없는 PC에서의 설치·실행**: Windows Sandbox에서 Python이 없는 것은 확인했지만 App Control 정책이 서명 없는 exe 실행을 막아 설치 단계에 못 갔다. 우회하지 않았다. 서명 후 또는 App Control 없는 깨끗한 VM에서 다시 해야 한다.
+- **Defender 비활성화 PC**: 보안 설정을 바꾸지 않았다. 비활성·수동 모드·정책 비활성은 가짜 상태로만 시험(`SCANNER_UNAVAILABLE`). Sandbox 안 Defender가 꺼져 있었지만 exe가 막혀 서비스로는 확인하지 못했다.
+- **실제 Windows 재부팅**: 재부팅하지 않았다. 강제 종료 후 재시작으로 같은 복구 경로(실행 표시·잔여 Job 폐기)를 확인했다.
+- 디스크가 실제로 가득 찬 상황(한도 설정으로만), 실제 sandbox_runner와의 연동(테스트 Runner로만).
