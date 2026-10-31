@@ -193,6 +193,11 @@ class HostBackend(threading.Thread):
             if self.runner is not None:
                 self.final_runs = self.runner.snapshot()
             self.loop.close()
+            service = getattr(getattr(self.artifacts, "grants", None), "service", None)
+            if service is not None:                    # defender-service: let the last ABORTs reach the service
+                left = service.drain(5.0)
+                if left:
+                    log.warning("%d scanner job abort(s) unfinished at exit; the service expires them", left)
             self.cleanup_confirmed = (self.launcher is None or self.launcher.sandbox is None or
                                       (self.launcher.cleanup_result is not None and
                                        not self.launcher.cleanup_result.get("failed")))
@@ -230,10 +235,18 @@ class HostBackend(threading.Thread):
             from host.artifact_scan import make_scanner
             from host.artifacts import ArtifactBroker, ArtifactGrants
             from scrp.validate import ARTIFACT_EXPORT_V1
-            grants = ArtifactGrants(Path(a.artifact_dir) / "incoming")
+            scanner = self._scanner
+            if scanner is None:
+                kw = {}
+                if a.artifact_scanner == "defender-service":
+                    from host.scanner_client import PIPE_NAME, ScannerServiceClient
+                    kw["client"] = ScannerServiceClient(getattr(a, "scanner_pipe", None) or PIPE_NAME)
+                scanner = make_scanner(a.artifact_scanner, **kw)
+            service_mode = getattr(scanner, "service_mode", False)
+            # defender-service: received bytes go to the SecureArtifactScanner service, not a Host file
+            grants = ArtifactGrants(Path(a.artifact_dir) / "incoming", service=scanner.client if service_mode else None)
             grants.purge_leftovers()               # a crashed run never publishes its partial files
-            self.artifacts = ArtifactBroker(grants, Path(a.export_dir),
-                                            self._scanner or make_scanner(a.artifact_scanner),
+            self.artifacts = ArtifactBroker(grants, Path(a.export_dir), scanner,
                                             max_bytes=a.artifact_max_bytes,
                                             **getattr(a, "artifact_tuning", {}))   # tests only
             approver = self._approver or (DialogApprover() if a.approval == "dialog" else deny_all)
@@ -256,6 +269,8 @@ class HostBackend(threading.Thread):
                             **getattr(a, "session_tuning", {}))
         sessions.artifacts = self.artifacts        # serves /scrp/v1/telemetry
         identity = (a.session or datetime.now().strftime("SES-%Y%m%d-%H%M%S"), a.runtime, a.generation)
+        if artifact_mode and getattr(self.artifacts.scanner, "service_mode", False):
+            await self._check_scanner_service(identity[0], Path(a.export_dir))
         upload_server = await start_upload_server(uploads, ssl_contexts[1], a.host, a.upload_port, grants=grants)
         self._stop = asyncio.Event()
         async with upload_server, start_server(registry, cert_path, key_path, run_demo=None, host=a.host,
@@ -368,6 +383,25 @@ class HostBackend(threading.Thread):
                 finally:
                     if self.launcher is not None:
                         await self.launcher.shutdown()
+
+    async def _check_scanner_service(self, session_id: str, export_dir: Path) -> None:
+        """defender-service: check the service now and every few seconds after. Not usable means artifact
+        exports are refused (before any approval prompt); the rest of the Host works as usual."""
+        import asyncio
+
+        from host.scanner_client import ScannerServiceError
+        scanner = self.artifacts.scanner
+        ok, why = await scanner.refresh(export_dir)
+        if ok:
+            try:                                   # a previous Host run with the same session id left jobs
+                n = await scanner.client.abort_session(session_id, "new Host run for this session")
+                if n:
+                    log.info("scanner service: %d job(s) of an earlier %s run cancelled", n, session_id)
+            except ScannerServiceError as e:
+                log.warning("scanner service: earlier jobs of %s not cancelled: %s", session_id, e)
+        else:
+            log.error("artifact export is blocked: %s", why)
+        asyncio.get_running_loop().create_task(scanner.keep_checking(export_dir))
 
     async def _wait_for_exit(self):
         """End this listener pair when its Guest ends, without ending the MCP connection."""
@@ -578,8 +612,13 @@ def main(argv: list[str] | None = None) -> None:
                     help="select the artifact-export-v1 contract: Telemetry candidates, approved file export")
     ap.add_argument("--approval", choices=["dialog", "deny"], default="dialog",
                     help="who approves artifact_export: a dialog on this computer, or nobody (deny)")
-    ap.add_argument("--artifact-scanner", choices=["none", "amsi"], default="none",
-                    help="antivirus for exported files; none = every export is BLOCKED (SCANNER_UNAVAILABLE)")
+    ap.add_argument("--artifact-scanner", choices=["none", "amsi", "defender-service"], default="none",
+                    help="antivirus for exported files; none = every export is BLOCKED (SCANNER_UNAVAILABLE); "
+                         "defender-service = the SecureArtifactScanner Windows service (installer/install.ps1, "
+                         "-ExportRoot must be --export-dir) receives, scans with Microsoft Defender and publishes")
+    ap.add_argument("--scanner-pipe", default=None,
+                    help="with defender-service: Named Pipe of the scanner service (default "
+                         "\\\\.\\pipe\\SecureArtifactScanner)")
     ap.add_argument("--artifact-max-bytes", type=int, default=1024 * 1024,
                     help="largest file one export may upload (1..52428800)")
     ap.add_argument("--artifact-dir", type=Path, default=HOST_DIR / ".artifacts",

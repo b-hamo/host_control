@@ -7,3 +7,5 @@ host/.audit/
 host/.logs/
 host/.artifacts/
 host/.exports/
+/build/
+/dist/

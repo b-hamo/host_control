@@ -15,6 +15,12 @@ bytes that passed inspection are published. A grant is single use; any failure
 after it is claimed discards the partial file. Session end, a new Runtime
 generation or a lost Telemetry channel cancel everything not yet exported.
 
+With --artifact-scanner defender-service the receiving, scanning and publishing above are done by
+the SecureArtifactScanner Windows service (scanner_service/): the PUT body is streamed in 64 KiB
+chunks over its Named Pipe into a service job (no Host .part file), the grant keeps the job id,
+the service scans the job with Microsoft Defender and, after the same checks and the user's
+approval, publishes the same bytes into the export folder; the Host checks the published file.
+
 Internal stages (contract §10):
     CANDIDATE → AUTHORIZED → RECEIVING → RECEIVED → SCANNING → EXPORTED
                                              failed / cancelled → FAILED / CANCELLED / BLOCKED
@@ -31,6 +37,7 @@ import os
 import secrets
 import stat
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -95,6 +102,9 @@ class Grant:
     size: int | None = None
     sha256: str | None = None
     done: asyncio.Event = field(default_factory=asyncio.Event)   # receiving finished (either way)
+    file_name: str = ""                   # candidate's reported path (scanner service: format policy only)
+    scanner_job_id: str | None = None     # defender-service: the job that holds the received bytes
+    scanner_verdict: Verdict | None = None   # defender-service: refused when the upload completed
 
 
 class ArtifactGrants:
@@ -104,10 +114,12 @@ class ArtifactGrants:
     tell an attacker something happens only after the token matched.
     """
 
-    def __init__(self, incoming_dir: Path, store_limit: int = STORE_LIMIT_BYTES, clock=time.monotonic):
+    def __init__(self, incoming_dir: Path, store_limit: int = STORE_LIMIT_BYTES, clock=time.monotonic,
+                 service=None):
         self.incoming_dir = Path(incoming_dir)
         self.store_limit = store_limit
         self.clock = clock
+        self.service = service            # host/scanner_client.ScannerServiceClient: no Host file at all
         self.bytes_held = 0
         self._by_id: dict[str, Grant] = {}
 
@@ -123,11 +135,11 @@ class ArtifactGrants:
         return n
 
     def issue(self, identity: Identity, artifact_id: str, event_id: str, max_bytes: int,
-              lifetime_s: float = UPLOAD_LIFETIME_S) -> tuple[Grant, str]:
+              lifetime_s: float = UPLOAD_LIFETIME_S, file_name: str = "") -> tuple[Grant, str]:
         upload_id = "u_" + secrets.token_urlsafe(24)           # 192-bit, [A-Za-z0-9_-]{34}
         token = secrets.token_urlsafe(32)                      # 32 random bytes, base64url, 43 chars
         grant = Grant(upload_id, _digest(token), identity, artifact_id, event_id, max_bytes,
-                      self.clock() + lifetime_s, _utc_in(lifetime_s))
+                      self.clock() + lifetime_s, _utc_in(lifetime_s), file_name=file_name)
         self._by_id[upload_id] = grant
         return grant, token
 
@@ -161,6 +173,8 @@ class ArtifactGrants:
 
     async def receive(self, grant: Grant, reader: asyncio.StreamReader, length: int) -> None:
         """Stream the body into a new private file; fix size and SHA-256. Raises UploadError."""
+        if self.service is not None:
+            return await self._receive_into_service(grant, reader, length)
         self.incoming_dir.mkdir(parents=True, exist_ok=True)
         path = self.incoming_dir / f"{secrets.token_hex(16)}.part"
         sha, got = hashlib.sha256(), 0
@@ -198,6 +212,69 @@ class ArtifactGrants:
         log.info("ARTIFACT received %s for %s: %d bytes sha256=%s…", _short(grant.upload_id), grant.artifact_id,
                  got, grant.sha256[:12])
 
+    async def _receive_into_service(self, grant: Grant, reader: asyncio.StreamReader, length: int) -> None:
+        """defender-service: the same checks as the file path above, but each 64 KiB chunk goes straight
+        into a SecureArtifactScanner job. The service records size and SHA-256; both must equal the Host's."""
+        from host.scanner_client import ScannerServiceError, job_identity
+        ident = job_identity(grant.identity, grant.artifact_id)
+        stream = self.service.upload(ident)
+        sha, got = hashlib.sha256(), 0
+        try:
+            try:
+                grant.scanner_job_id = await stream.begin(grant.file_name or grant.artifact_id, length)
+                while got < length:
+                    if grant.state != CLAIMED:
+                        raise UploadError(410, "upload cancelled")
+                    left = grant.deadline - self.clock()
+                    if left <= 0:
+                        raise UploadError(408, "upload deadline passed")
+                    try:
+                        chunk = await asyncio.wait_for(reader.read(min(CHUNK, length - got)), left)
+                    except asyncio.TimeoutError:
+                        raise UploadError(408, "upload deadline passed") from None
+                    if not chunk:
+                        raise UploadError(400, f"body ended after {got} of {length} bytes")
+                    await stream.write(chunk)
+                    sha.update(chunk)
+                    got += len(chunk)
+                if grant.state != CLAIMED:
+                    raise UploadError(410, "upload cancelled")
+                try:
+                    view = await stream.complete(sha.hexdigest())
+                except ScannerServiceError as e:
+                    if e.code not in ("MALWARE_DETECTED", "CONTENT_REMOVED", "CONTENT_CHANGED"):
+                        raise
+                    # The bytes arrived and Defender's real-time protection refused them at once:
+                    # received as far as the protocol goes, BLOCKED by inspection (never retryable).
+                    grant.scanner_verdict = Verdict(False, e.code, f"scanner service: {e.message}", "defender-service")
+                    grant.scanner_job_id = None              # the service disposed of that job itself
+                else:
+                    if (view.get("size"), view.get("sha256")) != (got, sha.hexdigest()):
+                        raise UploadError(500, "scanner service recorded other bytes than were sent")
+            except ScannerServiceError as e:
+                status = 413 if e.code == "FILE_TOO_LARGE" else 503 if e.retryable else 500
+                log.error("ARTIFACT upload %s not handed to the scanner service: %s", _short(grant.upload_id), e)
+                raise UploadError(status, "artifact scanner service unavailable" if status == 503
+                                  else "artifact scanner service refused the upload") from None
+            if grant.state != CLAIMED:
+                raise UploadError(410, "upload cancelled")
+        except BaseException:
+            if grant.scanner_job_id is not None:
+                self.service.abort_soon(ident, grant.scanner_job_id, "upload failed")
+                grant.scanner_job_id = None
+            self.bytes_held -= length
+            grant.size = None
+            if grant.state == CLAIMED:
+                self._finish(grant, G_FAILED)
+            raise
+        finally:
+            await stream.close()
+        grant.size, grant.sha256 = got, sha.hexdigest()
+        self._finish(grant, RECEIVED)
+        log.info("ARTIFACT received %s for %s into scanner job %s: %d bytes sha256=%s…", _short(grant.upload_id),
+                 grant.artifact_id, grant.scanner_job_id or "(refused by real-time protection)", got,
+                 grant.sha256[:12])
+
     def cancel(self, grant: Grant) -> None:
         """Revoke a grant and drop whatever it received."""
         if grant.state in (ISSUED, CLAIMED):
@@ -209,11 +286,18 @@ class ArtifactGrants:
             self._discard_path(grant.path)
             self.bytes_held -= grant.size or 0
             grant.path = None
+        if grant.scanner_job_id is not None:              # defender-service: the service deletes the job
+            from host.scanner_client import job_identity
+            self.service.abort_soon(job_identity(grant.identity, grant.artifact_id), grant.scanner_job_id,
+                                    "export cancelled or failed")
+            self.bytes_held -= grant.size or 0
+            grant.scanner_job_id = None
 
     def release(self, grant: Grant) -> None:
         """The file left quarantine (published): stop counting it."""
         self.bytes_held -= grant.size or 0
         grant.path = None
+        grant.scanner_job_id = None
 
     def _finish(self, grant: Grant, state: str) -> None:
         grant.state = state
@@ -345,6 +429,11 @@ class ArtifactBroker:
         if session.identity in self._channel_lost:
             raise ArtifactError("POLICY_DENIED", "the artifact channel of this runtime was lost; "
                                 "exports stay off until the runtime is restarted")
+        if getattr(self.scanner, "service_mode", False):
+            ok, why = self.scanner.available()
+            if not ok:                                  # nothing to approve if it cannot be scanned
+                raise ArtifactError("SCANNER_UNAVAILABLE", f"the Defender scanner service is not usable: {why}",
+                                    retryable=True, next_step="artifact_list")
         busy = [a.artifact_id for a in self._by_id.values()
                 if a.identity == session.identity and a.stage in (AUTHORIZED, SCANNING)]
         if busy:
@@ -364,7 +453,7 @@ class ArtifactBroker:
             return {**self.view(art), "accepted": True, "note": "already requested; follow it with artifact_list"}
         conn = session._live()                           # READY and connected, or ProtocolError
         grant, token = self.grants.issue(session.identity, art.artifact_id, art.event_id, self.max_bytes,
-                                         self.upload_lifetime_s)
+                                         self.upload_lifetime_s, file_name=art.relative_path)
         msg = conn.me.envelope("ARTIFACT_REQUEST", {
             "candidate_event_id": art.event_id, "upload_id": grant.upload_id, "upload_token": token,
             "upload_deadline_at": grant.deadline_utc, "max_bytes": grant.max_bytes})
@@ -411,13 +500,19 @@ class ArtifactBroker:
             return
         art.size, art.sha256 = grant.size, grant.sha256
         art.stage = SCANNING
-        verdict = await inspect(grant.path, art.relative_path, grant.sha256, self.scanner, self.scan_timeout_s)
+        if getattr(self.scanner, "service_mode", False):
+            verdict = await self.scanner.inspect_job(grant, art.relative_path, lambda: art.stage == SCANNING)
+        else:
+            verdict = await inspect(grant.path, art.relative_path, grant.sha256, self.scanner, self.scan_timeout_s)
         if art.stage != SCANNING:
             return
         if not verdict.ok:
             self._end(art, BLOCKED, verdict.code, verdict.detail, engine=verdict.engine)
             return
-        await self._publish(art, grant, verdict)
+        if getattr(self.scanner, "service_mode", False):
+            await self._publish_by_service(art, grant, verdict)
+        else:
+            await self._publish(art, grant, verdict)
 
     async def _publish(self, art: Artifact, grant: Grant, verdict: Verdict) -> None:
         """Move the inspected file out of quarantine. Only those bytes, never a copy made later.
@@ -465,6 +560,45 @@ class ArtifactBroker:
         finally:
             locked.close()
         log.info("ARTIFACT %s EXPORTED to %s (%d bytes, %s)", art.artifact_id, dest, art.size, verdict.detail)
+
+    async def _publish_by_service(self, art: Artifact, grant: Grant, verdict: Verdict) -> None:
+        """defender-service: PUBLISH the scanned job (the user approved this export before the grant was
+        issued), then check what landed: inside this Host's export folder, at the expected name, the very
+        bytes that were received and scanned. Only then EXPORTED. A cancel or a failed check removes it."""
+        from host.scanner_client import ScannerServiceError, job_identity
+        session_id = art.identity[0]
+        expected = self.export_dir / session_id / art.artifact_id / _safe_name(art.relative_path)
+        ident = job_identity(grant.identity, grant.artifact_id)
+        approval = {"approved": True, "approval_id": f"{art.artifact_id}-{art.attempts}",
+                    "approved_by": "host-approval", "job_id": grant.scanner_job_id, "artifact_id": art.artifact_id,
+                    "session_id": session_id, "sha256": grant.sha256}
+        call = asyncio.ensure_future(self.scanner.client.publish(ident, grant.scanner_job_id, approval))
+        try:
+            view = await asyncio.shield(call)
+        except asyncio.CancelledError:
+            # cancelled while the service was publishing: whatever it published must not stay
+            call.add_done_callback(lambda f: _undo_publish(f, expected, grant.size, grant.sha256))
+            raise
+        except ScannerServiceError as e:
+            if art.stage == SCANNING:                     # _end aborts the job, whatever state it is in
+                code = "PUBLISH_FAILED" if e.code == "SCANNER_UNAVAILABLE" else e.code
+                self._end(art, BLOCKED if e.code == "CONTENT_CHANGED" else FAILED, code,
+                          f"scanner service: {e.message}", retry=False)
+            return
+        exported = view.get("outcome") == "EXPORTED"
+        why = await asyncio.to_thread(_check_published, Path(view.get("export_path") or ""), expected, grant.size,
+                                      grant.sha256) if exported else f"scanner job ended {view.get('outcome')}"
+        if art.stage != SCANNING or why:
+            if exported:                                  # cancelled meanwhile, or not what was scanned
+                await asyncio.to_thread(_remove_if_same, expected, grant.size, grant.sha256)
+            if art.stage == SCANNING:
+                self._end(art, FAILED, "PUBLISH_FAILED", f"published file failed the Host check: {why}")
+            return
+        self.grants.release(grant)
+        art.stage, art.export_path = EXPORTED, expected
+        art.result = {"code": "EXPORTED", "detail": verdict.detail, "engine": verdict.engine}
+        log.info("ARTIFACT %s EXPORTED to %s by the scanner service (%d bytes, %s)", art.artifact_id, expected,
+                 art.size, verdict.detail)
 
     def _end(self, art: Artifact, stage: str, code: str, detail: str, *, retry: bool = False,
              engine: str | None = None) -> None:
@@ -570,6 +704,45 @@ def _open_locked(path: Path):
     if handle in (None, wintypes.HANDLE(-1).value):
         raise ctypes.WinError(ctypes.get_last_error())
     return os.fdopen(msvcrt.open_osfhandle(handle, os.O_RDONLY), "rb")
+
+
+def _check_published(dest: Path, expected: Path, size: int, sha256: str) -> str | None:
+    """None if the service's file is exactly where this Host expects it, is no link, and holds the bytes."""
+    if os.path.normcase(os.path.abspath(dest)) != os.path.normcase(os.path.abspath(expected)):
+        return f"published at {dest}, expected {expected}"
+    try:
+        st = os.lstat(expected)
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:   # reparse point
+            return "published file is a link"
+        if os.path.normcase(os.path.realpath(expected)) != os.path.normcase(os.path.abspath(expected)):
+            return "published file is reached through a link"
+        with _open_locked(expected) as f:
+            got = _sha_stream(f)
+            n = f.tell()
+    except OSError as e:
+        return f"published file unreadable ({type(e).__name__})"
+    if (n, got) != (size, sha256):
+        return "published bytes differ from the scanned bytes"
+    return None
+
+
+def _remove_if_same(path: Path, size: int, sha256: str) -> None:
+    """Take back a published file, but only one holding exactly these bytes (never a user's file)."""
+    try:
+        with _open_locked(path) as f:
+            same = _sha_stream(f) == sha256 and f.tell() == size
+        if same:
+            path.unlink()
+            log.warning("ARTIFACT published file %s removed again", path.name)
+    except OSError:
+        pass
+
+
+def _undo_publish(fut: asyncio.Future, expected: Path, size: int, sha256: str) -> None:
+    if fut.cancelled() or fut.exception() is not None:
+        return
+    if (fut.result() or {}).get("outcome") == "EXPORTED":
+        threading.Thread(target=_remove_if_same, args=(expected, size, sha256), daemon=True).start()
 
 
 def _sha_stream(f) -> str:
