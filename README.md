@@ -146,20 +146,17 @@ Codex가 `host/mcp_server.py`를 자식 프로세스로 켜고 stdin/stdout으�
 - stdout은 MCP 전용이다. 로그는 stderr와 `host/.logs/mcp_server.log`에 남는다
 - 오류는 MCP 도구 오류(`isError: true`)로 돌려주고, 내용은 Broker의 표준 오류 JSON이다
 
-### 코덱스로 쓰기: 팀 공용 Skill과 등록 (2026-10-17)
+### 코덱스로 쓰기: 통합 솔루션 설치와 등록
 
 코덱스에게 "7-Zip 받아서 설치해 줘"처럼 시키면 **이 PC가 받아서 다운로드 폴더에 저장 → Sandbox가 그 파일을
 `Input`에서 실행 → 설치 결과는 Sandbox 바탕화면 `Shared`로 이 PC에** 오게 하는 절차가 Skill
 `codex/skills/secure-sandbox-run/SKILL.md`에 있다(배주한 Skill + 곽재혁 `scrp-sandbox-execution`의 좋은 규칙을 합침).
 **팀원 모두 이 Skill 하나를 쓴다.** 코덱스는 저장소가 아니라 PC마다 `%USERPROFILE%\.codex\skills`를 읽으므로:
 
-1. 받는 폴더·공유 폴더 준비(한 번): sandbox_manager의 `tools\setup_inbox.ps1`
-2. Skill 넣기(처음, 그리고 `git pull`로 Skill이 바뀔 때마다): `powershell -ExecutionPolicy Bypass -File codex\install_skill.ps1`
-   — 이전 Skill은 `~/.codex/skill-backups`에 백업, 예전 `scrp-sandbox-execution`이 있으면 끄라고 알려 줌
-3. 코덱스 등록: `codex/config.example.toml`을 `~/.codex/config.toml`에 붙여 넣고 `<나>`를 바꿈
-   (`--inbox --save-downloads --agent-guard --shared --artifact-export --artifact-scanner amsi --sandbox-run --router-capture`;
-   마지막 넷은 #94부터. 이 PC 백신이 AMSI에 응답하지 않으면 Sandbox 실행 결과가 `HELD`)
-4. 코덱스를 완전히 껐다 켜고 새 대화에서 "7-Zip 받아서 설치해 줘"
+1. [통합 설치 가이드](docs/solution-install.md)에 따라 `installer/install_solution.ps1 -RunnerExe <Runner 경로>`를 실행한다.
+2. 팀 공용 Skill은 `codex/install_skill.ps1`로 설치한다.
+3. 생성된 `mcp.toml`로 기존 SCRP 등록을 교체한다. `host/solution.py`가 Shared·artifact 검사 서비스를 기본 연결한다.
+4. 현재 Sandbox 작업을 마친 뒤 MCP를 다시 연결한다. 서비스·Defender·실행 금지 ACL 점검 실패 시 시작하지 않는다.
 
 Skill이 부르는 도구·옵션이 이 Host에 실제로 있는지는 `tests/test_codex_skill.py`가 확인한다. Host 도구를 바꾸면 Skill도
 같은 PR에서 고친다. 일반 탐색은 이 PC의 브라우저로 하고, 페이지가 실행을 요구하는 명령은

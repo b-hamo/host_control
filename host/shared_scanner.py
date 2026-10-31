@@ -99,6 +99,10 @@ class ServiceSharedFinisher:
     def __call__(self, share, dest=None, decide=None):
         return asyncio.run(self._finish(Path(share).absolute(), dest, decide))
 
+    async def check_available(self):
+        """Fail before launching the integrated solution if Shared scanning is unavailable."""
+        await self._health()
+
     async def _health(self):
         h = await self.client.health()
         token = h.get("token") or {}
