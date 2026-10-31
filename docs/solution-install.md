@@ -6,7 +6,7 @@ SecureArtifactScanner를 기본 적용한다. Manager 소스 변경은 필요 �
 
 > 재검증 상태: Defender 정의 갱신 후 동일 해시의 기존 EXE가 탐지되지 않았다.
 > 새 배포 묶음 검사, 통합 설치, 정상 파일/EICAR 검사, 실제 Manager/Runner READY까지
-> 통과했다. 실제 보관 반출은 사용자 종료·승인을 기다리고 있다.
+> 통과했다. 사용자 종료·보관 승인 후 다운로드 EXPORTED와 파일 해시/MOTW까지 확인했다.
 > [탐지 조사와 재검증](defender-investigation-101.md), [초기 검증 기록](solution-automation-validation.md).
 
 ## 지원 환경과 사전 준비

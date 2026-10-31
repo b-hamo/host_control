@@ -2,7 +2,7 @@
 
 
 > 후속 조사: Defender 정의 갱신 후 동일 해시 EXE가 탐지되지 않았으며, 통합 설치와 실제
-> Manager/Runner READY까지 통과했다. 아래는 초기 실패 이력이다.
+> Manager/Runner READY 및 실제 사용자 승인 다운로드 반출까지 통과했다. 아래는 초기 실패 이력이다.
 > 최신 근거와 보관 반출 상태는 [탐지 조사와 재검증](defender-investigation-101.md)을 따른다.
 ## 초기 결과 (정의 갱신 전)
 

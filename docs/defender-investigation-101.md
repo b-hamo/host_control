@@ -67,7 +67,7 @@ EICAR 자체 시험은 기존 정책대로 유지했다. 탐지 회피를 위한
 - 새 Scanner 78개 배포 파일의 Defender 검사 통과(정의 `1.463.56.0`).
 - 새 EXE SHA-256: `97fd7ff842e0362e79891ba7813b13e7a3cd8593e818be8293563e6482cc1a3c`.
 - 전용 서비스 계정·ACL·HEALTH_CHECK·정상 파일 CLEAN·EICAR MALWARE_DETECTED·격리 저장소
-  정리 0개까지 실제 installer/verify.ps1 통과. 실제 연결/반출 결과는 아래에 추가한다.
+  정리 0개까지 실제 installer/verify.ps1 통과. 실제 연결/반출 결과는 아래와 같다.
 - 설치의 실제 UAC 단계에서 Manager 방화벽 4개 규칙과 SYSTEM 재연결 작업을 적용했다.
   일반 사용자 preflight 및 `SOLUTION_INSTALLED`, Codex 백업/등록을 확인했다.
 - 기존 세션 종료 뒤 새 Python 환경의 MCP 클라이언트로 Manager/Runner가 READY에 도달했다.
@@ -75,3 +75,27 @@ EICAR 자체 시험은 기존 정책대로 유지했다. 탐지 회피를 위한
 - 검증 중 최소화된 창은 종료로 간주하지 않는 것을 확인했다. 최신 Windows 프로세스명
   `WindowsSandboxRemoteSession` 및 UI 연결이 끊긴 VM의 `vmmemWindowsSandbox`도 설치
   사전 점검에 추가했다. 해당 두 경우를 대역 회귀 테스트로 확인했다.
+## 실제 보관 반출 결과
+
+2026-10-31 22:33 KST, **최종 다운로드 반출 성공**.
+
+- 세션: `SES-a452da97fdd543e4b6f3f115271f9f24`
+- 22:33:10 Host가 사용자의 창 종료를 감지, 22:33:11 Manager가 `wsb list`로 VM 종료 확인 및 정리.
+- 22:33:17 실제 승인 창의 `keep` 선택과 `SHARED ... at session end: EXPORTED` 기록.
+- 파일: 다운로드 Known Folder의 `SandboxShared/SES-a452da97fdd543e4b6f3f115271f9f24/solution-verify-12a1bb10a301.txt`
+- 크기: **69바이트**. Guest에서 생성한 내용 및 Host 미러에서 기록한 바이트와 일치.
+- SHA-256: `3e78cb6131f72aaa7854be84ca18bfbb34657fe38590454d895b27f6245f7d2e`
+- `Zone.Identifier`: `[ZoneTransfer]`, **ZoneId=3**.
+- 검증 프로그램 종료 코드 0, `State/session-result.json`의 상태 **EXPORTED**.
+- 반출 후에도 SecureArtifactScanner 서비스 Running, 이번 재설치 이후 Bearfoos 추가 탐지 없음.
+
+사용자가 종료·보관을 선택했다. 자동 승인/직접 다운로드 파일 생성/Host 파일 복사로 대신하지 않았다.
+검증 클라이언트가 새 MCP Host를 실행해 실제 세 구성요소를 검증한 것이며, 현재 대화의 기존
+SCRP 도구 연결이 새 프로필로 교체됐음을 의미하지는 않는다. Codex 등록은 완료했고 기존
+연결은 별도 재연결이 필요하다. 새 PC에서의 설치와 모든 Dev/Deploy 갱신 조합은 이번 PC의
+실제 반출 성공과 구분하여 미검증 범위로 남긴다.
+서비스 감사 기록도 파일 해시와 대조했다. Job `job-2b5c5a6e7996372ec0008a523a2847f1`의
+`scan_profile=shared`, `defender_verdict=CLEAN`, `defender_exit_code=0`, 크기 69와 위 SHA-256이
+일치하며 격리 사본은 DISPOSED다. 서비스의 `CANCELLED/ABORTED`는 scan-only Shared 검사 후
+서비스 사본 정리이며, 최종 사용자 파일 공개는 Host의 EXPORTED 기록으로 확인한다.
+검사 시각은 22:33:11.784–22:33:13.857 KST로 VM 종료 확인 이후, 22:33:17 보관·공개 이전이다.
