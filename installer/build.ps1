@@ -17,6 +17,7 @@
 [CmdletBinding()]
 param(
     [string]$PythonLauncherVersion = "3.13",
+    [string]$PythonExe = "",
     [string]$OutDir = "",
     [switch]$Clean
 )
@@ -31,10 +32,15 @@ New-Item -ItemType Directory -Force $BuildRoot | Out-Null
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 
-if ($Clean -and (Test-Path $Venv)) { & cmd.exe /d /c rmdir /s /q $Venv }
+if ($Clean -and (Test-Path $Venv)) {
+    $resolved = (Resolve-Path -LiteralPath $Venv).Path
+    if (-not $resolved.StartsWith($Repo + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Build venv is outside the repository.' }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
 if (-not (Test-Path $Py)) {
     Write-Host "Creating build venv (Python $PythonLauncherVersion) in $Venv"
-    & py "-$PythonLauncherVersion" -m venv $Venv
+    if ($PythonExe) { & $PythonExe -m venv $Venv }
+    else { & py "-$PythonLauncherVersion" -m venv $Venv }
     if ($LASTEXITCODE -ne 0) { throw "py -$PythonLauncherVersion -m venv failed (is Python $PythonLauncherVersion x64 installed?)" }
 }
 & $Py -c "import sys, struct; assert sys.version_info[:2] == (3, 13), sys.version; assert struct.calcsize('P') == 8, '64-bit Python required'"
@@ -43,7 +49,11 @@ if ($LASTEXITCODE -ne 0) { throw "build venv must be 64-bit Python 3.13" }
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
 $Dist = Join-Path $OutDir $Name
-if (Test-Path $Dist) { & cmd.exe /d /c rmdir /s /q $Dist }
+if (Test-Path $Dist) {
+    $resolved = (Resolve-Path -LiteralPath $Dist).Path
+    if (-not $resolved.StartsWith($OutDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Scanner output is outside OutDir.' }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
 Write-Host "Running PyInstaller (--onedir)"
 & $Py -m PyInstaller --noconfirm --clean --onedir --console --name $Name `
     --distpath $OutDir --workpath (Join-Path $BuildRoot "work") --specpath $BuildRoot `

@@ -153,9 +153,9 @@ Codex가 `host/mcp_server.py`를 자식 프로세스로 켜고 stdin/stdout으�
 `codex/skills/secure-sandbox-run/SKILL.md`에 있다(배주한 Skill + 곽재혁 `scrp-sandbox-execution`의 좋은 규칙을 합침).
 **팀원 모두 이 Skill 하나를 쓴다.** 코덱스는 저장소가 아니라 PC마다 `%USERPROFILE%\.codex\skills`를 읽으므로:
 
-1. [통합 설치 가이드](docs/solution-install.md)에 따라 `installer/install_solution.ps1 -RunnerExe <Runner 경로>`를 실행한다.
+1. 세 레포를 준비하고 [통합 설치 가이드](docs/solution-install.md)에 따라 일반 PowerShell에서 `installer/install_solution.ps1 -Mode Dev -RegisterCodex`를 실행한다. Manager는 로컬 설치하고 Runner와 검사 서비스를 빌드한다.
 2. 팀 공용 Skill은 `codex/install_skill.ps1`로 설치한다.
-3. 생성된 `mcp.toml`로 기존 SCRP 등록을 교체한다. `host/solution.py`가 Shared·artifact 검사 서비스를 기본 연결한다.
+3. `-RegisterCodex`는 기존 설정을 백업하고 해당 MCP 등록만 갱신한다. 직접 연결할 때는 생성된 `mcp.toml`을 사용한다. `host/solution.py`가 Shared·artifact 검사 서비스를 기본 연결한다.
 4. 현재 Sandbox 작업을 마친 뒤 MCP를 다시 연결한다. 서비스·Defender·실행 금지 ACL 점검 실패 시 시작하지 않는다.
 
 Skill이 부르는 도구·옵션이 이 Host에 실제로 있는지는 `tests/test_codex_skill.py`가 확인한다. Host 도구를 바꾸면 Skill도
