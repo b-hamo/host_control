@@ -38,6 +38,7 @@ param(
     [string]$DataRoot = "",
     [string[]]$ClientUser = @(),
     [string]$ExportRoot = "",
+    [switch]$EnableSharedScan,
     [switch]$NoStart,
     [switch]$SkipVerify
 )
@@ -189,6 +190,9 @@ if (Test-Path $ConfigPath) {
 }
 $cfg["quarantine_root"] = $Quarantine
 $cfg["state_dir"] = $StateDir
+if ($PSBoundParameters.ContainsKey("EnableSharedScan")) {
+    $cfg["shared_scan_enabled"] = [bool]$EnableSharedScan
+}
 if ($ClientUser.Count -gt 0) {
     $cfg["pipe_client_sids"] = @($ClientUser | ForEach-Object { Sid $_ })
 } elseif (-not $cfg.Contains("pipe_client_sids") -or @($cfg["pipe_client_sids"]).Count -eq 0) {

@@ -66,7 +66,7 @@ def make_manager(tmp_path: Path, scanner=None, *, export=True, clock=time.monoto
         cfg.export_root.mkdir(parents=True, exist_ok=True)
     else:
         cfg = replace(cfg, export_root=None)
-    q = QuarantineManager(cfg.quarantine_root, max_file_bytes=cfg.max_file_bytes,
+    q = QuarantineManager(cfg.quarantine_root, max_file_bytes=cfg.storage_file_limit,
                           store_limit_bytes=cfg.store_limit_bytes, min_free_bytes=cfg.min_free_bytes,
                           max_jobs=cfg.max_active_jobs, create_root=True)
     q.ensure_root()

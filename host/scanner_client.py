@@ -175,8 +175,11 @@ class UploadStream:
             self._conn = self.client._open()
         return self.client._call_on(self._conn, command, self.ident, self.job_id, payload)
 
-    async def begin(self, file_name: str, size: int) -> str:
-        view = await asyncio.to_thread(self._call, "BEGIN_UPLOAD", {"file_name": file_name, "size": size})
+    async def begin(self, file_name: str, size: int, *, scan_profile: str = "artifact") -> str:
+        payload = {"file_name": file_name, "size": size}
+        if scan_profile != "artifact":
+            payload["scan_profile"] = scan_profile
+        view = await asyncio.to_thread(self._call, "BEGIN_UPLOAD", payload)
         _check_view(view, self.ident, None)
         self.job_id = view["job_id"]
         return self.job_id

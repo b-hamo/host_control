@@ -1,27 +1,17 @@
-# Codex 등록 예시 (팀 공용 Skill codex/skills/secure-sandbox-run 과 같이 씀)
-# %USERPROFILE%\.codex\config.toml 에 붙여 넣고 <나> 를 자기 Windows 사용자 이름으로 바꾼다. 경로는 / 로 쓴다.
-# 저장소 3개(host_control, sandbox_runner, sandbox_manager)는 Documents 아래에 받았다고 가정한다.
-#   --inbox          인터넷 파일·다운로드 폴더 파일을 Sandbox로 넣기 (inbox_download, inbox_import)
-#   --save-downloads 인터넷에서 받은 파일을 다운로드 폴더에도 저장, 세션이 끝나도 남김
-#   --agent-guard    AI가 혼자 Sandbox를 끝내거나 비슷한 파일을 또 받을 때 확인 창
-#   --shared         Sandbox 바탕화면 Shared -> 이 PC(실행 금지) -> 끝날 때 검사 후 "남길까요?"
-#   --artifact-export --artifact-scanner amsi
-#                    Sandbox 실행 결과(영수증·출력)를 검사해서 받기. amsi = 이 PC 백신(Defender)으로 검사
-#   --sandbox-run    받은 파일을 Sandbox 안에서 정확한 명령으로 실행(sandbox_run)
-#   --router-capture 웹 페이지 명령(ClickFix)을 기록하고 같은 Sandbox에서 분석(router_capture, router_execute, #94)
-# inbox·shared 폴더는 sandbox_manager 의 tools/setup_inbox.ps1 을 한 번 돌려 만든다(실행 금지 권한 포함).
+# 통합 설치: installer/install_solution.ps1이 실제 경로로 생성한 mcp.toml을 사용한다.
+# 아래는 구조 예시. 기존 scrp/scrp_sandbox 블록을 교체하고 중복 등록하지 않는다.
+# solution.py는 Shared·artifact 검사 서비스와 승인 창을 항상 활성화한다.
+# 서비스·Defender·Shared 활성화·ExportRoot·실행 금지 ACL 점검 실패 시 시작하지 않는다.
+# Shared: 다운로드/SandboxShared/<세션>, artifact_export(TXT): --state 아래 exports.
 
-[mcp_servers.scrp]
+[mcp_servers.scrp_sandbox]
 command = 'C:/Users/<나>/Documents/host_control/.venv/Scripts/python.exe'
-args = ['C:/Users/<나>/Documents/host_control/host/mcp_server.py',
+args = ['C:/Users/<나>/Documents/host_control/host/solution.py',
         '--runner-exe', 'C:/Users/<나>/Documents/sandbox_runner/build/sandbox_runner.exe',
-        '--inbox', 'C:/Users/<나>/SecureCUA/codex-work/inbox',
-        '--save-downloads',
-        '--agent-guard',
-        '--shared', 'C:/Users/<나>/SecureCUA/codex-work/shared',
-        '--artifact-export', '--artifact-scanner', 'amsi',
-        '--sandbox-run',
-        '--router-capture']
+        '--work', 'C:/Users/<나>/SecureCUA/solution',
+        '--state', 'C:/Users/<나>/SecureCUAState/solution']
+cwd = 'C:/Users/<나>/Documents/host_control'
+enabled = true
 default_tools_approval_mode = "approve"
 startup_timeout_sec = 60
 tool_timeout_sec = 120

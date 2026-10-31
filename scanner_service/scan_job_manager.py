@@ -84,6 +84,7 @@ class ScanJobManager:
             "event": event, "job_id": job.job_id, "session_id": job.identity.session_id,
             "runtime_id": job.identity.runtime_id, "generation": job.identity.generation,
             "artifact_id": job.identity.artifact_id, "state": job.state.value,
+            "scan_profile": job.scan_profile,
             "outcome": job.outcome.value if job.outcome else None, "size": job.size, "sha256": job.sha256,
             "scan_started": job.scan_started_utc, "scan_finished": job.scan_finished_utc,
             "defender_verdict": scan.verdict.value if scan else None,
@@ -134,12 +135,18 @@ class ScanJobManager:
         if not self.accepting:
             raise ScannerError("SERVICE_STOPPING", "the service is stopping; no new jobs", retryable=True)
         name, size, sha = payload.get("file_name"), payload.get("size"), payload.get("sha256")
+        profile = payload.get("scan_profile", "artifact")
+        if profile not in ("artifact", "shared"):
+            raise ScannerError("INVALID_ARGUMENT", "scan_profile must be artifact or shared")
+        if profile == "shared" and not self.config.shared_scan_enabled:
+            raise ScannerError("SHARED_SCAN_DISABLED", "enable shared_scan_enabled in the service configuration")
+        limit = self.config.shared_max_file_bytes if profile == "shared" else self.config.max_file_bytes
         if not isinstance(name, str) or not 1 <= len(name) <= FILE_NAME_MAX or _CONTROL.search(name):
             raise ScannerError("INVALID_ARGUMENT", f"file_name must be 1..{FILE_NAME_MAX} printable characters")
         if type(size) is not int or size < 0:
             raise ScannerError("INVALID_ARGUMENT", "size must be a non-negative integer")
-        if size > self.config.max_file_bytes:
-            raise ScannerError("FILE_TOO_LARGE", f"more than {self.config.max_file_bytes} bytes")
+        if size > limit:
+            raise ScannerError("FILE_TOO_LARGE", f"more than {limit} bytes")
         if sha is not None and (not isinstance(sha, str) or not SHA256_RE.fullmatch(sha)):
             raise ScannerError("INVALID_ARGUMENT", "sha256 must be 64 lower-case hex characters")
         key = (ident.session_id, ident.runtime_id)
@@ -158,10 +165,10 @@ class ScanJobManager:
             self._cancel(j, "RUNTIME_REPLACED", f"runtime generation {ident.generation} replaced it")
         st = self.quarantine.create_job(ident.session_id, size, meta={
             "runtime_id": ident.runtime_id, "generation": ident.generation, "artifact_id": ident.artifact_id,
-            "sha256": sha, "state": S.CREATED.value})
+            "sha256": sha, "scan_profile": profile, "state": S.CREATED.value})
         now = self.clock()
         job = Job(st.job_id, ident, name, size, sha, now, _utc(), updated_at=now,
-                  created_dt=datetime.now(timezone.utc))
+                  created_dt=datetime.now(timezone.utc), scan_profile=profile)
         refuse = None
         with self._lock:                             # the checks again: another request may have won meanwhile
             if not self.accepting:
@@ -291,7 +298,14 @@ class ScanJobManager:
     def _scan_steps(self, job: Job) -> tuple[JobState, str | None, str | None]:
         st = self.quarantine.get_job(job.job_id)
         try:
-            data = self.quarantine.read_payload(st)
+            # Shared may contain binary files; verify them without loading the entire file into RAM.
+            if job.scan_profile == "shared":
+                from scanner_service import winfile
+                size, sha = winfile.hash_handle(st.lock_handle, self.config.shared_max_file_bytes)
+                data = None
+            else:
+                data = self.quarantine.read_payload(st)
+                size, sha = len(data), hashlib.sha256(data).hexdigest()
         except OSError as e:
             # Real-time protection can let the file be opened and then refuse to read it (seen as the
             # service account: winerror 225). That is a detection, not a scanner failure.
@@ -303,9 +317,9 @@ class ScanJobManager:
                                        evidence={"read_winerror": winerror})
                 return S.BLOCKED, "MALWARE_DETECTED", job.scan.detail
             return S.BLOCKED, "CONTENT_REMOVED", f"quarantined file can no longer be read (winerror {winerror})"
-        if hashlib.sha256(data).hexdigest() != job.sha256:
+        if (size, sha) != (job.size, job.sha256):
             return S.BLOCKED, "CONTENT_CHANGED", "quarantined file changed before the scan"
-        bad = check_format(job.file_name, data)
+        bad = check_format(job.file_name, data) if job.scan_profile == "artifact" else None
         del data
         if bad is not None:
             job.scan = ScanOutcome(Verdict.ERROR, bad.detail, engine="format-policy")
@@ -328,6 +342,8 @@ class ScanJobManager:
     # -- publish -------------------------------------------------------------
     def publish(self, ident: Identity, job_id, approval) -> Job:
         job = self._get(ident, job_id)
+        if job.scan_profile != "artifact":
+            raise ScannerError("INVALID_STATE", "Shared jobs are scan-only; the Host keeps the locked original")
         with self._lock:
             if job.published or job.state in (S.PUBLISHING, S.EXPORTED) or job.outcome == S.EXPORTED:
                 raise ScannerError("ALREADY_PUBLISHED", "this job was already published")

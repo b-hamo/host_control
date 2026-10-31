@@ -25,10 +25,10 @@ def test_every_tool_the_skill_names_exists_in_the_host_schema():
 
 
 def test_config_example_uses_options_the_host_accepts():
-    conf = tomllib.loads(EXAMPLE.read_text(encoding="utf-8"))["mcp_servers"]["scrp"]
+    conf = tomllib.loads(EXAMPLE.read_text(encoding="utf-8"))["mcp_servers"]["scrp_sandbox"]
     options = [a for a in conf["args"] if a.startswith("--")]
-    assert options == ["--runner-exe", "--inbox", "--save-downloads", "--agent-guard", "--shared",
-                       "--artifact-export", "--artifact-scanner", "--sandbox-run", "--router-capture"]
-    source = (ROOT / "host" / "mcp_server.py").read_text(encoding="utf-8")
+    assert conf["args"][0].endswith("/host/solution.py")
+    assert options == ["--runner-exe", "--work", "--state"]
+    source = (ROOT / "host" / "solution.py").read_text(encoding="utf-8")
     for option in options:
         assert f'"{option}"' in source, option

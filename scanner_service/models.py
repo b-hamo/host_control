@@ -148,6 +148,7 @@ class Job:
     declared_sha256: str
     created_at: float               # monotonic
     created_utc: str
+    scan_profile: str = "artifact"
     state: JobState = JobState.CREATED
     outcome: JobState | None = None
     updated_at: float = 0.0         # monotonic, last activity
@@ -177,6 +178,7 @@ class Job:
             "generation": self.identity.generation,
             "artifact_id": self.identity.artifact_id,
             "file_name": self.file_name,
+            "scan_profile": self.scan_profile,
             "state": self.state.value,
             "outcome": self.outcome.value if self.outcome else None,
             "declared_size": self.declared_size,
