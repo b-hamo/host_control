@@ -14,7 +14,7 @@ function Get-SolutionStatePath {
 }
 function Assert-SolutionIdle {
     # Never terminate another session as a side effect of installing/updating.
-    $active = Get-Process -Name WindowsSandbox,WindowsSandboxClient -ErrorAction SilentlyContinue
+    $active = Get-Process -Name WindowsSandbox,WindowsSandboxClient,WindowsSandboxRemoteSession,vmmemWindowsSandbox -ErrorAction SilentlyContinue
     if ($active) { throw 'A Windows Sandbox is open. Finish it yourself before installing/updating/starting another session.' }
 }
 function Assert-SolutionUser {

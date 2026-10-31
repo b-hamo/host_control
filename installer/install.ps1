@@ -43,6 +43,7 @@ param(
     [switch]$SkipVerify
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'scanner_bundle_check.ps1')
 $Name = "SecureArtifactScanner"
 $Account = "NT SERVICE\$Name"
 if (-not $SourceDir) { $SourceDir = Join-Path $PSScriptRoot "..\dist\$Name" }
@@ -103,6 +104,8 @@ $SrcExe = Join-Path $SourceDir "$Name.exe"
 if (-not (Test-Path $SrcExe) -or -not (Test-Path (Join-Path $SourceDir "_internal"))) {
     throw "$SrcExe not found; build it first: installer\build.ps1"
 }
+Update-MpSignature -ErrorAction Stop
+$bundleScan = Assert-ScannerBundleClean $SourceDir
 $ver = (& $SrcExe version) -join " "
 if ($LASTEXITCODE -ne 0 -or $ver -notmatch "frozen=True") { throw "the build output does not run: $ver" }
 Write-Host "        $ver"

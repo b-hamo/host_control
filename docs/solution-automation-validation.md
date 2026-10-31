@@ -1,6 +1,10 @@
 # 통합 설치 자동화 검증 기록 — 이슈 #101
 
-## 결과
+
+> 후속 조사: Defender 정의 갱신 후 동일 해시 EXE가 탐지되지 않았으며, 통합 설치와 실제
+> Manager/Runner READY까지 통과했다. 아래는 초기 실패 이력이다.
+> 최신 근거와 보관 반출 상태는 [탐지 조사와 재검증](defender-investigation-101.md)을 따른다.
+## 초기 결과 (정의 갱신 전)
 
 자동화 구현과 제한된 회귀 검증은 완료했다. **이번 변경을 적용한 전체 설치·새 Sandbox
 READY·실제 반출은 미완료**다. 새 SecureArtifactScanner 실행 파일이 Defender에 격리되었고,

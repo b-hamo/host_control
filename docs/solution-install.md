@@ -4,9 +4,10 @@
 패키지로 설치하고 `sandbox_runner`를 빌드하며, Shared와 artifact_export에
 SecureArtifactScanner를 기본 적용한다. Manager 소스 변경은 필요 없다.
 
-> 현재 검증 상태: Runner 빌드와 제한된 Host 회귀 테스트는 통과했다. 새 검사 서비스
-> 실행 파일이 Defender에 격리되어 **이 자동화 버전의 설치 완료·READY·실제 반출은
-> 아직 검증하지 못했다**. [검증 기록](solution-automation-validation.md)을 먼저 확인한다.
+> 재검증 상태: Defender 정의 갱신 후 동일 해시의 기존 EXE가 탐지되지 않았다.
+> 새 배포 묶음 검사, 통합 설치, 정상 파일/EICAR 검사, 실제 Manager/Runner READY까지
+> 통과했다. 실제 보관 반출은 사용자 종료·승인을 기다리고 있다.
+> [탐지 조사와 재검증](defender-investigation-101.md), [초기 검증 기록](solution-automation-validation.md).
 
 ## 지원 환경과 사전 준비
 
@@ -50,7 +51,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.p
 2. `State/envs/<고유 ID>`에 새 Python 환경을 만든다. Host 의존성과 로컬 Manager를 설치한다.
    Dev는 editable 설치, Deploy는 일반 패키지 설치다. Host는 두 모드 모두 해당 소스 checkout을 사용한다.
 3. Runner의 `scripts/build.ps1`을 호출하고 산출물 경로·SHA-256을 확인한다.
-4. 검사 서비스를 새로 빌드한다. UAC 단계에서 Work 실행 금지 ACL, 전용 서비스 계정,
+4. 검사 서비스를 새로 빌드한다. Defender 정의 갱신 후 배포 묶음 전체를 검사하고 파일 해시/탐지 이벤트를 대조한다. UAC 설치에서도 기존 서비스 교체 전에 다시 검사한다. UAC 단계에서 Work 실행 금지 ACL, 전용 서비스 계정,
    Shared 검사, artifact ExportRoot를 설정하고 서비스의 정상 파일/EICAR 검증을 수행한다.
 5. Manager의 `tools/install_firewall.ps1`을 호출한다. Sandbox 스위치의 TCP 17443/17444 허용,
    다른 Host 포트 차단, 재부팅 후 어댑터 재연결용 SYSTEM 작업을 기존 Manager 방식으로 설정한다.

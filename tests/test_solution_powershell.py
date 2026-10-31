@@ -53,6 +53,16 @@ catch {{ if ($_.Exception.Message -notmatch 'A Windows Sandbox is open') {{ thro
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize('process', ['WindowsSandboxRemoteSession', 'vmmemWindowsSandbox'])
+def test_modern_or_disconnected_sandbox_refuses_installation(process):
+    result = ps(f'''. {quoted(ROOT/'installer/solution_common.ps1')}
+function Get-Process {{ param($Name,$ErrorAction); if($Name -contains '{process}'){{[pscustomobject]@{{Id=123}}}} }}
+try {{ Assert-SolutionIdle; throw 'accepted active modern Sandbox' }}
+catch {{ if ($_.Exception.Message -notmatch 'A Windows Sandbox is open') {{ throw }} }}
+''')
+    assert result.returncode == 0, result.stderr
+
+
 def test_failed_external_command_propagates():
     result = ps(f'''. {quoted(ROOT/'installer/solution_common.ps1')}
 try {{ Invoke-SolutionCommand powershell.exe @('-NoProfile','-Command','exit 7'); throw 'failure swallowed' }}
