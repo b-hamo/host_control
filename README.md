@@ -20,7 +20,11 @@ Sandbox Manager가 최초 관찰한 창의 소멸을 5초 유예 후 확정하�
 1. 해당 Sandbox ID의 창 종료 확정. `MISSING` 유예 중에는 Runner/VM 복구를 보류한다.
 2. 연결된 Runner가 준비됐다면 `TERMINATE(USER_STOP)` 전송. 연결/응답 실패에도 종료를 계속한다.
 3. Manager `stop()`이 `wsb list`로 VM 종료를 확인한 뒤 `cleanup()`을 수행한다.
-4. `--shared`가 설정된 경우 기존 크기·링크·Defender 검사 후 보존/삭제/보류 선택을 실행한다.
+4. `--shared`가 설정된 경우 크기·링크·Defender 검사 후 보존/삭제/보류 선택을 실행한다.
+   `--artifact-scanner defender-service`를 함께 지정하면 Shared도 SecureArtifactScanner 서비스로 검사한다.
+   서비스 재빌드 및 `installer/install.ps1 -EnableSharedScan` 설치가 필요하다.
+   검사 통과 후 보관 위치는 그대로 `Downloads/SandboxShared/<세션>`이다.
+   파일당 50 MiB 제한 등 설정과 동작은 [Shared 서비스 연동](scanner_service/README.md#19-shared-파일의-서비스-검사와-다운로드-보관-99)을 참고한다.
    빈 폴더에는 질문하지 않으며 검사 실패·무응답 처리는 기존 정책을 따른다.
 
 창 닫기는 사용자의 종료 의사이므로 별도의 `session_stop` 승인창을 다시 요청하지 않는다.

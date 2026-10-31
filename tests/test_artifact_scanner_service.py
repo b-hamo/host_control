@@ -99,7 +99,8 @@ def no_host_file(tmp_path) -> bool:
 
 
 # --------------------------------------------------------------------- the whole way
-@pytest.mark.parametrize("path,data", [(HANGUL_TXT, TEXT), ("빈파일.txt", b""), ("큰파일.txt", ("가" * 100_000).encode())])
+@pytest.mark.parametrize("path,data", [(HANGUL_TXT, TEXT), ("빈파일.txt", b""), ("큰파일.txt", ("가" * 100_000).encode())],
+                         ids=["unicode-text", "empty", "large-text"])
 def test_export_through_the_service(tmp_path, service, path, data):
     svc = service()
     approver = Approver()

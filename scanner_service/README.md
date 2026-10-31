@@ -340,3 +340,53 @@ python host\mcp_server.py ... --artifact-export --artifact-scanner defender-serv
 - **Defender 비활성화 PC**: 보안 설정을 바꾸지 않았다. 비활성·수동 모드·정책 비활성은 가짜 상태로만 시험(`SCANNER_UNAVAILABLE`). Sandbox 안 Defender가 꺼져 있었지만 exe가 막혀 서비스로는 확인하지 못했다.
 - **실제 Windows 재부팅**: 재부팅하지 않았다. 강제 종료 후 재시작으로 같은 복구 경로(실행 표시·잔여 Job 폐기)를 확인했다.
 - 디스크가 실제로 가득 찬 상황(한도 설정으로만), 실제 sandbox_runner와의 연동(테스트 Runner로만).
+
+## 19. Shared 파일의 서비스 검사와 다운로드 보관 (#99)
+
+Host에 `--shared <실행 금지 공유 루트> --artifact-scanner defender-service`를 함께 지정하면
+`sandbox_manager.finish_shared()`의 직접 MpCmdRun 호출 대신 `host/shared_scanner.py`가 처리한다.
+AMSI/none 모드의 기존 Shared 동작은 그대로다. `--shared`가 없으면 Shared 보관 자체가 없다.
+
+먼저 **새 소스로 서비스를 다시 빌드·설치**해야 한다. 기존 0.1.0 바이너리는 Shared 프로필을 모르므로 차단된다.
+
+```powershell
+.\installer\build.ps1
+# 관리자 PowerShell. ExportRoot는 artifact_export용이며 Host --export-dir와 같게 지정한다.
+.\installer\install.ps1 -EnableSharedScan -ExportRoot '<artifact_export 공개 폴더>'
+# Host 인자:
+# --shared <공유 루트> --artifact-scanner defender-service --export-dir <artifact_export 공개 폴더>
+```
+
+`config.json`의 `shared_scan_enabled`는 기본 false다. 설치 스위치를 생략하면 기존 값을 유지하고,
+`-EnableSharedScan:$false`로 끈다. `shared_max_file_bytes`는 기본/상한 50 MiB이며
+**Shared 미러의 기존 500 MiB 파일 한도보다 작다**. 한 파일이라도 초과하면 전체 보관을 차단한다.
+전체 파일 수/크기는 sandbox_manager의 기존 20,000개/2 GiB 한도를 따르고, 스캔 작업은 순차 처리한다.
+전체 스캔 대기 예산은 600초이며 서비스의 개별 검사·저장소·유휴 시간 제한도 그대로 적용된다.
+
+| 구간 | 경로 / 동작 |
+|---|---|
+| Shared 원본 | `--shared/<세션>`: 기존 실행 금지 ACL 유지. VM 종료·정리 확인 뒤 시작 |
+| 서비스 검사 | `Quarantine/session-SHARED-<임의ID>/job-<임의ID>/payload.part`: Named Pipe로 파일별 업로드 |
+| 사용자 선택 | 기존 keep/delete/hold. 미리 받은 keep도 전체 검사 통과 후에만 적용 |
+| 최종 보관 | Windows가 알려주는 Downloads의 `SandboxShared/<세션>/<상대경로>` (동명은 새 이름) |
+| artifact_export | 기존 `export_root/<세션>/<artifact>/<파일명>`; Shared 목적지와 독립 |
+
+`BEGIN_UPLOAD.payload.scan_profile`은 생략 시 `artifact`(UTF-8 TXT 정책)이며, `shared`는
+명시적으로 켠 서비스에서만 바이너리/PDF/ZIP 등 파일의 Defender 검사를 허용한다.
+Shared Job에는 `PUBLISH`를 허용하지 않는다. 서비스는 다운로드 폴더 접근 권한이 필요 없다.
+`HEALTH_CHECK.shared_scan`에 활성화 여부와 파일 한도를 반환하며 Job 상태·감사 로그에 프로필을 기록한다.
+
+Host는 원본 파일의 쓰기/삭제와 부모 폴더 이름 변경을 잠근다. 서비스의 CLEAN 판정과
+프로필·크기·SHA-256이 맞는지 확인하고 Job을 ABORT하여 격리를 정리한 다음에도 원본 잠금은 유지한다.
+사용자가 keep을 선택하면 **같은 핸들**에서 새 파일로 복사하고 MOTW(ZoneId=3)를 기록하며 해시를
+다시 검증한다. 전체 파일을 준비한 임시 폴더를 최종 이름으로 변경한 뒤 원본을 정리한다.
+원본 ACL/임의 ADS는 복사하지 않으며 파일 상대 경로를 보존한다.
+
+악성은 BLOCKED, 서비스 부재·구버전·검사 미확인·통신/복사 오류는 QUARANTINED다.
+기존 직접 검사기로 자동 우회하지 않는다. 오류/hold 때 원본은 실행 금지 공유 폴더에 남고,
+실패한 부분 복사는 정리하며 정리 실패는 로그에 남긴다. Host 종료 제한 시간이 지나면 추가 공개를 취소한다.
+폴더 내용 변경·링크·hard link는 거부하며 검사하지 않은 새 파일은 공개하지 않는다.
+
+검증: `tests/test_shared_scanner_service.py`는 실제 Windows 파일 잠금·MOTW·Named Pipe·서비스 런타임과
+Host/MiniRunner 종료 흐름을 사용한다. Defender 판정과 VM/사용자 선택은 테스트 대역이다.
+새 설치 바이너리로 실제 Defender 검사와 사용자 승인 창까지 통과하는 배포 검증은 별도로 수행해야 한다.

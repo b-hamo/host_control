@@ -319,6 +319,13 @@ class HostBackend(threading.Thread):
                     self.session = new_session             # recovery: next generation of the same session
                     self.broker.switch_session(new_session, notice)
 
+                finish_shared = getattr(a, "finish_shared", None)
+                if (getattr(a, "shared", None) is not None
+                        and getattr(a, "artifact_scanner", None) == "defender-service"):
+                    from host.shared_scanner import ServiceSharedFinisher
+                    from host.scanner_client import PIPE_NAME, ScannerServiceClient
+                    finish_shared = ServiceSharedFinisher(
+                        ScannerServiceClient(getattr(a, "scanner_pipe", None) or PIPE_NAME))
                 self.launcher = SandboxLauncher(manager, a.runner_exe or Path("sandbox_runner.exe"),
                                                 self.session, publish, new_session=sessions.get,
                                                 on_switch=switch,
@@ -326,7 +333,7 @@ class HostBackend(threading.Thread):
                                                 inbox=inbox, inbox_watcher=getattr(a, "inbox_watcher", None),
                                                 shared_root=getattr(a, "shared", None),
                                                 shared_watcher=getattr(a, "shared_watcher", None),
-                                                finish_shared=getattr(a, "finish_shared", None),
+                                                finish_shared=finish_shared,
                                                 shared_chooser=getattr(a, "shared_chooser", None)
                                                 or getattr(approver, "choose_shared", None),
                                                 shared_notify=getattr(approver, "notify_shared", None))
@@ -615,7 +622,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--artifact-scanner", choices=["none", "amsi", "defender-service"], default="none",
                     help="antivirus for exported files; none = every export is BLOCKED (SCANNER_UNAVAILABLE); "
                          "defender-service = the SecureArtifactScanner Windows service (installer/install.ps1, "
-                         "-ExportRoot must be --export-dir) receives, scans with Microsoft Defender and publishes")
+                         "-ExportRoot must be --export-dir) receives, scans with Microsoft Defender and publishes; "
+                         "with --shared it also scans Shared before Downloads/SandboxShared export "
+                         "(install the service with -EnableSharedScan)")
     ap.add_argument("--scanner-pipe", default=None,
                     help="with defender-service: Named Pipe of the scanner service (default "
                          "\\\\.\\pipe\\SecureArtifactScanner)")

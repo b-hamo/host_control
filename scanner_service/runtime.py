@@ -128,7 +128,7 @@ class ScannerRuntime:
             log.warning("running with administrator or LocalSystem rights: the service is meant to run as "
                         "NT SERVICE\\%s", SERVICE_NAME)
         c.work_dir.mkdir(parents=True, exist_ok=True)
-        self.quarantine = QuarantineManager(c.quarantine_root, max_file_bytes=c.max_file_bytes,
+        self.quarantine = QuarantineManager(c.quarantine_root, max_file_bytes=c.storage_file_limit,
                                             store_limit_bytes=c.store_limit_bytes, min_free_bytes=c.min_free_bytes,
                                             max_jobs=c.max_active_jobs, create_root=self.dev_mode)
         self.quarantine.ensure_root()
@@ -177,6 +177,7 @@ class ScannerRuntime:
             "accepting": self.manager.accepting if self.manager else False,
             "token": token_info(),
             "defender": self.scanner.health(),
+            "shared_scan": {"enabled": c.shared_scan_enabled, "max_file_bytes": c.shared_max_file_bytes},
             "publish": {"enabled": self.publisher.enabled, "approval_mode": self.publisher.approval.mode,
                         "export_root": str(self.publisher.export_root) if self.publisher.export_root else None,
                         "problem": self.publisher.problem},

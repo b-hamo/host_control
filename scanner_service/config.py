@@ -59,6 +59,8 @@ class ScannerConfig:
     max_response_bytes: int = 64 * 1024
     pipe_idle_timeout_s: float = 60.0
     max_file_bytes: int = 1024 * 1024        # same demo policy as host/artifacts.py DEFAULT_MAX_BYTES
+    shared_scan_enabled: bool = False      # opt-in: binary Shared files, scan only (never PUBLISH)
+    shared_max_file_bytes: int = MAX_BYTES_LIMIT
     max_chunk_bytes: int = 256 * 1024
     store_limit_bytes: int = 200 * 1024 * 1024
     min_free_bytes: int = 512 * 1024 * 1024
@@ -86,6 +88,10 @@ class ScannerConfig:
         return self.state_dir / "work"
 
     def validate(self) -> "ScannerConfig":
+        if type(self.shared_scan_enabled) is not bool:
+            raise ValueError("shared_scan_enabled must be a boolean")
+        if type(self.shared_max_file_bytes) is not int or not 1 <= self.shared_max_file_bytes <= MAX_BYTES_LIMIT:
+            raise ValueError(f"shared_max_file_bytes must be 1..{MAX_BYTES_LIMIT}")
         if not 1 <= self.max_file_bytes <= MAX_BYTES_LIMIT:
             raise ValueError(f"max_file_bytes must be 1..{MAX_BYTES_LIMIT}")
         if not 1024 <= self.max_chunk_bytes <= 1024 * 1024:
@@ -104,6 +110,10 @@ class ScannerConfig:
             if not isinstance(sid, str) or not sid.startswith("S-1-"):
                 raise ValueError(f"pipe_client_sids: {sid!r} is not a SID string")
         return self
+
+    @property
+    def storage_file_limit(self) -> int:
+        return max(self.max_file_bytes, self.shared_max_file_bytes if self.shared_scan_enabled else 0)
 
 
 _PATHS = {"quarantine_root", "state_dir", "export_root"}

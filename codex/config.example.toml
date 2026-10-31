@@ -7,6 +7,9 @@
 #   --shared         Sandbox 바탕화면 Shared -> 이 PC(실행 금지) -> 끝날 때 검사 후 "남길까요?"
 #   --artifact-export --artifact-scanner amsi
 #                    Sandbox 실행 결과(영수증·출력)를 검사해서 받기. amsi = 이 PC 백신(Defender)으로 검사
+#                    Shared도 서비스로 검사하려면 amsi 대신 defender-service를 사용한다.
+#                    먼저 installer/install.ps1 -EnableSharedScan -ExportRoot <Host --export-dir 경로>로 설치한다.
+#                    Shared 보관 위치는 Downloads/SandboxShared이며 --export-dir와 별개다.
 #   --sandbox-run    받은 파일을 Sandbox 안에서 정확한 명령으로 실행(sandbox_run)
 #   --router-capture 웹 페이지 명령(ClickFix)을 기록하고 같은 Sandbox에서 분석(router_capture, router_execute, #94)
 # inbox·shared 폴더는 sandbox_manager 의 tools/setup_inbox.ps1 을 한 번 돌려 만든다(실행 금지 권한 포함).

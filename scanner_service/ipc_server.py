@@ -49,7 +49,7 @@ TOP_KEYS = {"protocol_version", "request_id", "command", "job_id", "artifact_id"
             "generation", "payload"}
 PAYLOAD_KEYS = {
     "HEALTH_CHECK": {"selftest"},
-    "BEGIN_UPLOAD": {"file_name", "size", "sha256"},
+    "BEGIN_UPLOAD": {"file_name", "size", "sha256", "scan_profile"},
     "WRITE_CHUNK": {"offset", "data"},
     "COMPLETE_UPLOAD": {"sha256"},
     "SCAN": set(),

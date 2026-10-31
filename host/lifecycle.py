@@ -502,6 +502,8 @@ class SandboxLauncher:
         try:
             await asyncio.to_thread(self.manager.stop, self.sandbox, reason, emergency=emergency)
             self.cleanup_result = await asyncio.to_thread(self.manager.cleanup, self.sandbox)
+            if self.cleanup_result is None or self.cleanup_result.get("failed"):
+                raise RuntimeError("Sandbox cleanup unconfirmed; Shared files will not be exported")
             self.state = FAILED if failed else STOPPED
             log.info("SANDBOX %s stopped and cleaned up: %s", s.identity[0], self.cleanup_result)
             if self.inbox is not None:
@@ -529,6 +531,9 @@ class SandboxLauncher:
             async with asyncio.timeout(timeout):
                 await self._shutdown()
         except asyncio.TimeoutError:
+            cancel_shared = getattr(self._finish_shared, "cancel", None)
+            if cancel_shared is not None:
+                cancel_shared()
             log.error("SANDBOX %s not stopped within %.0fs of Host exit", self.session.identity[0], timeout)
             raise TimeoutError("Sandbox shutdown unconfirmed") from None
 
