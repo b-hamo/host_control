@@ -1,5 +1,7 @@
 # 통합 설치: installer/install_solution.ps1이 실제 경로로 생성한 mcp.toml을 사용한다.
-# 아래는 구조 예시. 기존 scrp/scrp_sandbox 블록을 교체하고 중복 등록하지 않는다.
+# 아래는 --runner-exe를 직접 지정하는 기존 수동 등록의 구조 예시다.
+# 새 자동 설치는 start_solution.ps1 -Stdio로 solution.json의 현재 환경을 읽는다.
+# 기존 scrp/scrp_sandbox 블록을 교체하고 중복 등록하지 않는다.
 # solution.py는 Shared·artifact 검사 서비스와 승인 창을 항상 활성화한다.
 # 서비스·Defender·Shared 활성화·ExportRoot·실행 금지 ACL 점검 실패 시 시작하지 않는다.
 # Shared: 다운로드/SandboxShared/<세션>, artifact_export(TXT): --state 아래 exports.

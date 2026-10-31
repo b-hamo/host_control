@@ -1,76 +1,132 @@
-# 세 구성요소 통합 설치와 반출
+# 세 레포 통합 설치와 개발 갱신
 
-`host_control`이 MCP와 승인·검사를 담당하고, requirements.txt에 고정된
-`sandbox_manager`가 VM과 공유 매핑을 관리하며, `sandbox_runner.exe`가 Guest에서
-실행된다. 통합 진입점 `host/solution.py`는 Shared와 artifact_export를 모두
-SecureArtifactScanner에 연결한다. 별도 검사기 옵션을 기억할 필요가 없다.
+`host_control`이 설치와 실행을 조정한다. 같은 PC의 `sandbox_manager`를 Python
+패키지로 설치하고 `sandbox_runner`를 빌드하며, Shared와 artifact_export에
+SecureArtifactScanner를 기본 적용한다. Manager 소스 변경은 필요 없다.
 
-## 설치
+> 재검증 상태: Defender 정의 갱신 후 동일 해시의 기존 EXE가 탐지되지 않았다.
+> 새 배포 묶음 검사, 통합 설치, 정상 파일/EICAR 검사, 실제 Manager/Runner READY까지
+> 통과했다. 사용자 종료·보관 승인 후 다운로드 EXPORTED와 파일 해시/MOTW까지 확인했다.
+> [탐지 조사와 재검증](defender-investigation-101.md), [초기 검증 기록](solution-automation-validation.md).
 
-Windows Sandbox를 사용할 수 있는 Windows, Microsoft Defender, Python 3.13 x64,
-Git, 현재 프로토콜에 맞춰 빌드한 `sandbox_runner.exe`가 필요하다. Runner 바이너리는
-해당 저장소의 빌드 절차로 준비한다. 이 설치기는 Runner를 재빌드하지 않는다.
+## 지원 환경과 사전 준비
 
-Host를 사용할 **같은 사용자 계정**의 관리자 PowerShell에서:
+Windows Sandbox와 `wsb` CLI를 지원하고 기능이 활성화된 Windows x64, 가상화, Microsoft Defender,
+Python 3.13 x64, Git, MSYS2 UCRT64가 필요하다. OS 기능 활성화·재부팅·개발 도구 설치와
+조직의 실행 정책 승인은 사전 준비다. 설치기는 보안 기능을 끄거나 백신 제외를 만들지 않는다.
+관리자 그룹에 속한 사용자가 **일반 PowerShell**에서 시작하고, 서비스/ACL/방화벽 단계만
+같은 계정으로 UAC를 승인한다. 별도 관리자 계정으로 자격 증명을 바꾸는 설치는 지원하지 않는다.
 
-```powershell
-./installer/install_solution.ps1 -RunnerExe 'C:\solution\sandbox_runner\build\sandbox_runner.exe'
+MSYS2 UCRT64에 gcc, cmake, ninja, jsoncpp 패키지가 필요하다. 세 레포는 호환되는
+브랜치/커밋으로 받아 둔다. 현재는 Host 이슈 #101, Runner 이슈 #33 변경과 선행 Host PR #100이
+필요하다. 스크립트는 사용자의 Git checkout을 pull/reset하거나 브랜치를 바꾸지 않는다.
+
+```text
+workspace/
+  host_control/
+  sandbox_manager/
+  sandbox_runner/
 ```
 
-1. Host venv를 만들고 requirements.txt의 고정된 Manager 등 의존성을 설치한다.
-2. 전용 `~/SecureCUA/solution/inbox`, `shared`를 만들고 Host 실행 금지 ACL을 설정한다.
-3. 검사 서비스를 빌드·설치하고 Shared 검사를 활성화한다. 전용 비관리자 서비스
-   계정, 자동 시작, 파이프 사용자, artifact ExportRoot도 함께 설정한다.
-4. 실제 서비스·Defender·Shared 활성화·ExportRoot·실행 금지 ACL을 확인한 뒤
-   `~/SecureCUAState/solution/mcp.toml`을 만든다. 실패하면 새 설정을 공개하지 않는다.
+Host 저장소에서 한 명령으로 준비 후 독립 실행:
 
-기존 Python/검사 서비스 배포 묶음을 사용하려면 `-PythonExe`, `-ScannerSourceDir`,
-오프라인 의존성이 이미 준비된 경우 `-SkipDependencyInstall`을 사용한다.
-`-Work`, `-State`, `-ConfigOut`으로 경로를 지정할 수 있다. Work는 코드, 사용자
-폴더, 상태 저장소와 분리해야 한다. 설치/재설치는 기존 검사 서비스를 교체·재시작한다.
-설치 검증은 EICAR 테스트를 포함하므로 Defender 탐지 기록이 남을 수 있다.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.ps1 -Mode Dev -Start
+```
 
-생성된 mcp.toml로 기존 Codex 설정의 `scrp`/`scrp_sandbox` 등록을 **교체**한다.
-다른 MCP 설정은 유지한다. 현재 Sandbox 작업을 마친 후 MCP를 다시 연결한다.
-설치기는 열린 Sandbox를 종료하거나 Codex 설정을 덮어쓰지 않는다.
-Host는 관리자 권한이 아닌 평소 사용자로 실행한다.
+Codex에 연결해 사용할 때는 `-Start` 대신 `-RegisterCodex`를 지정한 뒤 MCP를 다시 연결한다.
+독립 세션과 Codex 세션을 동시에 시작하지 않는다.
 
-## 실행과 실패 처리
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.ps1 -Mode Dev -RegisterCodex
+```
 
-MCP는 `solution.py`를 실행한다. 이 진입점은 서비스의 SCM PID·전용 계정,
-Defender 사용 가능 상태, Shared 검사 활성화, artifact ExportRoot 일치,
-inbox와 Shared의 실행 금지 상태를 검사한다. 실패하면 `SOLUTION_NOT_READY`로
-종료하며 VM을 시작하지 않는다. 실행 후 서비스가 중단돼도 각 반출 단계의 재검사가
-실패하므로 공개하지 않는다. 다른 검사기로 자동 전환하지 않는다.
+다른 폴더 구조에서는 `-ManagerRepo`, `-RunnerRepo`, `-UcrtRoot C:\msys64\ucrt64`를
+지정한다. `-PythonExe`는 Python 3.13 x64 실행 파일이며 미지정 시 `py -3.13`을 사용한다.
+`-CheckOnly`는 레포·도구 사전 점검만 한다. 서비스/Defender/ACL 정상 판정이 아니다.
 
-수동 사전 점검은 생성된 실행 인수에 `--check`를 붙인다. VM을 시작하지 않는다.
-저수준 `host/mcp_server.py`는 개별 기능 시험용 옵션을 계속 제공하지만 통합 솔루션은
-`solution.py`를 사용한다.
+## 설치가 하는 일
 
-## 반출 흐름과 실제 검증
+1. 기존 Sandbox가 있으면 종료하지 않고 중단한다. State의 설치 잠금으로 같은 구성의 동시 갱신을 막는다.
+2. `State/envs/<고유 ID>`에 새 Python 환경을 만든다. Host 의존성과 로컬 Manager를 설치한다.
+   Dev는 editable 설치, Deploy는 일반 패키지 설치다. Host는 두 모드 모두 해당 소스 checkout을 사용한다.
+3. Runner의 `scripts/build.ps1`을 호출하고 산출물 경로·SHA-256을 확인한다.
+4. 검사 서비스를 새로 빌드한다. Defender 정의 갱신 후 배포 묶음 전체를 검사하고 파일 해시/탐지 이벤트를 대조한다. UAC 설치에서도 기존 서비스 교체 전에 다시 검사한다. UAC 단계에서 Work 실행 금지 ACL, 전용 서비스 계정,
+   Shared 검사, artifact ExportRoot를 설정하고 서비스의 정상 파일/EICAR 검증을 수행한다.
+5. Manager의 `tools/install_firewall.ps1`을 호출한다. Sandbox 스위치의 TCP 17443/17444 허용,
+   다른 Host 포트 차단, 재부팅 후 어댑터 재연결용 SYSTEM 작업을 기존 Manager 방식으로 설정한다.
+   실제 어댑터 적용은 첫 VM 시작 시 Manager가 확인한다.
+6. 일반 사용자 preflight를 통과하면 `solution.json`과 `mcp.toml`을 기록한다.
+   선택한 경우 기존 Codex 설정을 백업하고 `scrp_sandbox` 부분만 교체한다.
 
-Guest `Desktop/Shared` → Work/shared/<세션> (Host 실행 금지) → VM 종료/정리 확인
-→ 서비스 전용 Quarantine으로 업로드·Defender 검사 → 전부 CLEAN이고 사용자가 보관 선택
-→ Windows Known Folder 다운로드/SandboxShared/<세션>에 원본 핸들의 같은 바이트 복사.
-파일 크기·SHA-256과 MOTW를 확인한다. 승인 창은 종료 직후 미리 표시될 수 있지만,
-보관 선택만으로 검사 완료 전에 파일이 공개되지는 않는다.
+기본 Work는 `~/SecureCUA/solution`, State는 `~/SecureCUAState/solution`이다.
+`-Work`, `-State`로 바꿀 수 있지만 코드/사용자 폴더/상태 파일과 쓰기 공유 영역은 분리해야 한다.
+프로필에는 세 레포 경로, 커밋, 미커밋 변경 여부, Python 경로, Runner 해시, 모드를 기록한다.
+빌드 기록은 서명이나 프로토콜 호환성 증명이 아니다. 설치는 PC의 단일 검사 서비스와 Manager
+방화벽 규칙을 구성하므로 여러 Work/State 설치를 동시에 운용하는 기능은 아니다.
 
-Shared는 파일당 최대 50 MiB, 전체 2 GiB/20,000개다. 한 파일이라도 악성·미확인·오류·한도
-초과이면 전체 반출을 보류/차단한다. artifact_export는 기존 UTF-8 TXT 정책을 유지하며
-State/exports에 저장한다.
+## 개발 중 실행과 갱신
 
-실제 배포 검증은 다음 증거를 함께 확인한다.
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/check_solution.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start_solution.ps1
+powershell -ExecutionPolicy Bypass -File installer/update_solution.ps1 -Component Runner
+```
 
-- 서비스가 전용 계정으로 실행되고 preflight가 통과한다.
-- task_submit 뒤 실제 Manager VM과 Runner 연결이 READY가 된다.
-- Guest에서 무해한 테스트 파일을 Shared에 만들고 원본 SHA-256을 기록한다.
-- 사용자가 세션 종료와 보관을 선택한다. Host의 `SHARED ... at session end: EXPORTED`
-  로그를 확인한다. 연결이 유지되는 동안에는 `shared.at_end`도 확인할 수 있다.
-- 호스트 다운로드 파일의 내용·크기·SHA-256·ZoneId=3과 서비스 감사 로그의 CLEAN을 대조한다.
+명령에 `-State`를 주면 사용자 지정 프로필을 사용한다. 갱신 전에 Sandbox를 직접 종료하고
+해당 MCP 연결을 끊는다. 환경을 사용하는 Python이 남으면 일부 갱신을 거부한다.
 
-자동 테스트의 가짜 Defender/VM 판정은 위 실제 배포 증거를 대신하지 않는다.
+| 변경 대상 | 갱신 방법 |
+|---|---|
+| Host Python 소스 | MCP 재연결. 의존성도 변경했으면 `-Component Host` |
+| Manager 소스 | Dev는 재연결로 반영. 의존성/일반 설치 갱신은 `-Component Manager` |
+| Runner C++ | `-Component Runner` 후 MCP 재연결/새 Sandbox |
+| Scanner | `-Component Scanner`로 재빌드·UAC 설치·검증 |
+| 전체 | `-Component All`로 새 Python 환경을 준비한 뒤 MCP 재연결 |
 
-## 2026-10-31 배포 검증 기록
+자동 생성한 MCP 설정은 `scripts/start_solution.ps1 -Stdio -State ...`를 실행한다.
+이 스크립트가 현재 `solution.json`의 Python을 선택하므로 전체 갱신 때 Codex 설정을 다시
+수정할 필요가 없다. 레포나 State 자체를 옮기면 설치/등록을 다시 한다.
+
+Codex 등록만 다시 하려면 `installer/register_codex.ps1`을 사용한다. 기본 대상은
+`CODEX_HOME/config.toml` 또는 `~/.codex/config.toml`이며 `-ConfigPath`로 바꿀 수 있다.
+설치 명령에서는 `-CodexConfig`를 사용한다. 이전 MCP 이름 `scrp`가 있으면 중복 실행을
+피하도록 거부하므로 사용자가 기존 등록을 제거/이름 변경해야 한다. 복잡한 TOML을 안전하게
+교체할 수 없으면 기존 파일을 유지하고 생성된 `mcp.toml`의 수동 적용을 안내한다.
+팀 Skill은 선택적으로 `codex/install_skill.ps1`로 설치한다. MCP 등록과 별개다.
+
+## 실패 처리와 재실행
+
+서비스·Defender·Shared 활성화·ExportRoot·ACL·Runner 해시 검사에 실패하면 VM을 시작하지 않는다.
+검사기를 우회하거나 자동 대체하지 않는다. 설치 후 서비스가 사라져도 다음 시작이 차단된다.
+서비스 검증이 실패하면 새 프로필과 Codex 등록을 공개하지 않는다. Codex 등록 단계만 실패하면
+준비된 프로필은 남고 등록 명령만 재시도할 수 있다.
+
+새 환경은 기존 MCP가 사용하던 환경을 덮어쓰지 않는다. 이전 환경/프로필 백업/실패 로그는
+자동 삭제하지 않으며, 필요한 진단 후 사용하지 않는 것을 사용자가 정리한다. 부분 업데이트와
+관리자 단계는 전체 트랜잭션이 아니다. 실패해도 이미 설치한 패키지·ACL·서비스·방화벽은
+자동 롤백되지 않는다. 백업 프로필 복원만으로 이전 서비스가 복원되지는 않는다.
+`setup.log`, `setup-elevated.log`, `update.log`, `install-*.result.json`에서 실패 단계를 확인한다.
+
+## 실제 반출 검증
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify_solution.ps1
+```
+
+검증 클라이언트는 실제 MCP → Manager VM → Runner READY를 기다리고 Guest Shared에
+무해한 TXT를 만든다. 안내가 나오면 사용자가 Sandbox 창을 닫고 실제 승인 창에서 보관한다.
+도구가 사용자 종료/승인을 대신하지 않는다. Host EXPORTED 로그, 다운로드 파일 바이트·해시,
+MOTW의 ZoneId=3을 확인해 `State/session-result.json`에 결과를 남긴다.
+실패/시간 초과 때 기존 Sandbox를 임의 종료하지 않으며 사용자가 닫을 때까지 연결을 유지한다.
+
+반출 경로는 Guest `Desktop/Shared` → `Work/shared/<세션>` (실행 금지) → VM 종료/정리 확인
+→ 서비스 Quarantine 검사 → 전부 CLEAN + 사용자 보관 선택 → Windows 다운로드 Known Folder의
+`SandboxShared/<세션>`이다. artifact_export는 기존 UTF-8 TXT 정책과 `State/exports`를 사용한다.
+Shared는 파일당 50 MiB, 전체 2 GiB/20,000개이며 악성·미확인·오류·한도 초과 시 전체 반출을
+보류/차단한다. 자동 테스트 대역의 성공을 실제 반출 성공으로 계산하지 않는다.
+
+## 이전 PR #100 배포 검증 기록 (현재 자동화의 검증 결과 아님)
 
 위 설치기로 Host venv·고정 Manager·서비스·ACL·MCP 설정을 설치하고 일반 사용자
 권한에서 `--check`를 통과했다. 생성된 MCP 설정의 명령/인수/환경 그대로 stdio

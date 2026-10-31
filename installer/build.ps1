@@ -17,10 +17,12 @@
 [CmdletBinding()]
 param(
     [string]$PythonLauncherVersion = "3.13",
+    [string]$PythonExe = "",
     [string]$OutDir = "",
     [switch]$Clean
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'scanner_bundle_check.ps1')
 if (-not $OutDir) { $OutDir = Join-Path $PSScriptRoot "..\dist" }      # $PSScriptRoot is empty in param defaults on 5.1
 $Name = "SecureArtifactScanner"
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -31,10 +33,15 @@ New-Item -ItemType Directory -Force $BuildRoot | Out-Null
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 
-if ($Clean -and (Test-Path $Venv)) { & cmd.exe /d /c rmdir /s /q $Venv }
+if ($Clean -and (Test-Path $Venv)) {
+    $resolved = (Resolve-Path -LiteralPath $Venv).Path
+    if (-not $resolved.StartsWith($Repo + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Build venv is outside the repository.' }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
 if (-not (Test-Path $Py)) {
     Write-Host "Creating build venv (Python $PythonLauncherVersion) in $Venv"
-    & py "-$PythonLauncherVersion" -m venv $Venv
+    if ($PythonExe) { & $PythonExe -m venv $Venv }
+    else { & py "-$PythonLauncherVersion" -m venv $Venv }
     if ($LASTEXITCODE -ne 0) { throw "py -$PythonLauncherVersion -m venv failed (is Python $PythonLauncherVersion x64 installed?)" }
 }
 & $Py -c "import sys, struct; assert sys.version_info[:2] == (3, 13), sys.version; assert struct.calcsize('P') == 8, '64-bit Python required'"
@@ -43,7 +50,11 @@ if ($LASTEXITCODE -ne 0) { throw "build venv must be 64-bit Python 3.13" }
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
 $Dist = Join-Path $OutDir $Name
-if (Test-Path $Dist) { & cmd.exe /d /c rmdir /s /q $Dist }
+if (Test-Path $Dist) {
+    $resolved = (Resolve-Path -LiteralPath $Dist).Path
+    if (-not $resolved.StartsWith($OutDir.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Scanner output is outside OutDir.' }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
 Write-Host "Running PyInstaller (--onedir)"
 & $Py -m PyInstaller --noconfirm --clean --onedir --console --name $Name `
     --distpath $OutDir --workpath (Join-Path $BuildRoot "work") --specpath $BuildRoot `
@@ -54,6 +65,10 @@ Write-Host "Running PyInstaller (--onedir)"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 
 $Exe = Join-Path $Dist "$Name.exe"
+# Update definitions and scan the entire output before executing the smoke test.
+# Never suppress a detection or rebuild repeatedly merely to change the file hash.
+Update-MpSignature -ErrorAction Stop
+$BundleScan = Assert-ScannerBundleClean $Dist
 $Version = (& $Exe version) -join "`n"
 if ($LASTEXITCODE -ne 0 -or $Version -notmatch "frozen=True") { throw "smoke test failed: $Version" }
 $Hash = (Get-FileHash $Exe -Algorithm SHA256).Hash.ToLower()
@@ -63,9 +78,10 @@ $Info = [ordered]@{
     pyinstaller = (& $Py -c "import PyInstaller; print(PyInstaller.__version__)")
     pywin32 = (& $Py -c "import importlib.metadata as m; print(m.version('pywin32'))")
     exe_sha256 = $Hash
+    defender_bundle_scan = $BundleScan
     files = (Get-ChildItem $Dist -Recurse -File).Count
 }
-$Info | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $Dist "build-info.json")
+$Info | ConvertTo-Json -Depth 5 | Set-Content -Encoding UTF8 (Join-Path $Dist "build-info.json")
 Write-Host "Built $Exe"
 Write-Host "  $Version"
 Write-Host "  sha256 $Hash, $($Info.files) files"

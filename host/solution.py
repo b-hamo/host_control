@@ -79,15 +79,27 @@ def render_config(runner: Path, work: Path, state: Path) -> str:
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--runner-exe", type=Path, required=True)
+    source = p.add_mutually_exclusive_group(required=True)
+    source.add_argument("--runner-exe", type=Path)
+    source.add_argument("--config", type=Path)
     p.add_argument("--work", type=Path, default=Path.home() / "SecureCUA" / "solution")
     p.add_argument("--state", type=Path, default=Path.home() / "SecureCUAState" / "solution")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--validate-paths", action="store_true")
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--write-config", type=Path)
+    mode.add_argument("--register-codex", type=Path)
     a = p.parse_args(argv)
     try:
+        profile = None
+        if a.config:
+            from host.solution_config import read_profile
+            a.config = a.config.resolve()
+            profile = read_profile(a.config)
+            if Path(profile['host_repo']).resolve() != REPO:
+                raise ValueError('profile belongs to a different Host checkout')
+            a.runner_exe = Path(profile['runner_exe'])
+            a.work, a.state = Path(profile['work']), Path(profile['state'])
         validate_paths(a.runner_exe, a.work, a.state)
         if a.validate_paths:
             return
@@ -99,10 +111,22 @@ def main(argv=None):
             if not ok:
                 raise RuntimeError(f"{path}: {why}")
         asyncio.run(check_service(a.state))
+        if a.register_codex:
+            if not profile:
+                raise ValueError('--register-codex requires --config')
+            from host.solution_config import register_mcp, render_profile_mcp
+            backup = register_mcp(a.register_codex, render_profile_mcp(a.config, profile))
+            print(f'CODEX_REGISTERED: {a.register_codex}; backup={backup or "unchanged"}; reconnect MCP')
+            return
         if a.write_config:
             a.write_config.parent.mkdir(parents=True, exist_ok=True)
             temp = a.write_config.with_suffix(".tmp")
-            temp.write_text(render_config(a.runner_exe, a.work, a.state), encoding="utf-8")
+            if profile:
+                from host.solution_config import render_profile_mcp
+                rendered = render_profile_mcp(a.config, profile)
+            else:
+                rendered = render_config(a.runner_exe, a.work, a.state)
+            temp.write_text(rendered, encoding="utf-8")
             temp.replace(a.write_config)
             return
         if a.check:

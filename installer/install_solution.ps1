@@ -1,74 +1,66 @@
 #Requires -Version 5.1
-<#
-.SYNOPSIS
-    Installs the integrated Host + pinned Sandbox Manager + Runner configuration.
-.DESCRIPTION
-    Run elevated as the SAME Windows user who will run the Host. Requires Python
-    3.13 x64, Git and a built sandbox_runner.exe. Installs Python dependencies,
-    builds/installs the scanner service, prepares deny-execute inbox/Shared roots,
-    and writes an MCP fragment only after the complete service preflight passes.
-    Does not close an existing Sandbox or rewrite the user's Codex configuration.
-    -SkipDependencyInstall and -ScannerSourceDir support a prepared offline bundle.
-#>
+<# Run in ordinary PowerShell. Only service installation requests UAC.
+   Requires Windows Sandbox, Defender, Python 3.13 x64, Git, MSYS2 UCRT64.
+   Never checks out code, reboots, or terminates an existing VM. #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)][string]$RunnerExe,
-    [string]$PythonExe = '',
-    [string]$Work = '',
-    [string]$State = '',
-    [string]$ConfigOut = '',
-    [string]$ScannerSourceDir = '',
-    [switch]$SkipDependencyInstall
+    [ValidateSet('Dev','Deploy')][string]$Mode = 'Dev',
+    [string]$ManagerRepo = '', [string]$RunnerRepo = '', [string]$UcrtRoot = '',
+    [string]$PythonExe = '', [string]$Work = '', [string]$State = '',
+    [switch]$RegisterCodex, [string]$CodexConfig = '', [switch]$Start,
+    [switch]$CheckOnly
 )
-$ErrorActionPreference = 'Stop'
-$Repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-if (-not $Work) { $Work = Join-Path $env:USERPROFILE 'SecureCUA\solution' }
-if (-not $State) { $State = Join-Path $env:USERPROFILE 'SecureCUAState\solution' }
-if (-not $ConfigOut) { $ConfigOut = Join-Path $State 'mcp.toml' }
-$me = [Security.Principal.WindowsIdentity]::GetCurrent()
-if (-not ([Security.Principal.WindowsPrincipal]$me).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    throw 'Run elevated as the Host user (do not use a different administrator account).'
+. (Join-Path $PSScriptRoot 'solution_common.ps1')
+Assert-SolutionUser
+Assert-SolutionIdle
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$parent = Split-Path $repo -Parent
+if (-not $ManagerRepo) { $ManagerRepo = Join-Path $parent 'sandbox_manager' }
+if (-not $RunnerRepo) { $RunnerRepo = Join-Path $parent 'sandbox_runner' }
+$ManagerRepo = Resolve-SolutionRepo $ManagerRepo 'pyproject.toml'
+[void](Resolve-SolutionRepo $ManagerRepo 'tools/install_firewall.ps1')
+$RunnerRepo = Resolve-SolutionRepo $RunnerRepo 'scripts/build.ps1'
+$State = Get-SolutionStatePath $State
+if (-not $Work) { $Work = Join-Path $env:USERPROFILE 'SecureCUA/solution' }
+$Work = [IO.Path]::GetFullPath($Work)
+foreach ($name in @('git.exe','WindowsSandbox.exe','wsb.exe')) {
+    if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { throw "$name is required. Enable Windows Sandbox and reboot if Windows requests it." }
 }
 if (-not $PythonExe) {
-    $PythonExe = Join-Path $Repo '.venv\Scripts\python.exe'
-    if (-not (Test-Path -LiteralPath $PythonExe)) {
-        & py -3.13 -m venv (Join-Path $Repo '.venv')
-        if ($LASTEXITCODE -ne 0) { throw 'Python 3.13 x64 is required.' }
-    }
+    if (-not (Get-Command py.exe -ErrorAction SilentlyContinue)) { throw 'Install Python 3.13 x64 with its py launcher, or pass -PythonExe.' }
+    $PythonExe = (& py -3.13 -c 'import sys; print(sys.executable)') -join ''
+    if ($LASTEXITCODE -ne 0) { throw 'Python 3.13 x64 is required.' }
 }
-& $PythonExe -c "import sys,struct; assert sys.version_info[:2] == (3,13) and struct.calcsize('P') == 8"
-if ($LASTEXITCODE -ne 0) { throw 'Python 3.13 x64 is required.' }
-if (-not $SkipDependencyInstall) {
-    & $PythonExe -m pip install -r (Join-Path $Repo 'requirements.txt')
-    if ($LASTEXITCODE -ne 0) { throw 'Host / pinned sandbox_manager dependency install failed.' }
-}
-$Entry = Join-Path $Repo 'host\solution.py'
-$ProfileArgs = @('--runner-exe', $RunnerExe, '--work', $Work, '--state', $State)
-& $PythonExe $Entry @ProfileArgs --validate-paths
-if ($LASTEXITCODE -ne 0) { throw 'Invalid solution paths; no ACL or service changes made.' }
-
-# Only the dedicated work root receives execute-deny permissions. State and code
-# must be outside it; solution.py validates this before anything is created.
-foreach ($folder in @($Work, (Join-Path $Work 'inbox'), (Join-Path $Work 'shared'), $State)) {
-    New-Item -ItemType Directory -Force -Path $folder | Out-Null
-}
-& icacls.exe $Work /deny '*S-1-1-0:(OI)(IO)(X)' /Q | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Cannot apply execute-deny ACL.' }
-& icacls.exe $Work /grant '*S-1-3-4:(OI)(CI)(R,W,D)' /Q | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'Cannot apply owner-rights ACL.' }
-
-if (-not $ScannerSourceDir) {
-    # A child PowerShell isolates the build/install scripts' exit statements.
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build.ps1')
-    if ($LASTEXITCODE -ne 0) { throw 'Scanner build failed.' }
-    $ScannerSourceDir = Join-Path $Repo 'dist\SecureArtifactScanner'
-}
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install.ps1') `
-    -SourceDir $ScannerSourceDir -ClientUser $me.Name -ExportRoot (Join-Path $State 'exports') -EnableSharedScan
-if ($LASTEXITCODE -ne 0) { throw 'Scanner service install/verification failed; MCP config not published.' }
-
-& $PythonExe $Entry @ProfileArgs --write-config $ConfigOut
-if ($LASTEXITCODE -ne 0) { throw 'Solution preflight failed; MCP config not published.' }
-Write-Host "Installed and verified. MCP fragment: $ConfigOut"
-Write-Host 'Replace the existing scrp_sandbox MCP block with this fragment, then reconnect after finishing the current Sandbox.'
-Write-Host 'Start the Host as your ordinary user. Shared export: Downloads\SandboxShared\<session>.'
+$PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
+Invoke-SolutionCommand $PythonExe @('-c',"import sys,struct; assert sys.version_info[:2]==(3,13) and struct.calcsize('P')==8")
+$buildArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $RunnerRepo 'scripts/build.ps1'),'-CheckOnly')
+if ($UcrtRoot) { $buildArgs += @('-UcrtRoot',$UcrtRoot) }
+Invoke-SolutionCommand powershell.exe $buildArgs
+if ($CheckOnly) { Write-Host 'SETUP_PREREQUISITES_READY (service/Defender/ACL checks run during installation).'; return }
+$lock = Enter-SolutionUpdate $State
+Start-Transcript -Path (Join-Path $State 'setup.log') -Append | Out-Null
+try {
+    # Never uninstall a package beneath a connected MCP process. Publish the new
+    # environment only after all installation checks succeed; keep the previous one.
+    $environment = Join-Path $State ('envs/'+[Guid]::NewGuid().ToString('N'))
+    $python = Join-Path $environment 'Scripts/python.exe'
+    Invoke-SolutionCommand $PythonExe @('-m','venv',$environment)
+    Invoke-SolutionCommand $python @('-c',"import sys,struct; assert sys.version_info[:2]==(3,13) and struct.calcsize('P')==8")
+    Invoke-SolutionCommand $python @('-m','pip','install','-r',(Join-Path $repo 'requirements-base.txt'))
+    Install-SolutionManager $python $ManagerRepo $Mode
+    $runner = Build-SolutionRunner $RunnerRepo $UcrtRoot
+    Invoke-SolutionCommand $python @((Join-Path $repo 'host/solution.py'),'--runner-exe',$runner.executable,'--work',$Work,'--state',$State,'--validate-paths')
+    $scannerOut = Join-Path $repo ('build/solution-scanner/'+[Guid]::NewGuid().ToString('N'))
+    Invoke-SolutionCommand powershell.exe @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'build.ps1'),'-OutDir',$scannerOut,'-PythonExe',$PythonExe)
+    Install-SolutionPrivileged $repo $python $Work $State $runner.executable (Join-Path $scannerOut 'SecureArtifactScanner') $ManagerRepo
+    Invoke-SolutionCommand $python @((Join-Path $repo 'host/solution.py'),'--runner-exe',$runner.executable,'--work',$Work,'--state',$State,'--check')
+    $profile = [ordered]@{schema_version=1; mode=$Mode; host_repo=$repo; manager_repo=$ManagerRepo; runner_repo=$RunnerRepo;
+        python=$python; runner_exe=$runner.executable; runner_sha256=$runner.sha256; ucrt_root=$runner.ucrt_root;
+        work=$Work; state=$State; installed_at=[DateTime]::UtcNow.ToString('o');
+        sources=@{host=(Get-SolutionSource $repo); manager=(Get-SolutionSource $ManagerRepo); runner=(Get-SolutionSource $RunnerRepo)}}
+    Save-SolutionProfile $profile $State
+    Invoke-SolutionCommand $python @((Join-Path $repo 'host/solution.py'),'--config',(Join-Path $State 'solution.json'),'--write-config',(Join-Path $State 'mcp.toml'))
+    if ($RegisterCodex) { & (Join-Path $PSScriptRoot 'register_codex.ps1') -State $State -ConfigPath $CodexConfig }
+    Write-Host "SOLUTION_INSTALLED: $(Join-Path $State 'solution.json')"
+} finally { Stop-Transcript | Out-Null; $lock.Dispose() }
+if ($Start) { & (Join-Path $repo 'scripts/start_solution.ps1') -State $State }
