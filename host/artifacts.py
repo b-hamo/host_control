@@ -317,7 +317,7 @@ class ArtifactGrants:
 # ----------------------------------------------------------------------------- artifacts
 CANDIDATE, AUTHORIZED, SCANNING, EXPORTED, BLOCKED, FAILED, CANCELLED = (
     "CANDIDATE", "AUTHORIZED", "SCANNING", "EXPORTED", "BLOCKED", "FAILED", "CANCELLED")
-FINAL = (EXPORTED, BLOCKED, FAILED, CANCELLED)
+FINAL = (EXPORTED, BLOCKED, FAILED, CANCELLED, "DELETED", "SUPERSEDED")
 
 # Runner ARTIFACT_RESULT error code → may the Agent ask again (new approval, new grant)?
 RUNNER_RETRYABLE = {"ARTIFACT_BUSY": True, "UPLOAD_FAILED": True, "UPLOAD_EXPIRED": True,
@@ -410,6 +410,8 @@ class ArtifactBroker:
         self._by_id[art.artifact_id] = art
         self._by_event[key] = art
         log.info("ARTIFACT candidate %s %s (event %s…)", art.artifact_id, art.relative_path, art.event_id[:8])
+        if self.unified is not None and getattr(self.unified, "output_only", False) and payload.get("category") != "OUTPUT_SNAPSHOT":
+            self.unified.candidate(identity, art)
         return True
 
     # -- Agent side ------------------------------------------------------------
@@ -436,15 +438,20 @@ class ArtifactBroker:
                 raise ArtifactError("SCANNER_UNAVAILABLE", f"the Defender scanner service is not usable: {why}",
                                     retryable=True, next_step="artifact_list")
         busy = [a.artifact_id for a in self._by_id.values()
-                if a.identity == session.identity and a.stage in (AUTHORIZED, SCANNING)]
+                if a.identity == session.identity and a.stage in (AUTHORIZED, SCANNING) and
+                not (a is art and self.unified is not None and getattr(self.unified, "output_only", False))]
         if busy:
             raise ArtifactError("ARTIFACT_BUSY", f"{busy[0]} is still being transferred; one export at a time",
                                 retryable=True, next_step="artifact_list")
         return art
 
-    @staticmethod
-    def needs_new_attempt(art: Artifact) -> bool:
+    def needs_new_attempt(self, art: Artifact) -> bool:
         """True when export would issue a new grant (and so needs a new approval)."""
+        if self.unified is not None and getattr(self.unified, "output_only", False):
+            if art.artifact_id in self.unified.requested:
+                return False
+            if art.stage in (AUTHORIZED, "STAGED", "HELD"):
+                return True
         return art.stage == CANDIDATE or (art.stage in (FAILED, CANCELLED) and art.retry_allowed)
 
     async def export(self, session: RuntimeSession, artifact_id: str) -> dict:
@@ -452,8 +459,12 @@ class ArtifactBroker:
         art = self.precheck(session, artifact_id)
         if not self.needs_new_attempt(art):
             return {**self.view(art), "accepted": True, "note": "already requested; follow it with artifact_list"}
-        if self.unified is not None and self.unified.is_shared(art):
-            return await self.unified.start_shared(session, art)
+        if self.unified is not None and getattr(self.unified, "output_only", False):
+            return await self.unified.export(session, art)
+        return await self.transfer(session, art)
+
+    async def transfer(self, session: RuntimeSession, art: Artifact) -> dict:
+        """One HTTPS acquisition. Output mode retains the verified copy for later approval."""
         conn = session._live()                           # READY and connected, or ProtocolError
         grant, token = self.grants.issue(session.identity, art.artifact_id, art.event_id, self.max_bytes,
                                          self.upload_lifetime_s, file_name=art.relative_path)
@@ -624,6 +635,8 @@ class ArtifactBroker:
         for art in self._by_id.values():
             if art.identity != identity or art.stage in FINAL:
                 continue
+            if self.unified is not None and getattr(self.unified, "output_only", False) and self.unified.owns(art):
+                continue  # verified Host copies no longer depend on the VM/channel lifetime
             was = art.stage
             if art.task is not None and art.task is not asyncio.current_task():
                 art.task.cancel()
@@ -633,6 +646,8 @@ class ArtifactBroker:
 
     # -- views ---------------------------------------------------------------
     def status(self, art: Artifact) -> str:
+        if art.stage in ("STAGED", "HELD"):
+            return "QUARANTINED"
         if art.stage in (CANDIDATE,):
             return "PENDING"
         if art.stage == AUTHORIZED:
@@ -661,8 +676,8 @@ class ArtifactBroker:
             "can_export": self.needs_new_attempt(art),
         }
         if self.unified is not None:
-            out["source"] = "shared" if self.unified.is_shared(art) else "output"
-            out["export_flow"] = "review -> scan -> final approval -> Downloads/SandboxShared"
+            out["source"] = "output"
+            out["export_flow"] = "review -> scan -> final approval -> Downloads/SandboxOutput"
         if not received:
             out["unverified"] = "size, type and hash are unknown until the Host has received the file"
         return out
@@ -675,8 +690,8 @@ class ArtifactBroker:
         if status != "ANY":
             views = [v for v in views if v["status"] == status]
         page = views[:limit]
-        note = ("Shared snapshots and reported Output candidates. Changed files are refused; "
-                "save/close the Guest file and wait for its Shared mirror before listing."
+        note = ("Output candidates and verified Host receipts. Save/close files using Desktop/Output. "
+                "STAGED and HELD are unpublished; only EXPORTED is a completed export."
                 if self.unified is not None else
                 "Reported candidates, not a live directory listing; a file changed or deleted "
                 "since it was reported is refused when exported.")

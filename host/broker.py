@@ -361,7 +361,17 @@ class Broker:
             summary = {"tool": tool, "arguments": mask(tool, args), "session_id": self.session.identity[0],
                        "runtime_id": self.session.identity[1], "reason": decision.reason, **(shown or {})}
             if tool == "artifact_export" and self.artifacts is not None and self.artifacts.unified is not None:
-                approved = await self.artifacts.unified.review(summary) == "keep"
+                output = self.artifacts.unified
+                if getattr(output, "output_only", False):
+                    from host.artifacts import ArtifactError
+                    try:
+                        summary.update(await output.prepare_review(self.session, args["artifact_id"]))
+                    except ArtifactError as exc:
+                        raise BrokerError(exc.code, exc.message) from exc
+                choice = await output.review(summary)
+                approved = choice == "keep"
+                if not approved and getattr(output, "output_only", False):
+                    await output.decline_review(args["artifact_id"], choice)
             else:
                 approved = await self.approver(summary)
             if not approved:

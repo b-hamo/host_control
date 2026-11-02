@@ -12,12 +12,13 @@ from host import solution
 def test_profile_always_connects_all_three_components_and_service(tmp_path):
     runner, work, state = tmp_path / 'runner.exe', tmp_path / 'work', tmp_path / 'state'
     args = solution.host_arguments(runner, work, state)
-    for flag, value in {'--runner-exe': runner, '--shared': work / 'shared',
+    for flag, value in {'--runner-exe': runner, '--output-root': work / 'output',
                         '--inbox': work / 'inbox', '--sandbox-root': state / 'sandbox',
                         '--export-dir': state / 'exports', '--artifact-scanner': 'defender-service',
                         '--approval': 'dialog'}.items():
         assert args[args.index(flag) + 1] == str(value)
-    assert {'--artifact-export', '--sandbox-run', '--agent-guard', '--unified-export'} <= set(args)
+    assert {'--artifact-export', '--sandbox-run', '--agent-guard'} <= set(args)
+    assert '--shared' not in args and '--unified-export' not in args
     assert args[args.index('--artifact-max-bytes') + 1] == '52428800'
     runner = tmp_path / "한글 dir's" / 'runner.exe'
     config = tomllib.loads(solution.render_config(runner, work, state))['mcp_servers']['scrp_sandbox']
@@ -96,4 +97,4 @@ def test_successful_preflight_publishes_config_and_launches_profile(tmp_path, mo
     assert not launched
     solution.main(args)
     assert launched == [solution.host_arguments(runner, work, state)]
-    assert checked == [work / 'inbox', work / 'shared', state] * 2
+    assert checked == [work / 'inbox', work / 'output', state] * 2

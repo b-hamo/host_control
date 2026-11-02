@@ -1,12 +1,12 @@
 # 세 레포 통합 설치와 개발 갱신
 
 `host_control`이 설치와 실행을 조정한다. 같은 PC의 `sandbox_manager`를 Python
-패키지로 설치하고 `sandbox_runner`를 빌드하며, Shared와 artifact_export에
+패키지로 설치하고 `sandbox_runner`를 빌드하며, Output 반출에
 SecureArtifactScanner를 기본 적용한다. Manager 소스 변경은 필요 없다.
 
-통합 실행은 Shared/Output 공통 반출을 기본 선택한다. Codex의 `artifact_list`에 두 출처를
-표시하고, 목록 확인 창 → 서비스 검사 → 최종 보관 승인 창을 거쳐 다운로드에 저장한다.
-Sandbox 종료 시 자동 Shared 보관도 같은 절차를 사용한다. [통합 반출 정책](unified-export.md).
+통합 실행은 Output 단일 반출을 기본 선택한다. Sandbox 바탕화면의 Output 바로가기에
+결과물을 저장하고, 목록 확인 창 → 서비스 검사 → 최종 보관 승인 창을 거쳐 다운로드에 저장한다.
+정상 종료 전에도 Output을 확보하고 같은 절차를 사용한다. [Output 반출 정책](output-only-export.md).
 
 > 재검증 상태: Defender 정의 갱신 후 동일 해시의 기존 EXE가 탐지되지 않았다.
 > 새 배포 묶음 검사, 통합 설치, 정상 파일/EICAR 검사, 실제 Manager/Runner READY까지
@@ -22,8 +22,9 @@ Python 3.13 x64, Git, MSYS2 UCRT64가 필요하다. OS 기능 활성화·재부�
 같은 계정으로 UAC를 승인한다. 별도 관리자 계정으로 자격 증명을 바꾸는 설치는 지원하지 않는다.
 
 MSYS2 UCRT64에 gcc, cmake, ninja, jsoncpp 패키지가 필요하다. 세 레포는 호환되는
-브랜치/커밋으로 받아 둔다. 현재는 Host 이슈 #101, Runner 이슈 #33 변경과 선행 Host PR #100이
-필요하다. 스크립트는 사용자의 Git checkout을 pull/reset하거나 브랜치를 바꾸지 않는다.
+브랜치/커밋으로 받아 둔다. Output 전환에는 Host #105와 Runner #35 변경이 함께 필요하다.
+기존 Runner에 `artifact.output.v1`이 없으면 READY 단계에서 거부한다.
+스크립트는 사용자의 Git checkout을 pull/reset하거나 브랜치를 바꾸지 않는다.
 
 ```text
 workspace/
@@ -56,7 +57,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.p
    Dev는 editable 설치, Deploy는 일반 패키지 설치다. Host는 두 모드 모두 해당 소스 checkout을 사용한다.
 3. Runner의 `scripts/build.ps1`을 호출하고 산출물 경로·SHA-256을 확인한다.
 4. 검사 서비스를 새로 빌드한다. Defender 정의 갱신 후 배포 묶음 전체를 검사하고 파일 해시/탐지 이벤트를 대조한다. UAC 설치에서도 기존 서비스 교체 전에 다시 검사한다. UAC 단계에서 Work 실행 금지 ACL, 전용 서비스 계정,
-   Shared 검사, artifact ExportRoot를 설정하고 서비스의 정상 파일/EICAR 검증을 수행한다.
+   Output 검사에 쓰는 scan-only 기능, artifact ExportRoot를 설정하고 서비스의 정상 파일/EICAR 검증을 수행한다.
+   서비스 설치 옵션의 기존 이름 `EnableSharedScan`은 scan-only API 사용 여부이며 Shared 매핑을 만들지 않는다.
 5. Manager의 `tools/install_firewall.ps1`을 호출한다. Sandbox 스위치의 TCP 17443/17444 허용,
    다른 Host 포트 차단, 재부팅 후 어댑터 재연결용 SYSTEM 작업을 기존 Manager 방식으로 설정한다.
    실제 어댑터 적용은 첫 VM 시작 시 Manager가 확인한다.
@@ -70,6 +72,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.p
 방화벽 규칙을 구성하므로 여러 Work/State 설치를 동시에 운용하는 기능은 아니다.
 
 ## 개발 중 실행과 갱신
+
+Shared 구성에서 처음 전환할 때는 세 레포의 호환 버전을 받은 뒤 `-Component All`로 갱신한다.
+새 실행 금지 `Work/output` 폴더와 새 Runner가 함께 필요하므로 Host 소스 교체만으로 이전하지 않는다.
+이전 `Work/shared` 및 `Downloads/SandboxShared` 파일은 그대로 남으며 사용자가 별도로 관리한다.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/check_solution.ps1

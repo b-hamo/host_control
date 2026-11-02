@@ -33,12 +33,7 @@ mapped read-only and live into the Sandbox at prepare(), and the Sandbox
 Manager's InboxWatcher lists each finished file for the Guest every second
 until the session is stopped.
 
-Shared folder (optional, --shared, 배주한 요청 2026-10-15): each session gets a
-new folder under the --shared root, mapped writable at C:\\Shared. The Guest
-copies its Desktop\\Shared there, so portable programs and files the Agent
-saves appear on this computer, where nothing in that folder can run. At
-session end sandbox_manager.finish_shared scans it with Microsoft Defender and
-copies a clean folder to Downloads\\SandboxShared\\<session> (status()["shared"]).
+Output files are received over HTTPS before normal shutdown.
 
 The Host part the Sandbox Manager cannot do (certificate with the address in
 its SAN, token, bootstrap.json) is the `publish` callable:
@@ -93,21 +88,11 @@ class SandboxLauncher:
                  shared_root: Path | None = None, shared_watcher=None, finish_shared=None,
                  shared_chooser=None, shared_notify=None):
         self.manager = manager
+        if shared_root is not None:
+            raise ValueError("Shared export has been removed; configure Output acquisition instead")
+        self.output = None
+        self.output_result = None
         self.inbox = Path(inbox) if inbox is not None else None
-        self.shared_root = Path(shared_root) if shared_root is not None else None
-        self.shared: Path | None = None              # this session's folder under shared_root
-        self.shared_result: dict | None = None       # finish_shared() at session end
-        self._make_shared_watcher = shared_watcher   # default: sandbox_manager.SharedWatcher
-        self._finish_shared = finish_shared          # default: sandbox_manager.finish_shared
-        # async (summary) -> "keep" | "delete" | "hold": the person at this computer (DialogApprover.choose_shared).
-        # None: nobody to ask, so a clean folder is held where it is (배주한 결정 2026-10-15: no answer = hold).
-        self._choose_shared = shared_chooser
-        # async (summary) -> None: tells the person a "keep" answer could not be honoured (scan found a
-        # problem). The question is asked as soon as the session starts to end, before the scan (배주한 요청
-        # 2026-10-17: about 1.5 s after the window is closed), so the scan result can only come after it.
-        self._notify_shared = shared_notify
-        self._early_choice: asyncio.Task | None = None
-        self._shared_watcher = None
         # (manager, sandbox) -> object with start()/stop(); default: sandbox_manager.inbox.InboxWatcher
         self._make_watcher = inbox_watcher
         self._watcher = None
@@ -137,9 +122,12 @@ class SandboxLauncher:
               "generation": self.session.identity[2], "recoveries": list(self.recoveries)}
         if self.sandbox is not None and callable(getattr(self.manager, "window_state", None)):
             st["window_state"] = self._window_state()
-        if self.shared_root is not None:
-            st["shared"] = {"guest_folder": "Desktop\\Shared", "host_folder": str(self.shared) if self.shared else None,
-                            "at_end": self.shared_result}
+        if self.output is not None:
+            from host.router_command_bundle import output_directory
+            st["output"] = {"guest_folder": "Desktop\\Output.lnk",
+                            "session_id": self.session.identity[0],
+                            "guest_path": output_directory(self.session.identity),
+                            "acquisition": self.output.acquisition, "at_end": self.output_result}
         return st
 
     def hint(self) -> str | None:
@@ -168,12 +156,7 @@ class SandboxLauncher:
     async def _run_launch(self) -> None:
         s = self.session
         try:
-            if self.shared_root is not None:
-                from sandbox_manager import make_share
-                self._alive()
-                self.shared = await asyncio.to_thread(make_share, self.shared_root, s.identity[0])
-                log.info("SHARED %s: %s mapped writable at C:\\Shared", s.identity[0], self.shared)
-            extra = {k: v for k, v in (("inbox", self.inbox), ("shared", self.shared)) if v is not None}
+            extra = {"inbox": self.inbox} if self.inbox is not None else {}
             if not extra:
                 self.sandbox = await self._call(self.manager.prepare, *s.identity, self.runner_exe)
             else:
@@ -182,8 +165,7 @@ class SandboxLauncher:
                     lambda: self.manager.prepare(*s.identity, self.runner_exe, **extra))
                 if self.inbox is not None:
                     self._start_watcher()
-                if self.shared is not None:
-                    self._start_shared_watcher()
+
             self.host_address = await self._call(self.manager.start, self.sandbox)
             if callable(getattr(self.manager, "window_state", None)):
                 self._window_watch = asyncio.create_task(self._watch_window())
@@ -220,80 +202,6 @@ class SandboxLauncher:
         if self._watcher is not None:
             self._watcher.stop()
             self._watcher = None
-        if self._shared_watcher is not None:
-            self._shared_watcher.stop()
-            self._shared_watcher = None
-
-    def _start_shared_watcher(self) -> None:
-        if self._make_shared_watcher is None:
-            from sandbox_manager import SharedWatcher
-            self._make_shared_watcher = SharedWatcher
-        self._shared_watcher = self._make_shared_watcher(self.manager, self.sandbox)
-        self._shared_watcher.start()
-
-    async def _ask_shared_early(self) -> None:
-        """The session is ending: ask keep/delete now, while the Sandbox stops and the scan runs.
-
-        Asked once, only when the shared folder holds files. The answer is used after the scan: a folder
-        that is not clean is never kept, whatever the answer (the person is told)."""
-        if getattr(self._finish_shared, "requires_post_scan_approval", False):
-            # Unified finisher reviews the pinned list before scanning and asks
-            # again after CLEAN. Never reuse an early keep as final approval.
-            return
-        if self.shared is None or self._choose_shared is None or self._early_choice is not None:
-            return
-        try:
-            from sandbox_manager.shared import list_files
-            files = await asyncio.to_thread(list_files, self.shared)
-        except Exception as e:  # noqa: BLE001 - the question then comes after the scan, as before
-            log.warning("SHARED %s: could not list it early: %s", self.session.identity[0], _describe(e))
-            return
-        if not files:
-            return
-        summary = {"tool": "shared_finish", "session_id": self.session.identity[0], "share": str(self.shared),
-                   "files": files, "before_scan": True}
-        self._early_choice = asyncio.get_running_loop().create_task(self._choose_shared(summary))
-        log.info("SHARED %s: asked keep/delete (%d files) while the Sandbox stops", summary["session_id"], len(files))
-
-    async def _early_answer(self) -> str:
-        try:
-            return await asyncio.shield(self._early_choice)
-        except Exception:  # noqa: BLE001 - no clear answer = hold
-            return "hold"
-
-    def _end_shared(self, session_id: str, loop) -> None:
-        """Session over (worker thread): scan the shared folder; for a clean one the person chooses keep
-        (copied to Downloads\\SandboxShared), delete, or hold (no answer: left where nothing runs)."""
-        def decide(result: dict) -> str:
-            if self._early_choice is not None:
-                return asyncio.run_coroutine_threadsafe(self._early_answer(), loop).result(130)
-            if self._choose_shared is None:
-                return "hold"
-            summary = {"tool": "shared_finish", "session_id": session_id, "share": result["share"],
-                       "files": result["files"]}
-            # A little longer than the dialog's own timeout; anything else (error, Host exiting) = hold.
-            return asyncio.run_coroutine_threadsafe(self._choose_shared(summary), loop).result(120)
-
-        try:
-            if self._finish_shared is None:
-                from sandbox_manager import finish_shared
-                self._finish_shared = finish_shared
-            self.shared_result = self._finish_shared(self.shared, decide=decide)
-            r = self.shared_result
-            log.info("SHARED %s at session end: %s, %d files, scan %s, copied to %s", session_id, r["status"],
-                     len(r["files"]), r["scan"], r["dest"])
-            if r["status"] == "HELD":
-                log.info("SHARED %s held where nothing runs (no keep/delete answer): %s", session_id, r["share"])
-            if r["status"] in ("BLOCKED", "QUARANTINED"):
-                log.warning("SECURITY shared folder %s kept where nothing runs: %s", r["share"], r["scan"])
-                early = self._early_choice
-                if (early is not None and early.done() and not early.cancelled() and early.exception() is None
-                        and early.result() == "keep" and self._notify_shared is not None):
-                    asyncio.run_coroutine_threadsafe(self._notify_shared(r), loop).result(90)
-        except Exception as e:  # noqa: BLE001 - the folder stays where nothing can run
-            self.shared_result = {"status": "QUARANTINED", "share": str(self.shared), "dest": None, "files": [],
-                                  "scan": f"error: {_describe(e)}", "events": []}
-            log.warning("SHARED %s could not be finished: %s", session_id, _describe(e))
 
     async def _publish(self) -> None:
         """Certificate for the address, token and bootstrap for the current generation, then hand over."""
@@ -338,14 +246,18 @@ class SandboxLauncher:
             return
         self._window_stop_requested = True
         log.info("SANDBOX %s window closed by user; ending session", self.session.identity[0])
-        await self._ask_shared_early()               # the question first, then stop the Sandbox behind it
         try:
             if self.session.ready.is_set():
                 await self.session.terminate("USER_STOP")
             else:
                 await self.session._end("WINDOW_CLOSED: user closed the Sandbox client")
         except Exception as exc:
-            log.warning("TERMINATE after window close failed; still stopping owned Sandbox: %s", exc)
+            if getattr(exc, "code", None) == "ARTIFACT_BLOCKED" and not self.session.disconnected():
+                self.error = str(exc)
+                self._window_stop_requested = False
+                log.error("Output acquisition failed; preserving owned Sandbox: %s", exc)
+                return
+            log.warning("TERMINATE after window close failed; stopping disconnected owned Sandbox: %s", exc)
             if not self.session.terminated:
                 await self.session._end("WINDOW_CLOSED: user closed the Sandbox client")
 
@@ -388,6 +300,8 @@ class SandboxLauncher:
         new = self.new_session((*old.identity[:2], old.identity[2] + 1))
         unresolved = new.inherit(old)
         self.session, self._ready = new, None
+        if self.output is not None:
+            self.output.bind(new)
         notice = (f"The runtime stopped answering ({why}) and was restarted (generation {new.identity[2]}). "
                   "Its screen may have changed: call computer_observe before acting.")
         if unresolved:
@@ -485,7 +399,6 @@ class SandboxLauncher:
             self._finish = asyncio.get_running_loop().create_task(self._stop_and_clean())
 
     async def _stop_and_clean(self) -> None:
-        await self._ask_shared_early()               # "끝내" too: ask now, not after stop + scan
         # Never call stop() while start(), a recovery or mark_ready() is still running in its thread.
         for task in (self._launch, self._recovery, self._ready, self._window_watch):
             if task is not None and task is not asyncio.current_task():
@@ -507,13 +420,13 @@ class SandboxLauncher:
             await asyncio.to_thread(self.manager.stop, self.sandbox, reason, emergency=emergency)
             self.cleanup_result = await asyncio.to_thread(self.manager.cleanup, self.sandbox)
             if self.cleanup_result is None or self.cleanup_result.get("failed"):
-                raise RuntimeError("Sandbox cleanup unconfirmed; Shared files will not be exported")
+                raise RuntimeError("Sandbox cleanup unconfirmed; Output copies remain held")
             self.state = FAILED if failed else STOPPED
             log.info("SANDBOX %s stopped and cleaned up: %s", s.identity[0], self.cleanup_result)
+            if self.output is not None:
+                self.output_result = await self.output.finish_closed()
             if self.inbox is not None:
                 await asyncio.to_thread(self._clear_inbox, s.identity[0])
-            if self.shared is not None:
-                await asyncio.to_thread(self._end_shared, s.identity[0], asyncio.get_running_loop())
         except Exception as e:  # noqa: BLE001 - reported; a Sandbox may still be running
             self.state, self.error = FAILED, _describe(e)
             log.error("SANDBOX %s stop/cleanup failed: %s (check `wsb list`)", s.identity[0], self.error)
@@ -535,7 +448,7 @@ class SandboxLauncher:
             async with asyncio.timeout(timeout):
                 await self._shutdown()
         except asyncio.TimeoutError:
-            cancel_shared = getattr(self._finish_shared, "cancel", None)
+            cancel_shared = getattr(self.output, "cancel", None)
             if cancel_shared is not None:
                 cancel_shared()
             log.error("SANDBOX %s not stopped within %.0fs of Host exit", self.session.identity[0], timeout)
@@ -549,6 +462,8 @@ class SandboxLauncher:
                     await s.terminate("USER_STOP")
                 except Exception as e:  # noqa: BLE001 - stop the Sandbox anyway
                     log.warning("TERMINATE on exit failed: %s", e)
+                    if getattr(e, "code", None) == "ARTIFACT_BLOCKED" and not s.terminated:
+                        raise RuntimeError("Output acquisition failed; owned Sandbox retained") from e
             else:
                 await s._end("HOST_EXIT")
         if self._finish is None:

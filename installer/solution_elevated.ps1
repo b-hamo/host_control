@@ -12,7 +12,7 @@ Start-Transcript -Path (Join-Path $r.state 'setup-elevated.log') -Append | Out-N
 try {
     Assert-SolutionIdle
     Invoke-SolutionCommand $r.python @((Join-Path $repo 'host/solution.py'),'--runner-exe',$r.runner,'--work',$r.work,'--state',$r.state,'--validate-paths')
-    foreach ($folder in @($r.work,(Join-Path $r.work 'inbox'),(Join-Path $r.work 'shared'),$r.state)) {
+    foreach ($folder in @($r.work,(Join-Path $r.work 'inbox'),(Join-Path $r.work 'output'),$r.state)) {
         New-Item -ItemType Directory -Force -Path $folder | Out-Null
     }
     Invoke-SolutionCommand icacls.exe @($r.work,'/deny','*S-1-1-0:(OI)(IO)(X)','/Q')

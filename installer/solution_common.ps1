@@ -66,7 +66,7 @@ function Install-SolutionManager {
     if ($Mode -eq 'Dev') { Invoke-SolutionCommand $Python @('-m','pip','install','-e',$ManagerRepo) }
     else { Invoke-SolutionCommand $Python @('-m','pip','install','--upgrade','--force-reinstall','--no-deps',$ManagerRepo) }
     # These APIs are actually used by solution.py and the Host lifecycle.
-    Invoke-SolutionCommand $Python @('-c', "from sandbox_manager.inbox import USER_FOLDERS,check_inbox_root; from sandbox_manager import SandboxManager,make_share,SharedWatcher,finish_shared,clear_inbox; assert hasattr(SandboxManager,'window_state'), 'Manager window_state API is required'; import sandbox_manager; print('MANAGER_SOURCE:', sandbox_manager.__file__)")
+    Invoke-SolutionCommand $Python @('-c', "from sandbox_manager.inbox import USER_FOLDERS,check_inbox_root; from sandbox_manager import SandboxManager,clear_inbox; assert hasattr(SandboxManager,'window_state'), 'Manager window_state API is required'; import sandbox_manager; print('MANAGER_SOURCE:', sandbox_manager.__file__)")
 }
 function Build-SolutionRunner {
     param([string]$RunnerRepo, [string]$UcrtRoot)

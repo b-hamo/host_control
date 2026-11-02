@@ -105,5 +105,12 @@ def test_stdio_launcher_reads_profile_and_preserves_rpc_stream(tmp_path):
         str(ROOT/'scripts/start_solution.ps1'), '-State', str(tmp_path), '-Stdio',
     ], input=request, capture_output=True, text=True, encoding='utf-8', timeout=15,
        env=os.environ | {'PYTHONIOENCODING': 'utf-8'})
+    import ctypes
+    if ctypes.windll.shell32.IsUserAnAdmin():
+        # Sandbox GUI-launched PowerShell is elevated. Product launch must
+        # still refuse elevation, including for the stdio transport.
+        assert result.returncode != 0 and 'ordinary PowerShell' in result.stderr
+        assert request not in result.stdout
+        return
     assert result.returncode == 0, result.stderr
     assert result.stdout == request

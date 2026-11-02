@@ -18,7 +18,7 @@ def test_verifier_requires_all_export_evidence(tmp_path, fault):
     path.write_bytes(data)
     Path(str(path) + ":Zone.Identifier").write_text("[ZoneTransfer]\nZoneId=3\n")
     item = {"status": "EXPORTED", "export_path": str(path), "sha256": hashlib.sha256(data).hexdigest(),
-            "artifact_id": "ART-1", "source": "shared"}
+            "artifact_id": "ART-1", "source": "output"}
     if fault == "status":
         item["status"] = "SCANNING"
     elif fault == "path":
@@ -54,3 +54,15 @@ def test_cleanup_pending_is_repolled_without_restarting(monkeypatch):
     monkeypatch.setattr("host.unified_verification.time.sleep", lambda _: None)
     assert runtime_state(Client())["runtime_state"] == "TERMINATED"
     assert calls == ["runtime_get_state", "runtime_get_state"]
+
+
+def test_output_sample_uses_shortcut_target_and_refuses_truncated_or_injected_input():
+    from host.unified_verification import sample_command
+    identity = ("SES-" + "a" * 32, "RT-SBX-001", 1)
+    for name, data in [("o-abcdef.bin", b"O\x00\xffabcdef"), ("c-abcdef.txt", b"close abcdef")]:
+        command = sample_command(identity, name, data)
+        assert len(command) <= 259 and "Output.lnk" in command and "Shared" not in command
+    with pytest.raises(ValueError):
+        sample_command(identity, "bad';command.bin", b"data")
+    with pytest.raises(ValueError):
+        sample_command(identity, "large.bin", b"x" * 1000)
