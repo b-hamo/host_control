@@ -67,6 +67,21 @@ The SCRP MCP server may have another name on another PC (`scrp`, `scrp_reconnect
 7. A click or key that returned `SUCCESS` / input delivered only means it was delivered. Say it worked only when `computer_observe` shows it. `ACTION_TIMEOUT` → never repeat the input; call `runtime_get_state` first.
 
 ## Step 3. The result comes back through Shared
+
+With the integrated solution (`artifact_export` describes unified Shared/Output export):
+- When the user requests export, call `artifact_list`, follow every `next_cursor`, and show the
+  candidate names, Shared/Output source, known sizes and statuses to the user. Save/close the
+  Guest file first and wait for Shared mirroring; a missing candidate is not a completed export.
+- Call `artifact_export` for the user's selected candidate ID. The person at this PC confirms
+  the file list, SecureArtifactScanner scans it, and a separate final keep/delete/hold dialog
+  asks for export approval. Never answer either dialog for the user.
+- Poll `artifact_list`; report success only for `EXPORTED` with its actual `export_path` under
+  Downloads/SandboxShared/<session>. Accepted/uploaded/clean without final approval is incomplete.
+- No extension allowlist applies to unified export; file size, path, link and scan checks still apply.
+- A changed file requires a fresh listing/confirmation. Do not silently substitute another candidate.
+- The Sandbox may stay open during requested export. Its eventual closure still automatically
+  offers remaining Shared files through the same list-review, scan and final-approval procedure.
+
 By default (the user need not ask) install or save under `C:\Users\WDAGUtilityAccount\Desktop\Shared`:
 - **Installer with a destination folder** → on the "Destination folder" page, **click the path box, press Ctrl+A** (select the old path, e.g. `C:\Program Files\7-Zip\`) and only then type `C:\Users\WDAGUtilityAccount\Desktop\Shared\<program name>`, so the new path replaces the old one instead of being appended to it. Observe and check the box shows exactly that path before pressing Install. Do not create the folder yourself; the installer does.
 - **Zip / portable program** → unzip into `Shared\<program name>`.

@@ -303,7 +303,13 @@ class Broker:
             raise BrokerError(e.code, e.message, next_step=e.next_step) from None
         if not self.artifacts.needs_new_attempt(art):
             return Decision("ALLOW", "P-ARTIFACT-EXISTING", "already requested; returns its state"), {}
-        return decision, {"path": art.relative_path, "artifact_id": art.artifact_id}
+        shown = {"path": art.relative_path, "artifact_id": art.artifact_id}
+        if self.artifacts.unified is not None:
+            shown.update(self.artifacts.unified.summary(art))
+            if decision.result != "DENY":
+                decision = Decision("REQUIRE_APPROVAL", "P-UNIFIED-EXPORT-REVIEW",
+                                    "the person confirms the selected file list before inspection")
+        return decision, shown
 
     def _run_plan(self, args: dict):
         from host.sandbox_run import RunError
@@ -354,7 +360,11 @@ class Broker:
                                   rule_id=decision.rule_id, next_step="ask_user")
             summary = {"tool": tool, "arguments": mask(tool, args), "session_id": self.session.identity[0],
                        "runtime_id": self.session.identity[1], "reason": decision.reason, **(shown or {})}
-            if not await self.approver(summary):
+            if tool == "artifact_export" and self.artifacts is not None and self.artifacts.unified is not None:
+                approved = await self.artifacts.unified.review(summary) == "keep"
+            else:
+                approved = await self.approver(summary)
+            if not approved:
                 raise BrokerError("POLICY_DENIED", denied_hint or "the user did not approve this action",
                                   rule_id=decision.rule_id)
 
@@ -494,7 +504,12 @@ class Broker:
             if self.artifacts is None:
                 raise BrokerError("POLICY_DENIED", "artifact export is not enabled for this session")
             if tool == "artifact_list":
-                return self.artifacts.list(s, args["status"], args["limit"], args["cursor"])
+                try:
+                    if self.artifacts.unified is not None and not s.terminated:
+                        await self.artifacts.unified.refresh(s)
+                    return self.artifacts.list(s, args["status"], args["limit"], args["cursor"])
+                except ArtifactError as e:
+                    raise BrokerError(e.code, e.message, next_step=e.next_step) from None
             try:
                 return await self.artifacts.export(s, args["artifact_id"])
             except ArtifactError as e:

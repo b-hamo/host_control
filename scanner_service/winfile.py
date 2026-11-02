@@ -166,12 +166,29 @@ def open_entry(path: str | Path):
                                     win32con.OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, None)
 
 
-def open_locked(path: str | Path, *, share_delete: bool = True):
+def open_locked(path: str | Path, *, share_delete: bool = True, delete_access: bool = False):
     """Read handle that refuses every writer until closed. The entry itself, not a link target."""
     share = FILE_SHARE_READ | (FILE_SHARE_DELETE if share_delete else 0)
     with _win(path):
-        return win32file.CreateFile(str(path), GENERIC_READ, share, None, win32con.OPEN_EXISTING,
+        return win32file.CreateFile(str(path), GENERIC_READ | (DELETE if delete_access else 0), share, None, win32con.OPEN_EXISTING,
                                     FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, None)
+
+
+def delete_locked(handle) -> None:
+    """Mark the already locked file for deletion on close; never reopen a path.
+
+    The handle must have DELETE access. Read-only or sharing failures leave the
+    source in place and are reported by the caller as pending cleanup.
+    """
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    call = kernel.SetFileInformationByHandle
+    call.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    call.restype = wintypes.BOOL
+    disposition = wintypes.BOOL(True)
+    if not call(int(handle), 4, ctypes.byref(disposition), ctypes.sizeof(disposition)):
+        raise ctypes.WinError(ctypes.get_last_error())
 
 
 def write_all(handle, data: bytes) -> None:

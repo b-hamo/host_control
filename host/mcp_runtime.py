@@ -108,6 +108,15 @@ class McpRuntime:
     def _ended_query(backend, tool, args):
         """Results of the ended session stay readable; nothing is started or run again (#94)."""
         from host.mcp_server import _error_result
+        if tool == "artifact_list" and getattr(backend, "final_artifacts", None) is not None:
+            views = backend.final_artifacts
+            if args["cursor"]:
+                views = [v for v in views if v["artifact_id"] > args["cursor"]]
+            if args["status"] != "ANY":
+                views = [v for v in views if v["status"] == args["status"]]
+            page = views[:args["limit"]]
+            return success(artifacts=page, next_cursor=page[-1]["artifact_id"] if len(views) > len(page) else None,
+                           session_ended=True)
         final = getattr(backend, "final_runs", None)
         if not final:
             return None

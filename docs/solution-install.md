@@ -4,6 +4,10 @@
 패키지로 설치하고 `sandbox_runner`를 빌드하며, Shared와 artifact_export에
 SecureArtifactScanner를 기본 적용한다. Manager 소스 변경은 필요 없다.
 
+통합 실행은 Shared/Output 공통 반출을 기본 선택한다. Codex의 `artifact_list`에 두 출처를
+표시하고, 목록 확인 창 → 서비스 검사 → 최종 보관 승인 창을 거쳐 다운로드에 저장한다.
+Sandbox 종료 시 자동 Shared 보관도 같은 절차를 사용한다. [통합 반출 정책](unified-export.md).
+
 > 재검증 상태: Defender 정의 갱신 후 동일 해시의 기존 EXE가 탐지되지 않았다.
 > 새 배포 묶음 검사, 통합 설치, 정상 파일/EICAR 검사, 실제 Manager/Runner READY까지
 > 통과했다. 사용자 종료·보관 승인 후 다운로드 EXPORTED와 파일 해시/MOTW까지 확인했다.
@@ -122,7 +126,8 @@ MOTW의 ZoneId=3을 확인해 `State/session-result.json`에 결과를 남긴다
 
 반출 경로는 Guest `Desktop/Shared` → `Work/shared/<세션>` (실행 금지) → VM 종료/정리 확인
 → 서비스 Quarantine 검사 → 전부 CLEAN + 사용자 보관 선택 → Windows 다운로드 Known Folder의
-`SandboxShared/<세션>`이다. artifact_export는 기존 UTF-8 TXT 정책과 `State/exports`를 사용한다.
+`SandboxShared/<세션>/<반출 ID>`이다. 통합 실행의 artifact_export도 같은 정책·저장 경로를
+사용한다. `--unified-export` 없는 기존 수동 실행만 기존 UTF-8 TXT/State/exports 경로를 사용한다.
 Shared는 파일당 50 MiB, 전체 2 GiB/20,000개이며 악성·미확인·오류·한도 초과 시 전체 반출을
 보류/차단한다. 자동 테스트 대역의 성공을 실제 반출 성공으로 계산하지 않는다.
 
