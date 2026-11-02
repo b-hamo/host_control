@@ -31,6 +31,17 @@ def listed(client, status="ANY"):
             return files
 
 
+def runtime_state(client):
+    """A pending shutdown/approval is not a failed or stopped VM."""
+    while True:
+        try:
+            return client.call("runtime_get_state")
+        except RuntimeError as exc:
+            if "CLEANUP_UNCONFIRMED" not in str(exc):
+                raise
+            time.sleep(2)
+
+
 def verify_file(item, expected, root):
     if item["status"] != "EXPORTED" or not item.get("export_path"):
         raise RuntimeError(f"not EXPORTED: {item}")
@@ -63,7 +74,7 @@ def main():
                                 artifact_expected=True)
         deadline = time.monotonic() + 210
         while True:
-            runtime = client.call("runtime_get_state")
+            runtime = runtime_state(client)
             if runtime.get("runtime_state") == "READY":
                 break
             if runtime.get("runtime_state") in ("FAILED", "TERMINATED") or time.monotonic() > deadline:
@@ -121,7 +132,7 @@ def main():
         save("WAITING_FOR_USER_CLOSE_REVIEW_AND_KEEP")
         print("Close this Sandbox window, confirm the remaining file list, then approve final Keep.", flush=True)
         while True:
-            runtime = client.call("runtime_get_state")
+            runtime = runtime_state(client)
             if runtime.get("runtime_state") == "TERMINATED":
                 break
             time.sleep(2)
