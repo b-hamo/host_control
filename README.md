@@ -79,6 +79,8 @@ VM 및 창 backend와 Defender 판정/사용자 선택은 테스트 대역이다
 
 `host/` 파일별 역할, 층 구조, 요청이 지나가는 길은 [host/README.md](host/README.md)에 있다.
 
+코딩 에이전트(Codex·Claude Code)가 이 저장소를 고칠 때 읽는 지도와 규칙은 [AGENTS.md](AGENTS.md)에 있다.
+
 ## 실행
 
 Python 3.13 (팀 공통 3.13.15).

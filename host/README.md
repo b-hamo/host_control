@@ -143,7 +143,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 
 | 하고 싶은 것 | 볼 파일 |
 |---|---|
-| 새 도구 추가, 도구 입력 규칙 변경 | `schema/mcp-tools/*.json` → `broker.py`의 `OPERATIONS`·`translate()` |
+| 새 도구 추가, 도구 입력 규칙 변경 | `schema/mcp-tools/*.json` → `broker.py`의 `OPERATIONS`·`translate()` (같이 고칠 곳 전체는 [AGENTS.md](../AGENTS.md) 규칙 1) |
 | 보안 규칙 추가 (차단할 요청) | `policy.py` |
 | 호출 빈도 제한 변경 | `broker.py`의 `RATE_LIMITS` |
 | 오류별로 Agent에게 안내할 다음 행동 | `broker.py`의 `ERROR_HINTS` |
@@ -171,6 +171,8 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_scanner_integration.py` | 실제 Windows (환경 변수로 켬): MpCmdRun 판정 근거, 설치된 서비스를 일반 사용자로(ACL·패키징·전 구간), 관리자로(중지·강제 종료·재설치). `scanner_service/README.md` §18 |
 | `tests/test_artifact_scanner_service.py` | `defender-service` 반출: HTTPS → 파이프 → 서비스 Job(프로세스 안 서비스, 가짜 Defender), 한글·빈·큰 파일, 판정별 차단, 시간 초과, 해시 불일치, 서비스 없음·다른 공개 폴더·중간 중단, 수신 규칙, 결과 불일치, 채널 끊김·세션 종료, 재공개 거부. `SCANNER_SERVICE_TESTS=1`이면 설치된 실제 서비스로 정상 TXT·EICAR |
 | `tests/test_artifact_export.py` | 파일 반출: Runner 계약 예제 14개, bootstrap 선택, token 종류 분리, Telemetry 없으면 READY 안 됨, 중복 후보, 한글·빈 파일 반출(바이트·해시 일치, 빈 201), 승인 거부, 검사 통과·차단·오류·시간 초과·형식, Runner 거부·결과 불일치·결과 없음, 채널·연결 끊김·세션 종료 취소, 수신 거부 코드, AMSI EICAR 자체 시험 |
+| `tests/test_repo_rules.py` | 저장소 규칙([AGENTS.md](../AGENTS.md)): 코드가 비교하는 도구 이름·도구 표·거부 단축키가 도구 규격과 맞는지, Agent에게 가는 오류 코드마다 `ERROR_HINTS`가 있는지, 패키지 의존 방향, 한글 .ps1의 BOM, README의 도구 수와 모듈 표, AGENTS.md가 가리키는 파일 |
+| `tests/test_codex_skill.py` | 팀 공용 코덱스 Skill이 이 Host에 있는 도구·옵션만 부르는지 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |
 | `tests/mini_runner.py` | 테스트용 최소 Runner (테스트가 아니라 도구) |
 
