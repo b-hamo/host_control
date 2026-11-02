@@ -1,6 +1,6 @@
 # Output 단일 반출 검증 기록 (#105)
 
-검증일: 2026-11-03. 작업은 진행 중이며 실제 최종 반출 완료 기록은 아직 없다.
+검증일: 2026-11-03. 최신 Host/Runner의 실행 중 반출과 창 닫기 후 반출을 완료했다.
 
 ## 실제 Windows Sandbox에서 확인한 것
 
@@ -14,7 +14,44 @@
   `Output snapshot verification passed`, `NATIVE_EXIT=0`으로 끝났다.
 - 실행 중 `output-regression.txt` 반출을 요청했으나 목록 확인 응답이 없어 HELD가 됐다.
   공개되지 않은 임시 사본을 유지했다. 안내창까지 기다리다 60초 MCP 제한을 넘는 문제를
-  확인해 Output 도구의 제한을 늘렸다. 수정 후 실제 창 재검증은 필요하다.
+  확인해 Output 도구의 제한을 늘렸다. 아래 최신 구성에서 실제 창 재검증을 완료했다.
+
+## 최신 구성의 실제 최종 반출
+
+- Host `c0f4047c7a6aa99bcbb8c8b046f7011a67488ea9`, Runner
+  `0bbacd3fcf6ef63357e4e9bad0f1c17584cd4f9f`, Manager
+  `66923d381e7090a880e4b9000beb4a0c946ba332`을 함께 실행했다.
+- Runner 실행 파일 SHA-256:
+  `2a9c0f156e74aa0371a34ba6f66515359846e4fab101a9168ee2e2e4e2205641`.
+- 세션: `SES-b4062448bd9a45b8851b7eaf6a268292`, generation 1.
+  Guest의 Output 바로가기 타깃에 무해한 고정 바이트를 저장했다.
+- 실행 중 BIN과 ZIP을 `artifact_export`로 요청했다. 실제 사용자가 목록 확인과
+  최종 보관 창을 처리했고, 두 파일 모두 `EXPORTED`, `engine=defender-service`가 됐다.
+- 07:07:29 KST 사용자의 Sandbox 창 닫기를 감지했다. 전체 목록 CAPTURE/VERIFY 응답을
+  받은 뒤 07:07:29.596 TERMINATE를 보냈다. 07:07:30.869 Manager 종료·정리를 확인한 뒤
+  남은 TXT의 목록 확인·검사·최종 보관을 진행했다. 07:07:37.867 사용자의 keep을 기록했고,
+  07:07:38.813 Host 서버 정리를 마쳤다. 이후 상태는 `TERMINATED`, `host_released=true`,
+  `host_error=null`이다.
+
+| 파일 | 반출 ID | 바이트 | SHA-256 | 시점 |
+|---|---|---:|---|---|
+| o-1103.bin | ART-000001 | 7 | a0fee516a1277bacc2f375afaf8f5a9ac05c5529dd5075ca616cbd9d0afe53a9 | 실행 중 |
+| p-1103.zip | ART-000002 | 22 | 8739c76e681f900923b900c9df0ef75cf421d39cabb54650c4b9ad19b6a76d85 | 실행 중 |
+| c-1103.txt | ART-000003 | 10 | e36ef977a4a50ab35a8d767bf6e82a53582c6690fa228b8a3bd637237662e5e3 | 창 닫기 후 |
+
+최종 위치는 `Downloads/SandboxOutput/<위 세션>/<반출 ID>/<파일명>`이다.
+세 파일 모두 예상 바이트와 SHA-256이 일치하며 `Zone.Identifier: ZoneId=3`이 있다.
+각 파일은 정확히 한 사본씩 존재하고, 종료 시 이미 반출한 BIN/ZIP을 중복 공개하지 않았다.
+Host 대기 영역에는 `output-state.json`만 남았고 `files=[]`, 확보 상태는 `CAPTURED`,
+`complete=true`다. 검사 서비스는 Running이며 세 반출 모두 서비스의 CLEAN 응답을 요구하는
+경로로 완료됐다. 서비스 전용 ProgramData의 로그·격리 폴더는 현재 사용자 ACL로 열 수 없으므로,
+그 폴더의 물리적 삭제를 별도로 실측했다고 주장하지 않는다. 서비스 정리 요청 성공은
+반출 경로의 필수 조건이다. 악성 판정·오류 처리는 아래 회귀 검사와 구분한다.
+
+로컬 원본 증거: `SecureCUAState/solution/output-latest-evidence`의
+`0024.json`(세 후보), `0029.json`(실행 중 두 반출), `0030.json`(종료 상태),
+`0031.json`(세 반출 완료), `published-files.json`(바이트·해시·MOTW), 같은 상태 루트의
+`host.log` 및 세션별 `audit/*.jsonl`. 개인 경로·세션 설정·토큰을 저장소에 복사하지 않는다.
 
 ## 자동 회귀
 
@@ -52,16 +89,16 @@ Python 3.13.7 embedded와 테스트 의존성을 Input에 반입하고 Guest의 
 일부 테스트의 VM, 전체 목록, 검사 판정, 사용자 선택은 대역이다. 이것을 설치된 Defender나
 사용자의 실제 승인 증거로 간주하지 않는다.
 
-## 남은 확인
+## 검증 범위와 제한
 
-- 최신 Host/Runner 구성으로 재시작 후 실제 Defender 검사와 두 승인 창, 다운로드의
-  파일 내용·SHA-256·MOTW·단일 사본을 확인해야 한다.
-- 실행 중 반출에 이어 정상 종료/창 닫기에서 최종 Output 확보와 남은 파일 반출을 확인해야 한다.
-- 최신 프로토콜의 실패/경쟁 및 설치 갱신 경로 검증을 마친 뒤 Draft를 해제한다.
+- 실제 서비스 검사와 두 승인 창, 실행 중 및 창 닫기 후 다운로드 반출을 확인했다.
+- 프로토콜 실패/경쟁 및 설치 갱신 경로는 회귀 테스트로 검증했다. 다른 PC에서의
+  신규 설치 실측과 이번 세션에서의 악성 파일 실험은 수행하지 않았다.
+- 강제 VM 소멸이나 Host 장애 전에 전송되지 않은 파일까지 복구한다는 보장은 없다.
 - 기존 Shared 임시 잔여물은 자동 삭제하거나 이관하지 않는다.
 
 ## 등록한 작업
 
-- Host 이슈 [#105](https://github.com/b-hamo/host_control/issues/105), Draft PR [#108](https://github.com/b-hamo/host_control/pull/108).
-- Runner 이슈 [#35](https://github.com/b-hamo/sandbox_runner/issues/35), Draft PR [#36](https://github.com/b-hamo/sandbox_runner/pull/36).
-- Manager 소스는 변경하지 않았다. 두 PR은 develop 대상이며 실제 최종 반출 검증 전까지 Draft다.
+- Host 이슈 [#105](https://github.com/b-hamo/host_control/issues/105), PR [#108](https://github.com/b-hamo/host_control/pull/108).
+- Runner 이슈 [#35](https://github.com/b-hamo/sandbox_runner/issues/35), PR [#36](https://github.com/b-hamo/sandbox_runner/pull/36).
+- Manager 소스는 변경하지 않았다. 두 PR은 develop 대상이며 함께 적용해야 한다.
