@@ -43,6 +43,10 @@ Python 3.13.7 embedded와 테스트 의존성을 Input에 반입하고 Guest의 
   중복 CAPTURE·잘못된 ID 해제 거부, 반복 RELEASE, 종료 후 잠금 정리를 추가해 Guest에서 통과했다.
   `Output snapshot and worker protocol verification passed`, `NATIVE_EXIT=0`.
   반입 패키지 SHA-256: `507f60d1625c1bea5172dee3c9da768da212cc3aa014f6ed68478f45b950f8c8`.
+- v8: Runner 세대 교체 후 이전 잠금 ID가 새 확보를 막는 경우와 이전 CAPTURE/VERIFY
+  응답이 늦게 도착하는 경우를 보완했다. 이전 수신본 유지와 새 세대 재확보를 검증했다.
+  빠른 점검 **18 통과**, 전체 **703 통과, 55 제외**, 193.76초, `PYTEST_EXIT=0`.
+  반입 패키지 SHA-256: `6ba259c1f400690d14f6e197b8fb53be44ecd89eba7866311895283fd9d2f873`.
 
 회귀 테스트는 MCP/WSS/HTTPS 및 Windows 파일 잠금·Named Pipe 통신을 실제로 사용한다.
 일부 테스트의 VM, 전체 목록, 검사 판정, 사용자 선택은 대역이다. 이것을 설치된 Defender나

@@ -285,3 +285,53 @@ def test_lost_capture_reply_releases_same_id_without_recapturing(tmp_path, servi
         assert output._lease == ((session.identity, calls[0][1]) if release_fails else None)
         assert not session.terminated
     asyncio.run(run())
+
+
+def test_replacement_generation_can_capture_without_reusing_old_lease_or_losing_receipts(tmp_path, service, monkeypatch):
+    runtime, client = service()
+    async def run():
+        broker, old, _, output = setup(tmp_path, runtime, client)
+        art = await receive(broker, output, old)
+        output._lease = (old.identity, str(uuid.uuid4()))
+        output._captured, output._closing = old.identity, True
+        new = RuntimeSession((*old.identity[:2], old.identity[2] + 1))
+        output.launcher.session = new
+        output.bind(new)
+        assert output.owns(art) and broker.grants.bytes_held == art.size
+        assert not output.acquisition["complete"] and output._captured is None
+        calls = []
+        async def snapshot(session, operation, snapshot_id):
+            assert session is new
+            calls.append(operation)
+            return {"files": []}
+        monkeypatch.setattr(output, "_snapshot", snapshot)
+        await output.refresh(new)
+        assert calls == ["CAPTURE", "VERIFY", "RELEASE"]
+        assert output.acquisition["identity"] == list(new.identity)
+        assert output.acquisition["artifacts"] == [] and output.owns(art)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("switch_at", ["CAPTURE", "VERIFY"])
+def test_late_snapshot_reply_from_retired_generation_never_completes_current_capture(tmp_path, service, monkeypatch, switch_at):
+    from host.artifacts import ArtifactError
+    runtime, client = service()
+    async def run():
+        _, old, _, output = setup(tmp_path, runtime, client)
+        new = RuntimeSession((*old.identity[:2], old.identity[2] + 1))
+        calls = []
+        async def snapshot(session, operation, snapshot_id):
+            calls.append((session.identity, operation))
+            if session is old and operation == switch_at:
+                output.launcher.session = new
+                output.bind(new)
+            return {"files": []}
+        monkeypatch.setattr(output, "_snapshot", snapshot)
+        with pytest.raises(ArtifactError, match="retired Runner generation"):
+            await output.refresh(old, closing=True)
+        assert output._captured is None and not output.acquisition["complete"]
+        assert calls[-1] == (old.identity, "RELEASE")
+        await output.refresh(new, closing=True)
+        assert output._captured == new.identity and output.acquisition["complete"]
+        assert output.acquisition["identity"] == list(new.identity)
+    asyncio.run(run())

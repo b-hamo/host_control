@@ -176,7 +176,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_artifact_export.py` | 파일 반출: Runner 계약 예제 14개, bootstrap 선택, token 종류 분리, Telemetry 없으면 READY 안 됨, 중복 후보, 한글·빈 파일 반출(바이트·해시 일치, 빈 201), 승인 거부, 검사 통과·차단·오류·시간 초과·형식, Runner 거부·결과 불일치·결과 없음, 채널·연결 끊김·세션 종료 취소, 수신 거부 코드, AMSI EICAR 자체 시험 |
 | `tests/test_repo_rules.py` | 저장소 규칙([AGENTS.md](../AGENTS.md)): 코드가 비교하는 도구 이름·도구 표·거부 단축키가 도구 규격과 맞는지, Agent에게 가는 오류 코드마다 `ERROR_HINTS`가 있는지, 패키지 의존 방향, 한글 .ps1의 BOM, README의 도구 수와 모듈 표, AGENTS.md가 가리키는 파일 |
 | `tests/test_codex_skill.py` | 팀 공용 코덱스 Skill이 이 Host에 있는 도구·옵션만 부르는지 |
-| `tests/test_output_export.py` | 검증된 수신본 유지, 목록 확인·검사·최종 승인 순서, 차단·보류, 동일 바이트 재사용, 정리 실패, 잠금 해제 오류, 확보 실패 시 종료 금지 |
+| `tests/test_output_export.py` | 검증된 수신본 유지, 목록 확인·검사·최종 승인 순서, 차단·보류, 동일 바이트 재사용, 정리 실패, 잠금 해제 오류, 확보 실패 시 종료 금지, 세대 교체 후 재확보와 이전 응답 거부 |
 | `tests/test_shared_folder.py`, `tests/test_window_close.py` | Shared 옵션 거부, Output 승인 창, 창 닫힘 시 확보 → 종료 → 반출 순서와 확보 실패 시 VM 유지 |
 | `tests/test_unified_verification.py`, `tests/test_solution_session.py` | 실제 Output 바로가기 기반 검증 명령, 반출 해시·MOTW·중복 확인, 통합 실행 진입점 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |

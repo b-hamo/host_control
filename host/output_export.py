@@ -52,7 +52,24 @@ class OutputExport:
         self.bind(launcher.session)
 
     def bind(self, session):
+        previous = getattr(self, "_identity", None)
+        self._identity = session.identity
+        if previous is not None and previous != session.identity:
+            # The replacement Runner has its own Output tree and snapshot IDs.
+            # Manager retires the old Runner; never send its lease to the new
+            # generation or describe its already received copies as current.
+            self._lease = self._captured = None
+            self._closing = False
+            self._last_refresh = 0.0
+            self.acquisition = {"status": "INCOMPLETE", "complete": False,
+                                "identity": list(session.identity),
+                                "detail": "Runner generation changed; earlier received copies retained"}
+            self._persist()
         session.before_terminate = self.before_terminate
+
+    def _require_current(self, session):
+        if session.identity != self._identity:
+            raise ArtifactError("ARTIFACT_BLOCKED", "Output snapshot belongs to a retired Runner generation")
 
     def owns(self, art):
         return art.artifact_id in self.receipts
@@ -228,6 +245,7 @@ class OutputExport:
                             asyncio.get_running_loop().time() - self._last_refresh < 5):
             return
         async with self._transfer_lock:
+            self._require_current(session)
             if self._lease is not None:
                 identity, lease_id = self._lease
                 if identity != session.identity:
@@ -243,6 +261,7 @@ class OutputExport:
             self._lease = (session.identity, snapshot_id)
             try:
                 manifest = await self._snapshot(session, "CAPTURE", snapshot_id)
+                self._require_current(session)
                 seen, events, current = set(), set(), []
                 for item in manifest["files"]:
                     path = PureWindowsPath(item["relative_path"])
@@ -266,6 +285,7 @@ class OutputExport:
                         raise ArtifactError("ARTIFACT_BLOCKED", "received Output bytes differ from locked manifest")
                     current.append(art.artifact_id)
                 await self._snapshot(session, "VERIFY", snapshot_id)
+                self._require_current(session)
                 self.acquisition = {"status": "CAPTURED", "complete": True, "snapshot_id": snapshot_id,
                                     "identity": list(session.identity), "artifacts": current}
                 self._captured = session.identity if closing else None
