@@ -68,3 +68,45 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify_unified_expor
 목록 확인과 최종 승인을 선택한다. 실제 경로·바이트·SHA-256·MOTW·중복 여부를 확인하며
 `State/unified-export-verification.json`에 단계별 결과를 기록한다. 에러가 나도 VM을 임의로
 종료하거나 승인하지 않는다. 실제 검증 완료 전 해당 결과를 통과로 표시하지 않는다.
+
+### 실제 서비스·승인 창을 통한 반출 확인 (2026-11-03 KST)
+
+세션 `SES-c354a4dd5cd74512950cbea4436fe026`에서 설치된 SecureArtifactScanner와
+실제 사용자 목록 확인/최종 보관 승인을 거쳐 아래 세 경로를 확인했다.
+검증기는 `EXPORTED_ALL_THREE`, 종료 코드 0으로 완료했다.
+
+| 경로 | 파일 | 크기 | 세션 다운로드 폴더 아래 위치 |
+| --- | --- | ---: | --- |
+| 실행 중 Shared 반출 | `unified-shared-22a0f64fa4.bin` | 26 B | `ART-000003/` |
+| Runner Output HTTPS 수신 후 반출 | `unified-output-22a0f64fa4.bin` | 26 B | `ART-000001/` |
+| Sandbox 종료 후 남은 Shared 자동 반출 | `unified-close-22a0f64fa4.txt` | 28 B | `remaining-af149a31dcc5/` |
+
+저장 루트는 Windows 다운로드 폴더의 `SandboxShared/<세션>`이다. 세 파일 모두
+예상 바이트·SHA-256·MOTW `ZoneId=3`이 일치하고, 종료 뒤 최종 파일이 각각 한 개만
+남는 것을 확인했다. 기존 Shared 수동 반출 파일이 종료 처리에서 중복 저장되지 않았다.
+
+서비스 감사 로그도 같은 세션·아래 해시에 대해 `scan_profile=shared`,
+`defender_verdict=CLEAN`, `defender_exit_code=0`, `malware_detected=false`를 기록했다.
+엔진은 `platform 4.18.26100.4-0 / engine 1.1.26100.4 / sig 1.463.93.0`이다.
+
+```text
+Shared: 6d20acfce788749b3e6f5b17c4eddd14952c87d5083ae3600aafa635e0678a26
+Output: f789237172d68c3b3494903047e018dadc36e4e76997895c91024242c20e68f2
+종료:   8ef6c230df34732a0e9e5fb003668b53229ac0f4961f0aa25f380352cb746763
+```
+
+이 scan-only 경로는 CLEAN 결과를 받은 뒤 서비스 측 임시 사본을 `abort`로 정리하고,
+Host가 잠근 원본을 승인 후 공개한다. 따라서 서비스 작업의 종료 상태는
+`CANCELLED/ABORTED` 후 `DISPOSED`로 남을 수 있다. 사용자 반출 취소를 뜻하는 값은
+아니며, 서비스의 Defender 판정·해시와 Host의 `EXPORTED` 결과를 함께 대조해야 한다.
+
+검증 중 긴 명령의 입력 시간 초과 및 Output 후보 누락이 발생했다. 검증기를 파일별
+짧은 명령으로 변경하고 실행 창에 넣기 전 259자 상한을 확인한 뒤 세 경로가 통과했다.
+이전 실패 세션의 입력을 재전송하지 않았으며 사용자가 닫은 뒤 새 검증 세션을 사용했다.
+Guest 관찰 화면은 State의 `verification-<임의값>`에 보존한다. `--await-review`는
+승인 창을 열기 전 목록 확인 준비를 기다리는 검증기 옵션이며 제품 승인 창을 대신
+승인하지 않는다. 최종 반출 보고서는 `State/unified-export-verification.json`에 남는다.
+
+이 실제 검증은 무해한 세 파일에 대한 정상 경로 확인이다. 악성·검사 오류·변조·취소 등
+거부 경로는 위 자동 회귀 테스트 범위이며, 이번 실제 세션에서 악성 파일을 실행하거나
+모든 실패 조건을 재현한 것은 아니다.

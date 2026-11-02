@@ -21,6 +21,35 @@ from host.solution_session import Client
 from host.router_command_bundle import output_directory
 
 
+class EvidenceClient(Client):
+    """Retain the actual Guest observations for diagnosing input failures."""
+    def __init__(self, config, profile):
+        super().__init__(config, profile)
+        self.evidence_dir = Path(profile["state"]) / ("verification-" + uuid.uuid4().hex)
+        self.evidence_dir.mkdir()
+
+    def rpc(self, method, params, timeout=210):
+        response = super().rpc(method, params, timeout)
+        if method == "tools/call" and params.get("name") == "computer_observe":
+            for item in response.get("content", []):
+                if item.get("type") == "image" and item.get("mimeType") == "image/png":
+                    (self.evidence_dir / f"observe-{self.seq:04d}.png").write_bytes(base64.b64decode(item["data"]))
+        return response
+
+
+def sample_command(identity, name, data):
+    payload = base64.b64encode(data).decode()
+    if "-output-" in name:
+        path = "'" + output_directory(identity) + "\\" + name + "'"
+    else:
+        path = f"(Join-Path ([Environment]::GetFolderPath('Desktop')) 'Shared\\{name}')"
+    command = f'powershell -NoP -C "[IO.File]::WriteAllBytes({path},[Convert]::FromBase64String(\'{payload}\'))"'
+    # The Run dialog can truncate long input even if SendInput reports success.
+    if len(command) > 259:
+        raise ValueError("verification command exceeds the Run dialog input limit")
+    return command
+
+
 def listed(client, status="ANY"):
     files, cursor = [], None
     while True:
@@ -57,6 +86,8 @@ def verify_file(item, expected, root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--await-review", action="store_true",
+                        help="pause before opening dialogs so an operator can review the report first")
     args = parser.parse_args()
     profile = read_profile(args.config)
     report_path = Path(profile["state"]) / "unified-export-verification.json"
@@ -65,7 +96,9 @@ def main():
         report["status"] = status
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(status, flush=True)
-    client = Client(args.config, profile)
+    save("STARTING")
+    client = EvidenceClient(args.config, profile)
+    report["observations"] = str(client.evidence_dir)
     try:
         client.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                                   "clientInfo": {"name": "unified-export-verifier", "version": "1"}})
@@ -89,19 +122,21 @@ def main():
         samples = {f"unified-shared-{nonce}.bin": b"Shared binary\x00\xff " + nonce.encode(),
                    f"unified-output-{nonce}.bin": b"Output binary\x00\xfe " + nonce.encode(),
                    f"unified-close-{nonce}.txt": b"automatic closure " + nonce.encode()}
-        commands = []
-        for name, data in samples.items():
-            parent = ("'" + output_directory(identity) + "'" if "-output-" in name else
-                      "(Join-Path ([Environment]::GetFolderPath('Desktop')) 'Shared')")
-            commands.append(f"[IO.File]::WriteAllBytes((Join-Path {parent} '{name}'),[Convert]::FromBase64String('{base64.b64encode(data).decode()}'))")
-        encoded = base64.b64encode((";".join(commands)).encode("utf-16le")).decode()
-        command = "powershell -NoProfile -EncodedCommand " + encoded
-        client.call("computer_observe")
-        client.call("computer_hotkey", keys=["win", "r"])
-        client.call("computer_observe")
-        client.call("computer_type", text=command)
-        client.call("computer_observe")
-        client.call("computer_keypress", key="enter")
+        commands = [sample_command(identity, name, data) for name, data in samples.items()]
+        report["destination_root"] = str(destination)
+        report["samples"] = [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                             for name, data in samples.items()]
+        save("PREPARING_GUEST_FILES")
+        # Keep each Unicode-input action below the runner's action deadline.
+        # A failed input raises immediately; never press Enter or replay it.
+        for command in commands:
+            client.call("computer_observe")
+            client.call("computer_hotkey", keys=["win", "r"])
+            client.call("computer_observe")
+            client.call("computer_type", text=command)
+            client.call("computer_observe")
+            client.call("computer_keypress", key="enter")
+            time.sleep(2)
         deadline = time.monotonic() + 45
         while True:
             candidates = listed(client)
@@ -109,9 +144,27 @@ def main():
             if len(own) == len(samples):
                 break
             if time.monotonic() > deadline:
+                report["candidates"] = candidates
+                client.call("computer_observe")
                 raise RuntimeError("Guest files did not all become export candidates")
             time.sleep(1)
         report["candidates"] = candidates
+        if args.await_review:
+            signal = Path(profile["state"]) / f"unified-review-{nonce}.json"
+            report["review_signal"] = str(signal)
+            report["destination_root"] = str(destination)
+            report["samples"] = [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                                 for name, data in samples.items()]
+            save("WAITING_FOR_OPERATOR_REVIEW")
+            # This gate never answers either product dialog. It only allows the
+            # operator to prepare before their existing 45-second UI deadlines.
+            while not signal.exists():
+                if runtime_state(client).get("runtime_state") != "READY":
+                    raise RuntimeError("session ended while awaiting operator review")
+                time.sleep(1)
+            decision = json.loads(signal.read_text(encoding="utf-8-sig"))
+            if decision != {"session_id": share.name, "reviewed": True}:
+                raise RuntimeError("operator review signal does not match this session")
         save("WAITING_FOR_MANUAL_EXPORT_REVIEW_AND_APPROVAL")
         for name in list(samples)[:2]:
             candidate = own[name]
