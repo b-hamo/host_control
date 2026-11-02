@@ -51,6 +51,7 @@ exit 0
     # Python started by pwsh can inherit its incompatible PS7 module search path.
     # Let Windows PowerShell initialize its own built-in modules, as a normal launch does.
     env = {key: value for key, value in os.environ.items() if key.upper() != 'PSMODULEPATH'}
-    result = subprocess.run(['powershell.exe', '-NoProfile', '-Command', script],
+    # Bypass, as the installer passes: the default Windows policy refuses the dot-sourced script.
+    result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
                             capture_output=True, text=True, timeout=20, env=env)
     assert result.returncode == 0, (result.stdout, result.stderr)

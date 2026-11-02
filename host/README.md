@@ -1,7 +1,8 @@
 # host/ — Host 쪽 코드 안내
 
 Agent(Codex)의 요청을 받아 검사하고, 격리된 Sandbox 안의 Runner로 전달하는 Host 프로그램이다.
-파일 22개가 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.
+핵심 파일은 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.
+Router 부품(`router_*.py`)과 통합 솔루션(`solution*.py` 등)은 층 표 아래에 따로 정리했다.
 
 ```
 Codex (AI)
@@ -38,7 +39,9 @@ Sandbox 안 Runner
 |---|---|---|
 | `mcp_server.py` | Codex가 자식 프로세스로 켜는 MCP Server. `tools/list`에 도구 목록을 주고, `tools/call`을 Broker에 넘겨 결과를 돌려준다. 켜질 때 ④층(wss 서버, 세션 등록, bootstrap 파일)도 함께 시작한다 | 5.7 |
 | `tool_availability.py` | 이 세션에서 보여줄 도구를 정하는 규칙. Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 빼버리므로, 무거운 라이브러리 없이 쓸 수 있게 따로 뺐다 | 5.7 |
-| `tool_catalog.py` | `schema/mcp-tools/`의 도구 18개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
+| `tool_catalog.py` | `schema/mcp-tools/`의 도구 20개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
+| `mcp_runtime.py` | 오래 연결된 stdio MCP 뒤에서 실제 실행 Host를 필요할 때 켜고 바꾼다. 끝난 세션은 새 작업 요청으로만 대신하고, 조회·GUI 호출은 작업을 다시 돌리거나 다른 프로세스의 포트를 가져오지 않는다 (#54) | 5.7 |
+| `single_host.py` | `--agent-guard`: 이 PC에서 GUI MCP Host를 한 번에 하나만, 필요할 때 켠다. Codex 앱이 대화마다 띄운 Host가 시작 때 17443/17444를 잡아 두 번째 대화부터 포트 충돌(WinError 10048)이 나던 문제 때문 (#58) | 5.7 |
 
 ## ② 요청을 검사하는 층 (Broker)
 
@@ -58,6 +61,8 @@ Sandbox 안 Runner
 | `artifacts.py` | 파일 반출 본체 (artifact-export-v1). 후보 등록·artifact_id, 승인 뒤 업로드 권한(upload_id·token·기한·상한) 먼저 등록 → ARTIFACT_REQUEST → 수신 기록과 ARTIFACT_RESULT 대조 → 검사 → 같은 바이트만 공개. 세션 종료·세대 변경·채널 끊김 시 취소 | 5.8 |
 | `artifact_scan.py` | 반출 전 검사. 형식 정책(UTF-8 `.txt`) + 백신. 기본은 검사기 없음 = 차단. AMSI는 EICAR 자체 시험을 통과해야만 사용. `defender-service`는 SecureArtifactScanner 서비스의 상태 확인·검사 결과 해석 | 5.8 |
 | `scanner_client.py` | `defender-service`의 Named Pipe 클라이언트: 업로드 청크 전송·검사·상태·공개·취소, 응답 ID·Job 신원 확인, 서비스 PID 확인, 모든 호출을 작업 스레드에서 | 5.8 |
+| `shared_scanner.py` | Shared 폴더 반출. VM 종료가 확인된 뒤 검사 서비스 격리·Defender 검사 → 사용자 선택 → 다운로드/SandboxShared 복사를 한 트랜잭션으로 한다. 마지막 바이트를 복사할 때까지 원본을 잠그고, 서비스가 실패해도 sandbox_manager의 직접 MpCmdRun 검사로 돌아가지 않는다 (#99) | 5.8 |
+| `unified_export.py` | Shared와 Runner Output 반출을 하나의 확인·검사·승인·공개 흐름으로 묶는다. MCP로는 Host가 만든 후보 ID만 오가고 경로는 받지 않는다. 검사기 대체나 자동 승인은 없다 (#103) | 5.8 |
 | `approval.py` | 사용자 승인 창. Host 화면에 뜨고 AI는 답할 수 없음. 45초 무응답 = 거부 (MCP 호출 제한 60초 안), 호출이 취소되면 창도 닫음 | 5.6 |
 | `lifecycle.py` | Sandbox 켜고 끄기 (Lifecycle 담당의 Sandbox Manager 호출). `task_submit` 때 백그라운드로 켜기 시작 → Sandbox가 보는 Host 주소로 인증서·bootstrap 작성 → READY면 token 파일 삭제 → 세션이 끝나면(정상·실패·Codex 종료) 끄고 치운다. Runner가 응답이 없으면 같은 Sandbox에서 Runner만 다시 켜거나 Sandbox를 새로 켠다(다음 세대). `mcp_server.py --runner-exe`일 때만 쓴다 | 5.9 |
 | `startup.py` | Startup Verification. Runner가 "준비됐다"고 해도 Host가 7가지(버전·Capability·Monitor·시계 / Worker 생존·첫 캡처·Heartbeat)를 확인한 뒤에만 READY. 등록 후 120초 안에 안 되면 실패 | 4.5 |
@@ -80,6 +85,38 @@ Sandbox 안 Runner
 - `scrp/validate.py`: 모든 메시지를 크기·인코딩·스키마로 검사
 - `scrp/envelope.py`: 메시지 봉투(ID·sequence·nonce·timestamp) 생성
 - `schema/`: Host ↔ Runner 메시지 규격, `schema/mcp-tools/`: Codex 도구 규격
+
+## Router 부품
+
+`router/`의 Router 엔진(engine·models·ports, Host를 모르는 순수 도메인)을 Host에 연결하는 어댑터다.
+#32에서 독립 Router로 들어왔고 #94에서 SCRP MCP 하나로 합쳐졌다. `sandbox_run`·`router_capture`·`router_execute`가
+이 부품을 쓴다. 설계는 [docs/unified-router-design.md](../docs/unified-router-design.md)에 있다.
+
+| 파일 | 하는 일 | WBS |
+|---|---|---|
+| `router_capture.py` | `router_capture` 본체 (`--router-capture`). 웹 페이지에서 본 명령 글자를 신뢰하지 않는 데이터로 보관한다. AI가 본 글자와 Host가 직접 읽은 클립보드를 따로 해시하고, URL을 열거나 무엇을 실행하지 않는다 | 7.x |
+| `router_command_intake.py` | 클립보드 글자를 분석용 데이터로 바꾸는 순수 변환. 지원하지 않는 형태는 보류로 남고, 어떤 분류 결과도 Host 실행을 허가하지 않는다 | 7.x |
+| `router_authority.py` | Host가 가진 출처·위임 기록. Agent의 주장과 분리되며, 신뢰된 Host 구성 코드에서만 채운다 | 7.x |
+| `router_gateway.py` | Router가 관리하는 요청에 대한 Host의 최종 결정과 실행 경계 | 7.x |
+| `router_gui_policy.py` | 위임받은 정확한 Guest 명령 실행 순서만 허용하는 선택형 정책. 기본 `Policy`를 바꾸지 않고, 다른 규칙의 DENY는 그대로 DENY | 7.x |
+| `router_gui_driver.py` | Manager 입력 파일과 검사한 실행 영수증으로 Guest 명령을 실행하는 GUI 드라이버. 영수증은 Guest 쪽 증거일 뿐 하드웨어 증명이 아니다. Host에서는 아무것도 실행하지 않는다 | 7.x |
+| `router_command_bundle.py` | 정확한 Windows 프로세스 요청을 실행되지 않는 Manager 입력 파일로 만든다. Host 서브프로세스가 없고 인자를 셸로 해석하지 않는다 | 7.x |
+| `router_inputs.py` | Host가 확인한 Router 입력 파일을 Sandbox Manager의 읽기 전용 입력 API에 묶는 어댑터. Agent는 Host 경로를 넘길 수 없다 | 7.x |
+| `router_sandbox.py` | Broker의 수명주기·반출을 재사용하는 Sandbox 실행 포트. 키보드 ACK를 명령 종료로 보지 않는다. 드라이버가 없으면 Sandbox를 켜기 전에 보류 | 7.x |
+| `router_ledger.py` | Host 전용 영속 멱등성 기록. 명령·글자·원본 오류는 남기지 않는다 | 7.x |
+| `router_local.py` | 고정된 Local 데이터 도구. 루트는 Host 소유의 데이터 전용 폴더여야 하고, 프로세스 API는 없다 | 7.x |
+
+## 통합 솔루션
+
+`installer/`의 통합 설치가 Codex에 등록하는 진입점과 그 설정·검증 도구다. 설치와 갱신은
+[docs/solution-install.md](../docs/solution-install.md), 반출 통합은 [docs/unified-export.md](../docs/unified-export.md)에 있다.
+
+| 파일 | 하는 일 | 이슈 |
+|---|---|---|
+| `solution.py` | Host·Manager·Runner를 묶은 진입점. 설치기가 만드는 Codex MCP 설정이 이 파일을 켠다. 검사 서비스가 필수이고 로컬 검사기로 대체하지 않는다. 시작 전에 경로(사용자 폴더·OneDrive와 분리)와 서비스 상태를 확인한다 | #99 |
+| `solution_config.py` | 옮겨 쓸 수 있는 설치 프로필과 Codex MCP 등록. 등록하면서 다른 설정이 하나라도 바뀌면 거부한다 (표준 라이브러리만) | #101 |
+| `solution_session.py` | 일반 사용자 권한의 MCP 클라이언트. 단독 시작과 대화형 반출 검증에 쓴다. Sandbox 닫기와 남기기·지우기 선택은 사람이 실제 Host 창에서 한다 | #101 |
+| `unified_verification.py` | 실제 MCP·Manager·Runner·검사 서비스와 사람의 확인 창으로 하는 대화형 검증. 다른 시험용 Sandbox를 닫고 돌린다. 창에 대신 답하거나 VM을 끄지 않는다 | #103 |
 
 ## 요청 하나가 지나가는 길
 
@@ -106,7 +143,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 
 | 하고 싶은 것 | 볼 파일 |
 |---|---|
-| 새 도구 추가, 도구 입력 규칙 변경 | `schema/mcp-tools/*.json` → `broker.py`의 `OPERATIONS`·`translate()` |
+| 새 도구 추가, 도구 입력 규칙 변경 | `schema/mcp-tools/*.json` → `broker.py`의 `OPERATIONS`·`translate()` (같이 고칠 곳 전체는 [AGENTS.md](../AGENTS.md) 규칙 1) |
 | 보안 규칙 추가 (차단할 요청) | `policy.py` |
 | 호출 빈도 제한 변경 | `broker.py`의 `RATE_LIMITS` |
 | 오류별로 Agent에게 안내할 다음 행동 | `broker.py`의 `ERROR_HINTS` |
@@ -134,6 +171,8 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_scanner_integration.py` | 실제 Windows (환경 변수로 켬): MpCmdRun 판정 근거, 설치된 서비스를 일반 사용자로(ACL·패키징·전 구간), 관리자로(중지·강제 종료·재설치). `scanner_service/README.md` §18 |
 | `tests/test_artifact_scanner_service.py` | `defender-service` 반출: HTTPS → 파이프 → 서비스 Job(프로세스 안 서비스, 가짜 Defender), 한글·빈·큰 파일, 판정별 차단, 시간 초과, 해시 불일치, 서비스 없음·다른 공개 폴더·중간 중단, 수신 규칙, 결과 불일치, 채널 끊김·세션 종료, 재공개 거부. `SCANNER_SERVICE_TESTS=1`이면 설치된 실제 서비스로 정상 TXT·EICAR |
 | `tests/test_artifact_export.py` | 파일 반출: Runner 계약 예제 14개, bootstrap 선택, token 종류 분리, Telemetry 없으면 READY 안 됨, 중복 후보, 한글·빈 파일 반출(바이트·해시 일치, 빈 201), 승인 거부, 검사 통과·차단·오류·시간 초과·형식, Runner 거부·결과 불일치·결과 없음, 채널·연결 끊김·세션 종료 취소, 수신 거부 코드, AMSI EICAR 자체 시험 |
+| `tests/test_repo_rules.py` | 저장소 규칙([AGENTS.md](../AGENTS.md)): 코드가 비교하는 도구 이름·도구 표·거부 단축키가 도구 규격과 맞는지, Agent에게 가는 오류 코드마다 `ERROR_HINTS`가 있는지, 패키지 의존 방향, 한글 .ps1의 BOM, README의 도구 수와 모듈 표, AGENTS.md가 가리키는 파일 |
+| `tests/test_codex_skill.py` | 팀 공용 코덱스 Skill이 이 Host에 있는 도구·옵션만 부르는지 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |
 | `tests/mini_runner.py` | 테스트용 최소 Runner (테스트가 아니라 도구) |
 

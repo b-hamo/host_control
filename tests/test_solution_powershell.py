@@ -13,8 +13,9 @@ pytestmark = pytest.mark.skipif(sys.platform != 'win32', reason='Windows PowerSh
 
 def ps(code):
     # Explicit success prevents a deliberately caught native failure from becoming
-    # PowerShell -Command's implicit process exit status.
-    return subprocess.run(['powershell.exe', '-NoProfile', '-Command', "$ErrorActionPreference='Stop'\n" + code + '\nexit 0'], capture_output=True, text=True)
+    # PowerShell -Command's implicit process exit status. Bypass, as the installer itself
+    # passes: under the default Windows policy a dot-sourced script is refused.
+    return subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "$ErrorActionPreference='Stop'\n" + code + '\nexit 0'], capture_output=True, text=True)
 
 
 def quoted(path):
