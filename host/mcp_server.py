@@ -169,6 +169,7 @@ class HostBackend(threading.Thread):
         self.retire_on_end = False                 # general MCP owns retirement; Router owns its own
         self.final_status = None
         self.final_runs = None                     # sandbox_run/router_* results, queryable after the end
+        self.final_artifacts = None
         self.cleanup_confirmed = False
 
     def run(self) -> None:
@@ -190,6 +191,9 @@ class HostBackend(threading.Thread):
                 self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             if self.session is not None:
                 self.final_status = self.session.status()
+                if self.artifacts is not None:
+                    self.final_artifacts = [self.artifacts.view(a) for a in self.artifacts._by_id.values()
+                                            if a.identity[:2] == self.session.identity[:2]]
             if self.runner is not None:
                 self.final_runs = self.runner.snapshot()
             self.loop.close()
@@ -244,7 +248,15 @@ class HostBackend(threading.Thread):
                 scanner = make_scanner(a.artifact_scanner, **kw)
             service_mode = getattr(scanner, "service_mode", False)
             # defender-service: received bytes go to the SecureArtifactScanner service, not a Host file
-            grants = ArtifactGrants(Path(a.artifact_dir) / "incoming", service=scanner.client if service_mode else None)
+            unified_mode = bool(getattr(a, "unified_export", False))
+            incoming = (Path(a.shared) / ".export-incoming" / a.session if unified_mode
+                        else Path(a.artifact_dir) / "incoming")
+            if unified_mode:
+                from host.inbox_download import check_no_execute
+                ok, why = check_no_execute(Path(a.shared))
+                if not ok:
+                    raise RuntimeError(f"unified export receive folder must deny execution: {why}")
+            grants = ArtifactGrants(incoming, service=scanner.client if service_mode and not unified_mode else None)
             grants.purge_leftovers()               # a crashed run never publishes its partial files
             self.artifacts = ArtifactBroker(grants, Path(a.export_dir), scanner,
                                             max_bytes=a.artifact_max_bytes,
@@ -337,6 +349,10 @@ class HostBackend(threading.Thread):
                                                 shared_chooser=getattr(a, "shared_chooser", None)
                                                 or getattr(approver, "choose_shared", None),
                                                 shared_notify=getattr(approver, "notify_shared", None))
+                if getattr(a, "unified_export", False):
+                    from host.unified_export import UnifiedExport
+                    unified = UnifiedExport(self.artifacts, finish_shared, approver, self.launcher)
+                    self.launcher._finish_shared = unified
                 policy = None
                 if getattr(a, "sandbox_run", False):
                     # Router parts in GUI mode: its policy wraps the base one (Win+R only for an
@@ -389,7 +405,7 @@ class HostBackend(threading.Thread):
                         await self.runner.close()    # removes run helpers from the inbox
                 finally:
                     if self.launcher is not None:
-                        await self.launcher.shutdown()
+                        await self.launcher.shutdown(timeout=900.0 if getattr(a, "unified_export", False) else 60.0)
 
     async def _check_scanner_service(self, session_id: str, export_dir: Path) -> None:
         """defender-service: check the service now and every few seconds after. Not usable means artifact
@@ -637,6 +653,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--inbox", type=Path, default=None,
                     help="with --runner-exe: shared download folder, mapped read-only into the Sandbox "
                          "(prepare it once with sandbox_manager tools/setup_inbox.ps1); enables inbox_download")
+    ap.add_argument("--unified-export", action="store_true",
+                    help="Shared and Output candidates use list review, service scan, final approval and Downloads")
     ap.add_argument("--save-downloads", action="store_true",
                     help="with --inbox: inbox_download also saves a copy in the user's Downloads folder (marked as "
                          "from the internet) that stays after the session")
@@ -659,6 +677,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--audit-dir", type=Path, default=HOST_DIR / ".audit")
     ap.add_argument("--log-file", type=Path, default=HOST_DIR / ".logs" / "mcp_server.log")
     args = ap.parse_args(argv)
+    if args.unified_export and (not args.artifact_export or args.shared is None
+                               or args.runner_exe is None or args.artifact_scanner != "defender-service"):
+        ap.error("--unified-export requires --artifact-export --shared --runner-exe and --artifact-scanner defender-service")
     if args.runner_exe is not None:
         # The Sandbox Manager says where the bootstrap goes and which address the Runner dials.
         if args.advertise_address or args.bootstrap_out:
@@ -700,6 +721,24 @@ def main(argv: list[str] | None = None) -> None:
     extra = ({ARTIFACT_CAPABILITY} if args.artifact_export else set()) | ({"host.inbox"} if args.inbox else set())         | ({"host.sandbox_run"} if args.sandbox_run else set()) | ({"host.router"} if args.router_capture else set())
     from host.mcp_runtime import McpRuntime
     tools = load_tool_list(extra)
+    if args.unified_export:
+        for tool in tools:
+            if tool["name"] == "artifact_list":
+                tool["description"] = (
+                    "List both Shared mirror files and Runner Output candidates. Present the list to the user "
+                    "before artifact_export. Shared entries are snapshots with size and SHA-256; if they change, "
+                    "list again. Output size is known after upload. Follow next_cursor for the full list. "
+                    "EXPORTED includes the actual path under Downloads/SandboxShared/<session>. "
+                    "Shared mirroring is asynchronous: save/close the Guest file and wait until it appears.")
+            elif tool["name"] == "artifact_export":
+                tool["description"] = (
+                    "Export a candidate ID from artifact_list, from either Shared or Output. First the person "
+                    "at this computer confirms the file list, then SecureArtifactScanner scans the fixed bytes, "
+                    "then a SEPARATE final keep/delete/hold dialog asks the person. Only approved CLEAN bytes "
+                    "reach Downloads/SandboxShared/<session>. No extension allowlist; size/link/content checks "
+                    "still apply. Never approve dialogs for the user. Poll artifact_list until EXPORTED or BLOCKED; "
+                    "an accepted request is not a completed export. Repeating an ID does not duplicate it. "
+                    "Sandbox closure still automatically offers the remaining Shared files through these same gates.")
     if args.agent_guard:
         guard_descriptions(tools)
     if args.shared is not None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import os
 import secrets
@@ -171,24 +172,62 @@ class ServiceSharedFinisher:
                     if not primary_error:
                         raise
 
-    async def _finish(self, share, dest, decide):
+    async def _finish(self, share, dest, decide, *, review=None, selected=None,
+                      expected=None, preserve_source=False, target_name=None,
+                      cancelled=None, session_identity=None):
+        """One transaction for Shared and received Output files.
+
+        ``review`` confirms the exact list before scanning; ``decide`` is a
+        separate decision after CLEAN. Callbacks may be async. ``expected``
+        binds a previously listed/received file to its size and SHA-256.
+        A live Shared source is retained; only the selected, locked bytes leave.
+        """
         from sandbox_manager.importer import downloads_folder, unique_path
         from sandbox_manager.shared import _remove
+        async def choose(callback, summary):
+            if callback is None:
+                return "hold"
+            answer = callback(summary)
+            return await answer if inspect.isawaitable(answer) else answer
+
+        def check_cancelled():
+            self._check_cancelled()
+            if cancelled and cancelled():
+                raise SharedScanError("CANCELLED", "export request or session ended")
+
         result = {"share": str(share), "dest": None, "files": [], "scan": None,
                   "engine": "defender-service", "events": []}
+        base = Path(dest).absolute() if dest is not None else downloads_folder() / "SandboxShared"
+        name = target_name or share.name
+        from sandbox_manager.importer import check_name
+        check_name(name)
+        target = unique_path(base, name)
+        result["planned_destination"] = str(target)
         handles, dirs = [], []
         stage = None
         remove_source = False
+        remove_selected = False
         deadline = time.monotonic() + self.timeout_s
         try:
             dirs.append(_directory_lock(share))
             manifest = _manifest(share)
+            if selected is not None:
+                names = set(selected)
+                manifest = [f for f in manifest if f["name"] in names]
+                if {f["name"] for f in manifest} != names:
+                    raise SharedScanError("CONTENT_CHANGED", "selected files are no longer present")
+            def unchanged():
+                now = _manifest(share)
+                if selected is not None:
+                    now = [f for f in now if f["name"] in names]
+                return now == manifest
             result["files"] = [dict(f) for f in manifest]
             if not manifest:
-                remove_source = True
+                remove_source = not preserve_source and selected is None
                 return result | {"status": "EMPTY"}
             limit, chunk = await self._health()
-            identity = ("SHARED-" + secrets.token_hex(12), "RT-SHARED", 1)
+            identity = session_identity or ("SHARED-" + secrets.token_hex(12), "RT-SHARED", 1)
+            scan_batch = secrets.token_hex(6)
             pinned = {share}
             for item in result["files"]:
                 if item["size"] > limit:
@@ -198,34 +237,51 @@ class ServiceSharedFinisher:
                     if parent != share and share in parent.parents and parent not in pinned:
                         dirs.append(_directory_lock(parent))
                         pinned.add(parent)
-                handle = winfile.open_locked(path, share_delete=False)
+                handle = winfile.open_locked(path, share_delete=False,
+                                            delete_access=selected is not None and not preserve_source)
                 handles.append(handle)
                 info = winfile.identity(handle)
                 if (info.links != 1 or info.attributes & (0x400 | 0x10) or info.size != item["size"]
                         or not winfile.same_path(winfile.final_path(handle), path)):
                     raise SharedScanError("CONTENT_CHANGED", "Shared file identity or path changed")
+                if expected is not None:
+                    size, sha = winfile.hash_handle(handle, limit)
+                    if expected.get(item["name"]) != (size, sha):
+                        raise SharedScanError("CONTENT_CHANGED", "file differs from the confirmed candidate")
+            check_cancelled()
+            if review is not None:
+                choice = await choose(review, result | {"status": "REVIEW", "before_scan": True})
+                check_cancelled()
+                if not unchanged():
+                    raise SharedScanError("CONTENT_CHANGED", "file list changed during review")
+                if choice == "delete":
+                    remove_source = not preserve_source and selected is None
+                    remove_selected = not preserve_source and selected is not None
+                    return result | {"status": "DELETED" if not preserve_source else "HELD"}
+                if choice != "keep":
+                    return result | {"status": "HELD"}
             # All originals remain locked through scan, user choice and copy. Never rescan by path.
             for index, (handle, item) in enumerate(zip(handles, result["files"])):
-                await self._scan(handle, item, job_identity(identity, f"SHARED-{index}"), limit, chunk, deadline)
+                check_cancelled()
+                await self._scan(handle, item, job_identity(identity, f"SHARED-{scan_batch}-{index}"), limit, chunk, deadline)
             result["scan"] = "clean: SecureArtifactScanner verified all Shared files"
-            if _manifest(share) != manifest:
+            if not unchanged():
                 raise SharedScanError("CONTENT_CHANGED", "Shared contents changed during scanning")
             try:
-                choice = decide(result | {"status": "CLEAN"}) if decide else "hold"
+                choice = await choose(decide, result | {"status": "CLEAN"})
             except Exception:
                 choice = "hold"
-            if _manifest(share) != manifest:
+            if not unchanged():
                 raise SharedScanError("CONTENT_CHANGED", "Shared contents changed during approval")
-            self._check_cancelled()
+            check_cancelled()
             if choice == "delete":
-                remove_source = True
-                return result | {"status": "DELETED"}
+                remove_source = not preserve_source and selected is None
+                remove_selected = not preserve_source and selected is not None
+                return result | {"status": "DELETED" if not preserve_source else "HELD"}
             if choice != "keep":
                 return result | {"status": "HELD"}
-            base = Path(dest).absolute() if dest is not None else downloads_folder() / "SandboxShared"
             base.mkdir(parents=True, exist_ok=True)
             dirs.append(_directory_lock(base))
-            target = unique_path(base, share.name)
             stage = base / (".scanner-" + secrets.token_hex(16) + ".partial")
             stage.mkdir()       # new, never reuse an existing directory
             for handle, item in zip(handles, result["files"]):
@@ -234,7 +290,7 @@ class ServiceSharedFinisher:
                 digest, size = hashlib.sha256(), 0
                 with output.open("xb") as out:
                     for block in winfile.read_blocks(handle, limit):
-                        self._check_cancelled()
+                        check_cancelled()
                         out.write(block)
                         digest.update(block)
                         size += len(block)
@@ -248,12 +304,13 @@ class ServiceSharedFinisher:
                 with output.open("rb") as copied:
                     if hashlib.file_digest(copied, "sha256").hexdigest() != item["sha256"]:
                         raise SharedScanError("CONTENT_CHANGED", "destination verification failed")
-            if _manifest(share) != manifest:
+            if not unchanged():
                 raise SharedScanError("CONTENT_CHANGED", "Shared contents changed before publication")
-            self._check_cancelled()
+            check_cancelled()
             stage.rename(target)   # Windows rename refuses an existing target; publish whole tree at once
             stage = None
-            remove_source = True
+            remove_source = not preserve_source and selected is None
+            remove_selected = not preserve_source and selected is not None
             return result | {"status": "EXPORTED", "dest": str(target)}
         except Exception as exc:
             code = getattr(exc, "code", "SCAN_ERROR")
@@ -261,6 +318,12 @@ class ServiceSharedFinisher:
             blocked = code in {"MALWARE_DETECTED", "FILE_TOO_LARGE", "LIMIT_EXCEEDED", "LINK_REFUSED", "CONTENT_CHANGED"}
             return result | {"status": "BLOCKED" if blocked else "QUARANTINED"}
         finally:
+            if remove_selected:
+                for handle, item in zip(handles, result["files"]):
+                    try:
+                        winfile.delete_locked(handle)
+                    except OSError:
+                        result["events"].append({"kind": "SHARED_CLEANUP_PENDING", "path": item["name"]})
             for handle in reversed(handles + dirs):
                 winfile.close(handle)
             if stage is not None:

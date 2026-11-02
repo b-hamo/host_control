@@ -370,6 +370,7 @@ class ArtifactBroker:
         self._by_event: dict[tuple[Identity, str], Artifact] = {}
         self._channel: dict[Identity, asyncio.Event] = {}
         self._channel_lost: dict[Identity, str] = {}
+        self.unified = None
 
     # -- Telemetry side --------------------------------------------------------
     def _event(self, identity: Identity) -> asyncio.Event:
@@ -451,6 +452,8 @@ class ArtifactBroker:
         art = self.precheck(session, artifact_id)
         if not self.needs_new_attempt(art):
             return {**self.view(art), "accepted": True, "note": "already requested; follow it with artifact_list"}
+        if self.unified is not None and self.unified.is_shared(art):
+            return await self.unified.start_shared(session, art)
         conn = session._live()                           # READY and connected, or ProtocolError
         grant, token = self.grants.issue(session.identity, art.artifact_id, art.event_id, self.max_bytes,
                                          self.upload_lifetime_s, file_name=art.relative_path)
@@ -500,6 +503,9 @@ class ArtifactBroker:
             return
         art.size, art.sha256 = grant.size, grant.sha256
         art.stage = SCANNING
+        if self.unified is not None:
+            await self.unified.received(art, grant)
+            return
         if getattr(self.scanner, "service_mode", False):
             verdict = await self.scanner.inspect_job(grant, art.relative_path, lambda: art.stage == SCANNING)
         else:
@@ -654,6 +660,9 @@ class ArtifactBroker:
             "export_path": str(art.export_path) if art.stage == EXPORTED else None,
             "can_export": self.needs_new_attempt(art),
         }
+        if self.unified is not None:
+            out["source"] = "shared" if self.unified.is_shared(art) else "output"
+            out["export_flow"] = "review -> scan -> final approval -> Downloads/SandboxShared"
         if not received:
             out["unverified"] = "size, type and hash are unknown until the Host has received the file"
         return out
@@ -666,9 +675,13 @@ class ArtifactBroker:
         if status != "ANY":
             views = [v for v in views if v["status"] == status]
         page = views[:limit]
+        note = ("Shared snapshots and reported Output candidates. Changed files are refused; "
+                "save/close the Guest file and wait for its Shared mirror before listing."
+                if self.unified is not None else
+                "Reported candidates, not a live directory listing; a file changed or deleted "
+                "since it was reported is refused when exported.")
         return {"artifacts": page, "next_cursor": page[-1]["artifact_id"] if len(views) > limit else None,
-                "note": "Reported candidates, not a live directory listing; a file changed or deleted "
-                        "since it was reported is refused when exported."}
+                "note": note}
 
 
 _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}

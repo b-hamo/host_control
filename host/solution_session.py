@@ -126,7 +126,13 @@ def main():
             time.sleep(2)
         if args.verify:
             from sandbox_manager.importer import downloads_folder
-            destination = downloads_folder() / 'SandboxShared' / report['session_id'] / report['filename']
+            exported = client.call('artifact_list', status='EXPORTED', limit=200)['artifacts']
+            matches = [a for a in exported if a['path'] == report['filename']]
+            if len(matches) != 1 or not matches[0].get('export_path'):
+                raise RuntimeError('Expected exactly one completed export for the verification file')
+            destination = Path(matches[0]['export_path'])
+            if not destination.is_relative_to(downloads_folder() / 'SandboxShared' / report['session_id']):
+                raise RuntimeError('Verification file was exported outside the designated download directory')
             deadline = time.monotonic() + 120
             # User approval and cleanup may finish after the runtime becomes TERMINATED.
             while not destination.exists() and time.monotonic() < deadline:

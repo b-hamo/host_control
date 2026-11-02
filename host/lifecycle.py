@@ -236,6 +236,10 @@ class SandboxLauncher:
 
         Asked once, only when the shared folder holds files. The answer is used after the scan: a folder
         that is not clean is never kept, whatever the answer (the person is told)."""
+        if getattr(self._finish_shared, "requires_post_scan_approval", False):
+            # Unified finisher reviews the pinned list before scanning and asks
+            # again after CLEAN. Never reuse an early keep as final approval.
+            return
         if self.shared is None or self._choose_shared is None or self._early_choice is not None:
             return
         try:

@@ -34,6 +34,7 @@ KEEP_TITLE = "SCRP 파일 남기기 확인"
 STOP_TITLE = "SCRP Sandbox 종료 확인"
 DUPLICATE_TITLE = "SCRP 내려받기 확인"
 SHARED_TITLE = "SCRP 공유 폴더 남기기"
+REVIEW_TITLE = "SCRP 반출 목록 확인"
 MAX_COMMAND_SHOWN = 1500           # the whole command or no approval at all (never cut short)
 MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2 = 0x4, 0x30, 0x100
 MB_YESNOCANCEL, MB_DEFBUTTON3 = 0x3, 0x200
@@ -101,11 +102,15 @@ def describe_shared(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str
     """--shared at session end: what the Sandbox saved in its shared folder passed the scan; keep it?"""
     files = summary.get("files") or []
     total = sum(f.get("size", 0) for f in files)
-    if summary.get("before_scan"):
+    if summary.get("unified_export"):
+        first = "선택한 반출 파일이 SecureArtifactScanner 검사를 통과했습니다. 최종 보관을 승인해 주세요."
+    elif summary.get("before_scan"):
         first = "Sandbox가 공유 폴더(바탕화면 Shared)에 저장한 파일이 있습니다. Sandbox를 끄는 대로 백신 검사를 합니다."
     else:
         first = "Sandbox가 공유 폴더(바탕화면 Shared)에 저장한 파일이 있습니다. 백신 검사는 통과했습니다."
     lines = [first, ""]
+    if summary.get("planned_destination"):
+        lines += [f"저장 위치: {_clean(summary['planned_destination'], 2000)}", ""]
     lines += [f"  {_clean(f.get('name', ''))}  ({f.get('size', 0):,} bytes)" for f in files[:15]]
     if len(files) > 15:
         lines.append(f"  ... 외 {len(files) - 15}개")
@@ -113,7 +118,7 @@ def describe_shared(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str
               "이 컴퓨터에 남길까요?",
               "  예: 다운로드\\SandboxShared 폴더로 복사 (인터넷에서 받은 파일로 표시, 실행할 때 Windows가 한 번 더 물음)"
               + (" — 검사를 통과한 경우에만" if summary.get("before_scan") else ""),
-              "  아니요: 지움",
+              ("  아니요: 반출하지 않음 (Sandbox의 원본 유지)" if summary.get("preserve_source") else "  아니요: 지움"),
               f"  취소 또는 {timeout_s:.0f}초 무응답: 지우지 않고 공유 폴더에 실행 금지 상태로 보관",
               f"  ({_clean(summary.get('share', ''))})"]
     return "\n".join(lines)
@@ -164,6 +169,43 @@ class DialogApprover:
         async with self._lock:
             self._seq += 1
             await asyncio.to_thread(self._ask_code, text, f"{SHARED_TITLE} #{self._seq}", 0x0)   # MB_OK
+
+    async def review_export(self, summary: dict) -> str:
+        """Confirm every selected name before any scan. This is not final approval.
+
+        Lists are paged, never silently shortened. Closing any page holds the
+        entire request. The same cancellable dialog lock is used at both gates.
+        """
+        files = summary.get("files") or []
+        if not files:
+            return "hold"
+        pages = [files[i:i + 10] for i in range(0, len(files), 10)]
+        for number, page in enumerate(pages, 1):
+            lines = ["반출할 파일 목록을 확인해 주세요. 아직 검사하거나 반출하지 않았습니다.",
+                     f"목록 {number}/{len(pages)} — 전체 {len(files)}개", ""]
+            for item in page:
+                name = str(item.get("name", ""))
+                if len(name) > 2000:
+                    return "hold"  # cannot show the selected name in full
+                size = item.get("size")
+                lines.append(f"  {_clean(name, 2000)} ({size:,} bytes)" if isinstance(size, int)
+                             else f"  {_clean(name, 2000)} (크기는 수신 후 확인)")
+            lines += ["", "예: 목록 확인 후 검사 진행. 검사 통과 후 반출 승인을 다시 묻습니다.",
+                      ("아니요: 반출하지 않음 (Sandbox 원본 유지)" if summary.get("preserve_source")
+                       else "아니요: 이 반출 목록의 임시 파일 삭제"),
+                      "취소 또는 무응답: 반출하지 않고 보류"]
+            async with self._lock:
+                self._seq += 1
+                title = f"{REVIEW_TITLE} #{self._seq}"
+                try:
+                    answer = await asyncio.to_thread(self._ask_code, "\n".join(lines), title,
+                                                     MB_YESNOCANCEL | MB_DEFBUTTON3)
+                except asyncio.CancelledError:
+                    self._dismiss(title, IDCANCEL)
+                    raise
+            if answer != IDYES:
+                return "delete" if answer == IDNO else "hold"
+        return "keep"
 
     async def choose_shared(self, summary: dict) -> str:
         """--shared at session end: "keep" (Yes), "delete" (No), "hold" (Cancel, no answer, or no dialog)."""
