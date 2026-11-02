@@ -38,10 +38,12 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt pytest
 # 고칠 때마다 (몇 초)
 .venv/Scripts/python.exe -m pytest -q tests/test_repo_rules.py tests/test_codex_skill.py
-# 커밋 전 (약 4분)
-.venv/Scripts/python.exe -m pytest -q tests
+# 커밋 전 (약 5분). 임시 폴더를 AppData 밖에 둔다(아래 첫 항목)
+.venv/Scripts/python.exe -m pytest -q tests --basetemp=C:/Users/Public/pytest-host
 ```
 
+- pytest 기본 임시 폴더(%LOCALAPPDATA%\Temp)를 쓰면 `tests/test_solution.py`의 2개가 실패한다.
+  sandbox_manager가 사용자 폴더(AppData 포함) 안의 작업 폴더를 거부하기 때문이다. 코드 문제가 아니므로 `--basetemp`로 돌린다.
 - `requirements.txt`가 바뀌면 다시 설치한다. pywin32가 없는 예전 venv에서는 `tests/test_solution.py`가 import 오류로 실패한다.
 - 실제 Defender·설치된 서비스 시험은 환경 변수 SCANNER_DEFENDER_TESTS, SCANNER_SERVICE_TESTS, SCANNER_SERVICE_ADMIN_TESTS를
   켤 때만 돈다. 관리자 권한이나 서비스 설치가 필요하므로 에이전트는 켜지 않는다.
@@ -56,8 +58,8 @@ python -m venv .venv
    `host/broker.py`의 `OPERATIONS`·`translate()` 또는 `_dispatch()` 분기, `host/tool_availability.py`의 `REQUIRED_CAPABILITY`,
    필요하면 `host/policy.py`, 스킬(`codex/skills/secure-sandbox-run/SKILL.md`), README 두 곳의 도구 수
    (`tests/test_repo_rules.py`, `tests/test_codex_skill.py`).
-2. Agent에게 돌려주는 오류 코드는 `host/broker.py`의 `ERROR_HINTS`에 넣는다. 없으면 `retryable`이 항상 false가 되고
-   다음 행동 안내가 빠진다 (`tests/test_repo_rules.py`).
+2. Agent에게 돌려주는 오류 코드는 `host/broker.py`의 `ERROR_HINTS`에 넣는다. 없으면 `retryable`이 항상 false가 되고,
+   `next_step`을 따로 넘기지 않으면 다음 행동 안내도 빠진다 (`tests/test_repo_rules.py`).
 3. Broker는 입력을 다시 보내지 않는다. `ACTION_TIMEOUT`이면 `runtime_get_state`로 먼저 확인하게 한다.
 4. MCP Server가 tools/list에 답하는 경로는 jsonschema·websockets·cryptography와 Broker를 import하지 않는다.
    Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 뺀다 (`tests/test_mcp_server.py`의 `test_tool_list_needs_no_heavy_imports`).
@@ -66,7 +68,7 @@ python -m venv .venv
 7. 의존 방향 (`tests/test_repo_rules.py`):
    - `router/`는 Host를 모르는 Router 핵심이다. host·scanner_service를 import하지 않고, Host 쪽 어댑터는 `host/router_*.py`에 둔다.
    - `scrp/`는 모든 패키지가 같이 쓰는 규격 라이브러리라 다른 패키지를 import하지 않는다.
-   - `scanner_service/`는 별도 Windows 서비스로 묶여 배포되므로 host에서는 `host/artifact_scan.py`만 쓴다.
+   - `scanner_service/`는 별도 Windows 서비스로 묶여 배포되므로 host 중에서는 `host/artifact_scan.py`만 import한다.
    - host/README의 ④ 통신 층(connection, session_registry, tls, bootstrap, upload_server, observation_store)은
      Broker·MCP 층을 import하지 않는다.
 8. 한글이 들어간 .ps1은 UTF-8 BOM으로 저장한다. Sandbox 안의 Windows PowerShell 5.1은 BOM이 없으면 ANSI로 읽어
