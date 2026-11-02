@@ -212,27 +212,36 @@ def test_profile_limits_are_separate(tmp_path):
     manager.shutdown(3)
 
 
-def test_host_selects_service_for_shared_without_artifact_export(tmp_path):
+def test_host_selects_service_for_output_without_shared_mapping(tmp_path, monkeypatch):
     from host.mcp_server import HostBackend
+    from host.artifact_scan import NoScanner
     from test_sandbox_launch import FakeManager, args
     a = args(tmp_path)
-    a.shared, a.artifact_scanner, a.scanner_pipe = tmp_path / "shared", "defender-service", r"\\.\pipe\selected"
-    backend = HostBackend(a, sandbox_manager=FakeManager(tmp_path / "sbx"))
+    a.output_root, a.artifact_scanner, a.scanner_pipe = tmp_path / "output", "defender-service", r"\\.\pipe\selected"
+    a.artifact_export, a.artifact_max_bytes, a.approval = True, 52428800, "deny"
+    a.export_dir = tmp_path / "exports"
+    monkeypatch.setattr("host.inbox_download.check_no_execute", lambda _: (True, "test ACL"))
+    backend = HostBackend(a, scanner=NoScanner(), sandbox_manager=FakeManager(tmp_path / "sbx"))
     backend.start()
     try:
         assert backend.ready.wait(20) and not backend.error, backend.error
-        finish = backend.launcher._finish_shared
+        finish = backend.launcher.output.finisher
         assert isinstance(finish, ServiceSharedFinisher)
         assert finish.client.pipe_name == a.scanner_pipe
-        assert backend.artifacts is None
+        assert backend.artifacts.unified is backend.launcher.output
+        assert not hasattr(backend.launcher, "shared")
     finally:
         backend.shutdown()
 
 
 def test_window_close_runs_service_finisher_after_shutdown(tmp_path, service):
     from test_window_close import WindowManager, Host, start_ready, finished
+    from test_output_export import Human, receive
+    from host.artifacts import ArtifactBroker, ArtifactGrants
+    from host.artifact_scan import NoScanner
+    from host.output_export import OutputExport
     runtime, client = service()
-    share, dest = source(tmp_path), tmp_path / "Downloads"
+    dest = tmp_path / "Downloads"
     manager = WindowManager(tmp_path / "sbx")
     scan_file = runtime.scanner.scan_file
     def scan_after_shutdown(*a, **kw):
@@ -243,23 +252,29 @@ def test_window_close_runs_service_finisher_after_shutdown(tmp_path, service):
         host = Host(tmp_path, manager)
         runner, boot, serving = await start_ready(host, manager, tmp_path)
         launcher = host.backend.launcher
-        launcher.shared = share
-        async def keep(_):
-            return "keep"
-        launcher._choose_shared = keep
-        launcher._finish_shared = lambda folder, decide: finisher(client)(folder, dest, decide)
+        async def install():
+            broker = ArtifactBroker(ArtifactGrants(tmp_path / "output"), dest, NoScanner())
+            output = OutputExport(broker, finisher(client), Human(runtime.scanner), launcher, destination=dest)
+            art = await receive(broker, output, launcher.session, b"MZ\x00\xffbinary")
+            async def capture(session, reason):
+                assert "stop" not in manager.names()
+                output._captured = session.identity
+                output.acquisition = {"complete": True, "artifacts": [art.artifact_id]}
+            launcher.session.before_terminate = capture
+            return art
+        art = await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(install(), host.backend.loop))
         manager.window = "CLOSED"
         await asyncio.wait_for(serving, 10)
         await finished(host)
         try:
-            assert launcher.shared_result["status"] == "EXPORTED", launcher.shared_result
-            assert (dest / share.name / "App" / "tool.exe").read_bytes() == b"MZ\x00\xffbinary"
+            assert launcher.output_result["held"] == 0 and art.stage == "EXPORTED", art.result
+            assert art.export_path.read_bytes() == b"MZ\x00\xffbinary"
         finally:
             await asyncio.to_thread(host.backend.shutdown)
     asyncio.run(body())
 
 
-def test_cleanup_failure_prevents_shared_scan(tmp_path):
+def test_cleanup_failure_prevents_output_scan(tmp_path):
     from test_window_close import WindowManager, Host, start_ready, finished
     manager = WindowManager(tmp_path / "sbx")
     manager.cleanup = lambda _: {"removed": [], "failed": ["VM still present"]}
@@ -267,11 +282,14 @@ def test_cleanup_failure_prevents_shared_scan(tmp_path):
         host = Host(tmp_path, manager)
         _, _, serving = await start_ready(host, manager, tmp_path)
         launcher = host.backend.launcher
-        launcher.shared = source(tmp_path)
-        launcher._finish_shared = lambda *a, **kw: pytest.fail("scanned before shutdown confirmed")
+        class Output:
+            acquisition = {}
+            async def finish_closed(self):
+                pytest.fail("scanned before shutdown confirmed")
+        launcher.output = Output()
         manager.window = "CLOSED"
         await asyncio.wait_for(serving, 10)
         await finished(host)
-        assert launcher.state == "FAILED" and launcher.shared_result is None
+        assert launcher.state == "FAILED" and launcher.output_result is None
         await asyncio.to_thread(host.backend.shutdown)
     asyncio.run(body())

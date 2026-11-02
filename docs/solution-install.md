@@ -107,7 +107,7 @@ Codex 등록만 다시 하려면 `installer/register_codex.ps1`을 사용한다.
 
 ## 실패 처리와 재실행
 
-서비스·Defender·Shared 활성화·ExportRoot·ACL·Runner 해시 검사에 실패하면 VM을 시작하지 않는다.
+서비스·Defender·scan-only 기능·ExportRoot·Output ACL·Runner 해시 검사에 실패하면 VM을 시작하지 않는다.
 검사기를 우회하거나 자동 대체하지 않는다. 설치 후 서비스가 사라져도 다음 시작이 차단된다.
 서비스 검증이 실패하면 새 프로필과 Codex 등록을 공개하지 않는다. Codex 등록 단계만 실패하면
 준비된 프로필은 남고 등록 명령만 재시도할 수 있다.
@@ -124,18 +124,21 @@ Codex 등록만 다시 하려면 `installer/register_codex.ps1`을 사용한다.
 powershell -ExecutionPolicy Bypass -File scripts/verify_solution.ps1
 ```
 
-검증 클라이언트는 실제 MCP → Manager VM → Runner READY를 기다리고 Guest Shared에
-무해한 TXT를 만든다. 안내가 나오면 사용자가 Sandbox 창을 닫고 실제 승인 창에서 보관한다.
-도구가 사용자 종료/승인을 대신하지 않는다. Host EXPORTED 로그, 다운로드 파일 바이트·해시,
-MOTW의 ZoneId=3을 확인해 `State/session-result.json`에 결과를 남긴다.
+검증 클라이언트는 실제 MCP → Manager VM → Runner READY를 기다리고 Guest 바탕화면의
+Output 바로가기를 통해 무해한 BIN·ZIP·TXT 샘플을 만든다. 실행 중 BIN·ZIP을 반출한 뒤
+사용자가 Sandbox 창을 닫으면 남은 TXT를 같은 목록 확인·검사·최종 보관 절차로 처리한다.
+도구가 사용자 종료/승인을 대신하지 않는다. Host EXPORTED 상태, 다운로드 파일 바이트·해시,
+MOTW의 ZoneId=3과 단일 사본을 확인해 `State/unified-export-verification.json`에 결과를 남긴다.
 실패/시간 초과 때 기존 Sandbox를 임의 종료하지 않으며 사용자가 닫을 때까지 연결을 유지한다.
 
-반출 경로는 Guest `Desktop/Shared` → `Work/shared/<세션>` (실행 금지) → VM 종료/정리 확인
-→ 서비스 Quarantine 검사 → 전부 CLEAN + 사용자 보관 선택 → Windows 다운로드 Known Folder의
-`SandboxShared/<세션>/<반출 ID>`이다. 통합 실행의 artifact_export도 같은 정책·저장 경로를
-사용한다. `--unified-export` 없는 기존 수동 실행만 기존 UTF-8 TXT/State/exports 경로를 사용한다.
-Shared는 파일당 50 MiB, 전체 2 GiB/20,000개이며 악성·미확인·오류·한도 초과 시 전체 반출을
-보류/차단한다. 자동 테스트 대역의 성공을 실제 반출 성공으로 계산하지 않는다.
+반출 경로는 Guest의 세션별 `output` → HTTPS → `Work/output/<세션>/<반출 ID>` (실행 금지)
+→ 목록 확인 → 서비스 Quarantine 검사 → CLEAN + 최종 보관 선택 → Windows 다운로드 Known Folder의
+`SandboxOutput/<세션>/<반출 ID>`이다. 실행 중 artifact_export와 종료 후 처리가 같은 경로를 쓴다.
+정상 종료 전에는 전체 Output의 잠긴 목록을 받아 각 파일 수신·해시 대조·목록 재확인을 마친다.
+파일당 50 MiB, 목록당 총 200 MiB, 탐색 파일/폴더 각각 4,096개 및 목록 응답 크기 한도를 적용한다.
+한도를 넘거나 파일이 계속 쓰이는 등 확보에 실패하면 정상 종료를 진행하지 않는다.
+악성·미확인·검사 오류는 공개하지 않는다. [현재 검증 기록](output-only-validation.md)의
+자동 테스트 성공을 실제 Defender 검사·사용자 승인·최종 반출 성공으로 계산하지 않는다.
 
 ## 이전 PR #100 배포 검증 기록 (현재 자동화의 검증 결과 아님)
 

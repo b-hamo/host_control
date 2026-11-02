@@ -75,6 +75,7 @@ ERROR_HINTS = {
     "RUNTIME_UNAVAILABLE": (True, "runtime_get_state"),
     "RUNTIME_START_FAILED": (False, "RECLASSIFY_RUNTIME"),
     "ARTIFACT_BUSY": (True, "artifact_list"),
+    "ARTIFACT_BLOCKED": (False, "runtime_get_state"),       # inspect acquisition/scan failure; do not bypass it
     "ACTION_FAILED": (False, "computer_observe"),
     "ACTION_TIMEOUT": (False, "runtime_get_state"),          # never repeat the input blindly
     "SECURITY_BLOCKED": (False, "session_stop"),

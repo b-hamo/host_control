@@ -83,6 +83,21 @@ def verify_file(item, expected, root):
     return dict(path=str(path), sha256=sha, size=len(expected), artifact_id=item["artifact_id"], source=item["source"])
 
 
+def wait_for_final_output(client):
+    """Runner termination precedes scanner/dialog completion on the Host."""
+    while True:
+        runtime = runtime_state(client)
+        sandbox = runtime.get("sandbox", {})
+        if sandbox.get("state") == "FAILED":
+            raise RuntimeError(f"Output cleanup/export failed: {sandbox.get('error')}")
+        result = sandbox.get("output", {}).get("at_end")
+        if runtime.get("runtime_state") == "TERMINATED" and result is not None:
+            if not result.get("acquisition", {}).get("complete"):
+                raise RuntimeError("final Output acquisition was not complete")
+            return result
+        time.sleep(2)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -184,11 +199,7 @@ def main(argv=None):
             save("MANUAL_EXPORT_VERIFIED")
         save("WAITING_FOR_USER_CLOSE_REVIEW_AND_KEEP")
         print("Close this Sandbox window, confirm the remaining file list, then approve final Keep.", flush=True)
-        while True:
-            runtime = runtime_state(client)
-            if runtime.get("runtime_state") == "TERMINATED":
-                break
-            time.sleep(2)
+        wait_for_final_output(client)
         completed = listed(client, "EXPORTED")
         name = list(samples)[2]
         matches = [a for a in completed if a["path"] == name]

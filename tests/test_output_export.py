@@ -261,3 +261,27 @@ def test_release_failure_is_not_reported_as_complete_and_is_retried(tmp_path, se
         assert calls[3] == ("RELEASE", old_id)
         assert output.acquisition["complete"] and output._lease is None
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("release_fails", [False, True])
+def test_lost_capture_reply_releases_same_id_without_recapturing(tmp_path, service, monkeypatch, release_fails):
+    runtime, client = service()
+    async def run():
+        _, session, _, output = setup(tmp_path, runtime, client)
+        calls = []
+        async def snapshot(s, operation, snapshot_id):
+            calls.append((operation, snapshot_id))
+            if operation == "CAPTURE":
+                raise ProtocolError("ACTION_TIMEOUT", "capture reply lost")
+            if release_fails:
+                raise ProtocolError("ACTION_TIMEOUT", "release reply lost")
+            return {"files": []}
+        monkeypatch.setattr(output, "_snapshot", snapshot)
+        with pytest.raises(ProtocolError):
+            await output.refresh(session, closing=True)
+        assert [operation for operation, _ in calls] == ["CAPTURE", "RELEASE"]
+        assert calls[0][1] == calls[1][1]
+        assert not output.acquisition["complete"] and output._captured is None
+        assert output._lease == ((session.identity, calls[0][1]) if release_fails else None)
+        assert not session.terminated
+    asyncio.run(run())

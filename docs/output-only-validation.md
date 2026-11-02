@@ -31,6 +31,18 @@ Python 3.13.7 embedded와 테스트 의존성을 Input에 반입하고 Guest의 
   종료 순서·확보 실패 시 VM 보존, Shared CLI 거부, 설치 PowerShell, 실행 진입점과
   검증기 검사를 포함한다. v3에서 통과한 별도 시작/복구 테스트는 재실행하지 않았다.
   반입 패키지 SHA-256: `d5b7409c2d57b00dcfa6df486c9932d72bfa5c6e1df454515884e526996b7783`.
+- develop `6001349`의 저장소 규칙을 병합한 v5 전체 실행: 694 통과, 4 실패, 55 제외.
+  새 `ARTIFACT_BLOCKED` 안내 누락과 제거된 Shared API를 전제로 한 테스트 3개를 확인했다.
+  오류 안내를 추가하고 테스트를 Output 서비스 선택·종료 후 검사·정리 실패 차단으로 전환했다.
+- v7: 빠른 점검 **18 통과**, 전체 `pytest -q tests` **700 통과, 55 제외**, 193.11초,
+  `QUICK_EXIT=0`, `PYTEST_EXIT=0`. 일반 사용자/설치된 서비스/선택 실행 환경이 필요한
+  제외 항목을 실제 검증한 것으로 계산하지 않는다. CAPTURE 응답 유실 시 동일 ID 해제,
+  해제 응답 유실 시 상태 보류, VM 종료 후 검사·승인 완료까지 기다리는 검증기도 포함한다.
+  반입 패키지 SHA-256: `c3cb8b07f80a3682c4a142af3dde6447f3ac470a7f1e703ea09ab41189613b35`.
+- Runner v6: 실제 파일 잠금 검사에 비동기 작업자 요청·응답 상관관계, 다른 연결/세대 거부,
+  중복 CAPTURE·잘못된 ID 해제 거부, 반복 RELEASE, 종료 후 잠금 정리를 추가해 Guest에서 통과했다.
+  `Output snapshot and worker protocol verification passed`, `NATIVE_EXIT=0`.
+  반입 패키지 SHA-256: `507f60d1625c1bea5172dee3c9da768da212cc3aa014f6ed68478f45b950f8c8`.
 
 회귀 테스트는 MCP/WSS/HTTPS 및 Windows 파일 잠금·Named Pipe 통신을 실제로 사용한다.
 일부 테스트의 VM, 전체 목록, 검사 판정, 사용자 선택은 대역이다. 이것을 설치된 Defender나
@@ -43,3 +55,9 @@ Python 3.13.7 embedded와 테스트 의존성을 Input에 반입하고 Guest의 
 - 실행 중 반출에 이어 정상 종료/창 닫기에서 최종 Output 확보와 남은 파일 반출을 확인해야 한다.
 - 최신 프로토콜의 실패/경쟁 및 설치 갱신 경로 검증을 마친 뒤 Draft를 해제한다.
 - 기존 Shared 임시 잔여물은 자동 삭제하거나 이관하지 않는다.
+
+## 등록한 작업
+
+- Host 이슈 [#105](https://github.com/b-hamo/host_control/issues/105), Draft PR [#108](https://github.com/b-hamo/host_control/pull/108).
+- Runner 이슈 [#35](https://github.com/b-hamo/sandbox_runner/issues/35), Draft PR [#36](https://github.com/b-hamo/sandbox_runner/pull/36).
+- Manager 소스는 변경하지 않았다. 두 PR은 develop 대상이며 실제 최종 반출 검증 전까지 Draft다.

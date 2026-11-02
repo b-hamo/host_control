@@ -71,12 +71,14 @@ VM 및 창 backend와 Defender 판정/사용자 선택은 테스트 대역이다
 | `scrp/validate.py` | 메시지 검증기 (크기·인코딩·스키마) | 2.2 |
 | `scrp/envelope.py` | 메시지 봉투 생성기 (ID·sequence·nonce·timestamp) | 2.2 |
 | `schema/` | Host ↔ Runner 메시지 규격. **Runner도 이 파일을 기준으로 구현** | 2.2, 2.3 |
-| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 18개의 입력 규격 | 2.4 |
+| `schema/mcp-tools/` | Agent(Codex)에게 보여줄 도구 20개의 입력 규격 | 2.4 |
 | `tests/` | 인증·TLS·replay 거부, Heartbeat·재연결, Startup Verification, Broker 자동 테스트 | 4.4~4.6, 5.6 |
 
 규격의 결정 사항과 노션 초기 표와의 차이는 [schema/README.md](schema/README.md)에 있다.
 
 `host/` 파일별 역할, 층 구조, 요청이 지나가는 길은 [host/README.md](host/README.md)에 있다.
+
+코딩 에이전트(Codex·Claude Code)가 이 저장소를 고칠 때 읽는 지도와 규칙은 [AGENTS.md](AGENTS.md)에 있다.
 
 ## 실행
 

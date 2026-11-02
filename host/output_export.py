@@ -237,11 +237,12 @@ class OutputExport:
             if closing:
                 self._captured = None
             snapshot_id = str(uuid.uuid4())
-            captured = False
+            # CAPTURE may succeed in the Runner even if its reply is lost.
+            # Retain the requested ID before sending so cleanup never requires
+            # a second CAPTURE or replacement of an unknown locked snapshot.
+            self._lease = (session.identity, snapshot_id)
             try:
                 manifest = await self._snapshot(session, "CAPTURE", snapshot_id)
-                captured = True
-                self._lease = (session.identity, snapshot_id)
                 seen, events, current = set(), set(), []
                 for item in manifest["files"]:
                     path = PureWindowsPath(item["relative_path"])
@@ -277,7 +278,7 @@ class OutputExport:
             finally:
                 # A closing snapshot stays locked until Runner TERMINATE. A
                 # failed capture/verify is released, without publishing anything.
-                if captured and (not closing or self._captured != session.identity):
+                if not closing or self._captured != session.identity:
                     try:
                         await self._snapshot(session, "RELEASE", snapshot_id)
                         self._lease = None
