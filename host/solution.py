@@ -20,8 +20,8 @@ if str(REPO) not in sys.path:
 def host_arguments(runner: Path, work: Path, state: Path) -> list[str]:
     return [
         "--runner-exe", str(runner), "--sandbox-root", str(state / "sandbox"),
-        "--inbox", str(work / "inbox"), "--shared", str(work / "shared"),
-        "--save-downloads", "--agent-guard", "--artifact-export", "--unified-export",
+        "--inbox", str(work / "inbox"), "--output-root", str(work / "output"),
+        "--save-downloads", "--agent-guard", "--artifact-export",
         "--artifact-max-bytes", "52428800",
         "--artifact-scanner", "defender-service", "--approval", "dialog",
         "--sandbox-run", "--router-capture",
@@ -106,7 +106,7 @@ def main(argv=None):
             return
         from sandbox_manager.inbox import check_inbox_root
         from host.inbox_download import check_no_execute
-        for path in (a.work / "inbox", a.work / "shared"):
+        for path in (a.work / "inbox", a.work / "output"):
             check_inbox_root(path)
             ok, why = check_no_execute(path)
             if not ok:

@@ -1,12 +1,12 @@
 # 세 레포 통합 설치와 개발 갱신
 
 `host_control`이 설치와 실행을 조정한다. 같은 PC의 `sandbox_manager`를 Python
-패키지로 설치하고 `sandbox_runner`를 빌드하며, Shared와 artifact_export에
+패키지로 설치하고 `sandbox_runner`를 빌드하며, Output 반출에
 SecureArtifactScanner를 기본 적용한다. Manager 소스 변경은 필요 없다.
 
-통합 실행은 Shared/Output 공통 반출을 기본 선택한다. Codex의 `artifact_list`에 두 출처를
-표시하고, 목록 확인 창 → 서비스 검사 → 최종 보관 승인 창을 거쳐 다운로드에 저장한다.
-Sandbox 종료 시 자동 Shared 보관도 같은 절차를 사용한다. [통합 반출 정책](unified-export.md).
+통합 실행은 Output 단일 반출을 기본 선택한다. Sandbox 바탕화면의 Output 바로가기에
+결과물을 저장하고, 목록 확인 창 → 서비스 검사 → 최종 보관 승인 창을 거쳐 다운로드에 저장한다.
+정상 종료 전에도 Output을 확보하고 같은 절차를 사용한다. [Output 반출 정책](output-only-export.md).
 
 > 재검증 상태: Defender 정의 갱신 후 동일 해시의 기존 EXE가 탐지되지 않았다.
 > 새 배포 묶음 검사, 통합 설치, 정상 파일/EICAR 검사, 실제 Manager/Runner READY까지
@@ -22,8 +22,9 @@ Python 3.13 x64, Git, MSYS2 UCRT64가 필요하다. OS 기능 활성화·재부�
 같은 계정으로 UAC를 승인한다. 별도 관리자 계정으로 자격 증명을 바꾸는 설치는 지원하지 않는다.
 
 MSYS2 UCRT64에 gcc, cmake, ninja, jsoncpp 패키지가 필요하다. 세 레포는 호환되는
-브랜치/커밋으로 받아 둔다. 현재는 Host 이슈 #101, Runner 이슈 #33 변경과 선행 Host PR #100이
-필요하다. 스크립트는 사용자의 Git checkout을 pull/reset하거나 브랜치를 바꾸지 않는다.
+브랜치/커밋으로 받아 둔다. Output 전환에는 Host #105와 Runner #35 변경이 함께 필요하다.
+기존 Runner에 `artifact.output.v1`이 없으면 READY 단계에서 거부한다.
+스크립트는 사용자의 Git checkout을 pull/reset하거나 브랜치를 바꾸지 않는다.
 
 ```text
 workspace/
@@ -56,7 +57,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.p
    Dev는 editable 설치, Deploy는 일반 패키지 설치다. Host는 두 모드 모두 해당 소스 checkout을 사용한다.
 3. Runner의 `scripts/build.ps1`을 호출하고 산출물 경로·SHA-256을 확인한다.
 4. 검사 서비스를 새로 빌드한다. Defender 정의 갱신 후 배포 묶음 전체를 검사하고 파일 해시/탐지 이벤트를 대조한다. UAC 설치에서도 기존 서비스 교체 전에 다시 검사한다. UAC 단계에서 Work 실행 금지 ACL, 전용 서비스 계정,
-   Shared 검사, artifact ExportRoot를 설정하고 서비스의 정상 파일/EICAR 검증을 수행한다.
+   Output 검사에 쓰는 scan-only 기능, artifact ExportRoot를 설정하고 서비스의 정상 파일/EICAR 검증을 수행한다.
+   서비스 설치 옵션의 기존 이름 `EnableSharedScan`은 scan-only API 사용 여부이며 Shared 매핑을 만들지 않는다.
 5. Manager의 `tools/install_firewall.ps1`을 호출한다. Sandbox 스위치의 TCP 17443/17444 허용,
    다른 Host 포트 차단, 재부팅 후 어댑터 재연결용 SYSTEM 작업을 기존 Manager 방식으로 설정한다.
    실제 어댑터 적용은 첫 VM 시작 시 Manager가 확인한다.
@@ -70,6 +72,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.p
 방화벽 규칙을 구성하므로 여러 Work/State 설치를 동시에 운용하는 기능은 아니다.
 
 ## 개발 중 실행과 갱신
+
+Shared 구성에서 처음 전환할 때는 세 레포의 호환 버전을 받은 뒤 `-Component All`로 갱신한다.
+새 실행 금지 `Work/output` 폴더와 새 Runner가 함께 필요하므로 Host 소스 교체만으로 이전하지 않는다.
+이전 `Work/shared` 및 `Downloads/SandboxShared` 파일은 그대로 남으며 사용자가 별도로 관리한다.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/check_solution.ps1
@@ -101,7 +107,7 @@ Codex 등록만 다시 하려면 `installer/register_codex.ps1`을 사용한다.
 
 ## 실패 처리와 재실행
 
-서비스·Defender·Shared 활성화·ExportRoot·ACL·Runner 해시 검사에 실패하면 VM을 시작하지 않는다.
+서비스·Defender·scan-only 기능·ExportRoot·Output ACL·Runner 해시 검사에 실패하면 VM을 시작하지 않는다.
 검사기를 우회하거나 자동 대체하지 않는다. 설치 후 서비스가 사라져도 다음 시작이 차단된다.
 서비스 검증이 실패하면 새 프로필과 Codex 등록을 공개하지 않는다. Codex 등록 단계만 실패하면
 준비된 프로필은 남고 등록 명령만 재시도할 수 있다.
@@ -118,18 +124,21 @@ Codex 등록만 다시 하려면 `installer/register_codex.ps1`을 사용한다.
 powershell -ExecutionPolicy Bypass -File scripts/verify_solution.ps1
 ```
 
-검증 클라이언트는 실제 MCP → Manager VM → Runner READY를 기다리고 Guest Shared에
-무해한 TXT를 만든다. 안내가 나오면 사용자가 Sandbox 창을 닫고 실제 승인 창에서 보관한다.
-도구가 사용자 종료/승인을 대신하지 않는다. Host EXPORTED 로그, 다운로드 파일 바이트·해시,
-MOTW의 ZoneId=3을 확인해 `State/session-result.json`에 결과를 남긴다.
+검증 클라이언트는 실제 MCP → Manager VM → Runner READY를 기다리고 Guest 바탕화면의
+Output 바로가기를 통해 무해한 BIN·ZIP·TXT 샘플을 만든다. 실행 중 BIN·ZIP을 반출한 뒤
+사용자가 Sandbox 창을 닫으면 남은 TXT를 같은 목록 확인·검사·최종 보관 절차로 처리한다.
+도구가 사용자 종료/승인을 대신하지 않는다. Host EXPORTED 상태, 다운로드 파일 바이트·해시,
+MOTW의 ZoneId=3과 단일 사본을 확인해 `State/unified-export-verification.json`에 결과를 남긴다.
 실패/시간 초과 때 기존 Sandbox를 임의 종료하지 않으며 사용자가 닫을 때까지 연결을 유지한다.
 
-반출 경로는 Guest `Desktop/Shared` → `Work/shared/<세션>` (실행 금지) → VM 종료/정리 확인
-→ 서비스 Quarantine 검사 → 전부 CLEAN + 사용자 보관 선택 → Windows 다운로드 Known Folder의
-`SandboxShared/<세션>/<반출 ID>`이다. 통합 실행의 artifact_export도 같은 정책·저장 경로를
-사용한다. `--unified-export` 없는 기존 수동 실행만 기존 UTF-8 TXT/State/exports 경로를 사용한다.
-Shared는 파일당 50 MiB, 전체 2 GiB/20,000개이며 악성·미확인·오류·한도 초과 시 전체 반출을
-보류/차단한다. 자동 테스트 대역의 성공을 실제 반출 성공으로 계산하지 않는다.
+반출 경로는 Guest의 세션별 `output` → HTTPS → `Work/output/<세션>/<반출 ID>` (실행 금지)
+→ 목록 확인 → 서비스 Quarantine 검사 → CLEAN + 최종 보관 선택 → Windows 다운로드 Known Folder의
+`SandboxOutput/<세션>/<반출 ID>`이다. 실행 중 artifact_export와 종료 후 처리가 같은 경로를 쓴다.
+정상 종료 전에는 전체 Output의 잠긴 목록을 받아 각 파일 수신·해시 대조·목록 재확인을 마친다.
+파일당 50 MiB, 목록당 총 200 MiB, 탐색 파일/폴더 각각 4,096개 및 목록 응답 크기 한도를 적용한다.
+한도를 넘거나 파일이 계속 쓰이는 등 확보에 실패하면 정상 종료를 진행하지 않는다.
+악성·미확인·검사 오류는 공개하지 않는다. [현재 검증 기록](output-only-validation.md)의
+자동 테스트 성공을 실제 Defender 검사·사용자 승인·최종 반출 성공으로 계산하지 않는다.
 
 ## 이전 PR #100 배포 검증 기록 (현재 자동화의 검증 결과 아님)
 

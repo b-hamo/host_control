@@ -44,12 +44,12 @@
     },
     {
       "$comment": "Requests and events carry no correlation/status/error.",
-      "if": { "properties": { "type": { "enum": ["HELLO", "OBSERVE", "ACTION_REQUEST", "STATE_REQUEST", "HEARTBEAT", "ARTIFACT_REQUEST", "TERMINATE", "CHANNEL_HELLO", "SECURITY_EVENT"] } } },
+      "if": { "properties": { "type": { "enum": ["HELLO", "OBSERVE", "ACTION_REQUEST", "STATE_REQUEST", "HEARTBEAT", "ARTIFACT_REQUEST", "OUTPUT_SNAPSHOT_REQUEST", "TERMINATE", "CHANNEL_HELLO", "SECURITY_EVENT"] } } },
       "then": { "properties": { "correlation_id": { "type": "null" }, "status": { "type": "null" }, "error": { "type": "null" } } }
     },
     {
       "$comment": "Responses must reference the original message_id and carry a status.",
-      "if": { "properties": { "type": { "enum": ["HELLO_ACK", "OBSERVE_RESULT", "ACK", "ACTION_RESULT", "STATE_RESULT", "ALIVE", "ARTIFACT_RESULT", "TERMINATE_RESULT", "CHANNEL_ACK", "EVENT_ACK"] } } },
+      "if": { "properties": { "type": { "enum": ["HELLO_ACK", "OBSERVE_RESULT", "ACK", "ACTION_RESULT", "STATE_RESULT", "ALIVE", "ARTIFACT_RESULT", "OUTPUT_SNAPSHOT_RESULT", "TERMINATE_RESULT", "CHANNEL_ACK", "EVENT_ACK"] } } },
       "then": { "properties": { "correlation_id": { "type": "string" }, "status": { "type": "string" } } }
     },
     {
@@ -61,7 +61,7 @@
       "then": { "properties": { "status": { "enum": ["SUCCESS", "PARTIAL_SUCCESS", "FAILED", "UNKNOWN", "BLOCKED"] } } }
     },
     {
-      "if": { "properties": { "type": { "enum": ["HELLO_ACK", "OBSERVE_RESULT", "STATE_RESULT", "ALIVE", "ARTIFACT_RESULT", "TERMINATE_RESULT", "CHANNEL_ACK", "EVENT_ACK"] } } },
+      "if": { "properties": { "type": { "enum": ["HELLO_ACK", "OBSERVE_RESULT", "STATE_RESULT", "ALIVE", "ARTIFACT_RESULT", "OUTPUT_SNAPSHOT_RESULT", "TERMINATE_RESULT", "CHANNEL_ACK", "EVENT_ACK"] } } },
       "then": { "properties": { "status": { "enum": ["OK", "ERROR"] } } }
     },
     {
@@ -98,7 +98,7 @@
         "ACTION_REQUEST", "ACK", "ACTION_RESULT",
         "STATE_REQUEST", "STATE_RESULT",
         "HEARTBEAT", "ALIVE",
-        "ARTIFACT_REQUEST", "ARTIFACT_RESULT",
+        "ARTIFACT_REQUEST", "OUTPUT_SNAPSHOT_REQUEST", "ARTIFACT_RESULT", "OUTPUT_SNAPSHOT_RESULT",
         "TERMINATE", "TERMINATE_RESULT",
         "ERROR",
         "CHANNEL_HELLO", "CHANNEL_ACK",

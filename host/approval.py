@@ -34,6 +34,7 @@ KEEP_TITLE = "SCRP 파일 남기기 확인"
 STOP_TITLE = "SCRP Sandbox 종료 확인"
 DUPLICATE_TITLE = "SCRP 내려받기 확인"
 SHARED_TITLE = "SCRP 공유 폴더 남기기"
+OUTPUT_TITLE = "SCRP Output 최종 보관 승인"
 REVIEW_TITLE = "SCRP 반출 목록 확인"
 MAX_COMMAND_SHOWN = 1500           # the whole command or no approval at all (never cut short)
 MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2 = 0x4, 0x30, 0x100
@@ -116,10 +117,10 @@ def describe_shared(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str
         lines.append(f"  ... 외 {len(files) - 15}개")
     lines += [f"  합계 {len(files)}개, {total:,} bytes", "",
               "이 컴퓨터에 남길까요?",
-              "  예: 다운로드\\SandboxShared 폴더로 복사 (인터넷에서 받은 파일로 표시, 실행할 때 Windows가 한 번 더 물음)"
+              "  예: 다운로드\\SandboxOutput 폴더로 복사 (인터넷에서 받은 파일로 표시, 실행할 때 Windows가 한 번 더 물음)"
               + (" — 검사를 통과한 경우에만" if summary.get("before_scan") else ""),
               ("  아니요: 반출하지 않음 (Sandbox의 원본 유지)" if summary.get("preserve_source") else "  아니요: 지움"),
-              f"  취소 또는 {timeout_s:.0f}초 무응답: 지우지 않고 공유 폴더에 실행 금지 상태로 보관",
+              f"  취소 또는 {timeout_s:.0f}초 무응답: 지우지 않고 반출 대기 경로에 실행 금지 상태로 보관",
               f"  ({_clean(summary.get('share', ''))})"]
     return "\n".join(lines)
 
@@ -170,6 +171,29 @@ class DialogApprover:
             self._seq += 1
             await asyncio.to_thread(self._ask_code, text, f"{SHARED_TITLE} #{self._seq}", 0x0)   # MB_OK
 
+    async def notify_output(self, result: dict) -> None:
+        messages = {
+            "EXPORTED": "승인한 Output 파일을 다운로드 폴더에 보관했습니다.",
+            "DELETED": "선택한 Output 수신 임시 사본을 삭제했습니다.",
+            "HELD": "Output 파일의 반출을 보류했습니다. 임시 사본은 실행 금지 경로에 남습니다.",
+            "BLOCKED": "Output 파일의 반출을 차단했습니다. 다운로드 폴더에 공개하지 않았습니다.",
+            "QUARANTINED": "Output 검사를 완료하지 못해 반출을 보류했습니다.",
+            "INCOMPLETE": "종료 전 Output 확보를 완료하지 못했습니다. 확보하지 못한 파일이 있을 수 있습니다.",
+        }
+        if result.get("status") not in messages:
+            return
+        text = "\n".join([messages[result["status"]], "",
+                          f"경로: {_clean(result.get('dest') or result.get('share') or '', 2000)}",
+                          f"결과: {_clean(result.get('scan') or result.get('status'), 1000)}"])
+        async with self._lock:
+            self._seq += 1
+            title = f"SCRP Output 반출 결과 #{self._seq}"
+            try:
+                await asyncio.to_thread(self._ask_code, text, title, 0x0)
+            except asyncio.CancelledError:
+                self._dismiss(title, 1)
+                raise
+
     async def review_export(self, summary: dict) -> str:
         """Confirm every selected name before any scan. This is not final approval.
 
@@ -208,10 +232,10 @@ class DialogApprover:
         return "keep"
 
     async def choose_shared(self, summary: dict) -> str:
-        """--shared at session end: "keep" (Yes), "delete" (No), "hold" (Cancel, no answer, or no dialog)."""
+        """Final disposition after scanning; the internal name supports scanner callers."""
         async with self._lock:
             self._seq += 1
-            title = f"{SHARED_TITLE} #{self._seq}"
+            title = f"{OUTPUT_TITLE if summary.get('output_only') else SHARED_TITLE} #{self._seq}"
             try:
                 answer = await asyncio.to_thread(self._ask_code, describe_shared(summary, self.timeout_s), title,
                                                  MB_YESNOCANCEL | MB_DEFBUTTON3)

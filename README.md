@@ -18,27 +18,26 @@ Sandbox Manager가 최초 관찰한 창의 소멸을 5초 유예 후 확정하�
 `runtime_get_state`의 `sandbox.window_state`에서 `UNSEEN/OPEN/MISSING/CLOSED/UNKNOWN/UNAVAILABLE`을 확인할 수 있다.
 
 1. 해당 Sandbox ID의 창 종료 확정. `MISSING` 유예 중에는 Runner/VM 복구를 보류한다.
-2. 연결된 Runner가 준비됐다면 `TERMINATE(USER_STOP)` 전송. 연결/응답 실패에도 종료를 계속한다.
+2. 통합 구성에서는 Output 전체 목록을 잠그고 HTTPS로 수신한 뒤 재확인한다.
+   확보에 실패하면 연결된 VM을 유지하고 누락을 알린다. 성공 후 `TERMINATE(USER_STOP)`을 전송한다.
 3. Manager `stop()`이 `wsb list`로 VM 종료를 확인한 뒤 `cleanup()`을 수행한다.
-4. `--shared`가 설정된 경우 크기·링크·Defender 검사 후 보존/삭제/보류 선택을 실행한다.
-   `--artifact-scanner defender-service`를 함께 지정하면 Shared도 SecureArtifactScanner 서비스로 검사한다.
-   서비스 재빌드 및 `installer/install.ps1 -EnableSharedScan` 설치가 필요하다.
-   검사 통과 후 보관 위치는 그대로 `Downloads/SandboxShared/<세션>`이다.
-   파일당 50 MiB 제한 등 설정과 동작은 [Shared 서비스 연동](scanner_service/README.md#19-shared-파일의-서비스-검사와-다운로드-보관-99)을 참고한다.
-   빈 폴더에는 질문하지 않으며 검사 실패·무응답 처리는 기존 정책을 따른다.
+4. 수신한 Output 파일마다 목록 확인 창 → SecureArtifactScanner 검사 → 최종 보관 승인 창을 표시한다.
+   승인한 CLEAN 파일만 `Downloads/SandboxOutput/<세션>/<반출 ID>`에 저장한다.
+   빈 폴더에는 질문하지 않는다. 무응답은 보류하며, 검사 차단·오류는 공개하지 않는다.
+   [Output 단일 반출](docs/output-only-export.md)에 경로와 종료 전 확보의 한계를 설명한다.
 
 창 닫기는 사용자의 종료 의사이므로 별도의 `session_stop` 승인창을 다시 요청하지 않는다.
 창이 처음부터 관찰되지 않거나 조회에 실패한 경우에는 임의 종료하지 않는다.
 사용자 종료와 자동 복구가 겹쳐도 닫힌 창 때문에 Sandbox를 다시 켜지 않는다.
-VM 종료를 확인하지 못하면 실패 상태로 보고하며 Shared 파일 반출도 진행하지 않는다.
+VM 종료를 확인하지 못하면 실패 상태로 보고하며 종료 후 자동 반출도 진행하지 않는다.
 
 의존성: sandbox_manager#46의 `window_state()` API와 창 감시가 필요하다. 기존 실행 중인
 Host/Sandbox에는 소급 적용되지 않으며 변경 버전으로 새 세션을 시작해야 한다.
-Shared 옵션은 여전히 명시적으로 설정한다. 현재 세션의 설치 상태 전체를 보존하거나,
-마지막 Shared 미러링 주기 이후 Guest에만 남은 파일까지 자동 회수하는 기능은 아니다.
+통합 설치는 Output 반출을 기본 적용한다. Shared 옵션은 제거됐으며 이전 설정은 시작 오류로 안내한다.
+VM 강제 소멸 전에 수신하지 못한 파일이나 설치된 서비스/레지스트리 전체를 보존하는 기능은 아니다.
 
 검증: `tests/test_window_close.py`는 실제 Host/MiniRunner 통신을 사용해 창 종료,
-시작 중 종료, 연결 끊김과 복구 경쟁, 종료 실패, Shared keep/delete/hold를 검사한다.
+시작 중 종료, 연결 끊김과 복구 경쟁, 종료 실패를 검사한다.
 VM 및 창 backend와 Defender 판정/사용자 선택은 테스트 대역이다.
 실제 Windows 창 수명 검증은 Manager의 `tests/test_window_session.py`에서 수행한다.
 
@@ -151,13 +150,13 @@ Codex가 `host/mcp_server.py`를 자식 프로세스로 켜고 stdin/stdout으�
 ### 코덱스로 쓰기: 통합 솔루션 설치와 등록
 
 코덱스에게 "7-Zip 받아서 설치해 줘"처럼 시키면 **이 PC가 받아서 다운로드 폴더에 저장 → Sandbox가 그 파일을
-`Input`에서 실행 → 설치 결과는 Sandbox 바탕화면 `Shared`로 이 PC에** 오게 하는 절차가 Skill
+`Input`에서 실행 → 결과를 Sandbox 바탕화면 `Output` 바로가기 대상에 저장 → 검사·승인 후 이 PC에** 오게 하는 절차가 Skill
 `codex/skills/secure-sandbox-run/SKILL.md`에 있다(배주한 Skill + 곽재혁 `scrp-sandbox-execution`의 좋은 규칙을 합침).
 **팀원 모두 이 Skill 하나를 쓴다.** 코덱스는 저장소가 아니라 PC마다 `%USERPROFILE%\.codex\skills`를 읽으므로:
 
 1. 세 레포를 준비하고 [통합 설치 가이드](docs/solution-install.md)에 따라 일반 PowerShell에서 `installer/install_solution.ps1 -Mode Dev -RegisterCodex`를 실행한다. Manager는 로컬 설치하고 Runner와 검사 서비스를 빌드한다.
 2. 팀 공용 Skill은 `codex/install_skill.ps1`로 설치한다.
-3. `-RegisterCodex`는 기존 설정을 백업하고 해당 MCP 등록만 갱신한다. 직접 연결할 때는 생성된 `mcp.toml`을 사용한다. `host/solution.py`가 Shared·artifact 검사 서비스를 기본 연결한다.
+3. `-RegisterCodex`는 기존 설정을 백업하고 해당 MCP 등록만 갱신한다. 직접 연결할 때는 생성된 `mcp.toml`을 사용한다. `host/solution.py`가 Output 수신·검사·승인 절차를 기본 연결한다.
 4. 현재 Sandbox 작업을 마친 뒤 MCP를 다시 연결한다. 서비스·Defender·실행 금지 ACL 점검 실패 시 시작하지 않는다.
 
 Skill이 부르는 도구·옵션이 이 Host에 실제로 있는지는 `tests/test_codex_skill.py`가 확인한다. Host 도구를 바꾸면 Skill도
@@ -308,14 +307,15 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 파일 이름은 서버가 알려 준 이름(Content-Disposition) → 요청한 주소의 이름 → 최종 주소의 이름 순으로 정한다
 (`www.7-zip.org/a/7z2604-x64.exe`가 GitHub로 넘어가면 최종 주소는 확장자 없는 id라서 `7z2604-x64.exe`를 유지).
 
-`--shared <폴더>` (배주한 요청 2026-10-15, sandbox_manager #34): 세션마다 `<폴더>\<세션>`을 새로 만들어 Sandbox `C:\Shared`에
-**쓰기 가능**하게 연결한다. Agent는 **말하지 않아도 기본으로** 설치 폴더를 Sandbox 바탕화면 `Shared\<프로그램>`으로 하고 포터블·PDF도 거기 풀거나 저장한다(도구 설명에 규칙, 10/15 배주한 결정). 그것이 몇 초 안에 이 PC에도 보인다
-(여기서는 실행 금지). 세션이 끝나면 Microsoft Defender로 검사하고, 위협·검사 오류면 실행 금지 상태로 그대로 둔다. 깨끗하면
-**PC 확인 창**(`SCRP 공유 폴더 남기기`, 파일 목록)으로 묻는다: **예** = `다운로드\SandboxShared\<세션>`으로 복사(인터넷 표시),
-**아니요** = 지움, **취소·45초 무응답** = 지우지 않고 공유 폴더에 실행 금지 상태로 보관(배주한 결정 2026-10-15, #68).
-결과는 `runtime_get_state`의 `sandbox.shared`(EXPORTED·DELETED·HELD·BLOCKED·QUARANTINED·EMPTY). 서비스·드라이버를 까는 설치형은
-파일만 와서 이 PC에서 동작하지 않는다. `<폴더>`는 받는 폴더처럼 `setup_inbox.ps1`로 준비한 곳 아래(예: `codex-work\shared`)여야
-하고, 실행이 막히지 않으면 시작을 거부한다. 옵션을 빼면 지금까지와 같다.
+반출은 **Output 하나**를 사용한다. Sandbox 바탕화면의 `Output.lnk`는 Runner의 실제 세션 폴더를 연다.
+저장 대화상자에서 이 바로가기를 열거나 탐색기 주소창의 실제 경로를 사용한다.
+`Desktop\Output\파일명`은 실제 폴더 경로가 아니므로 문자열로 조합하지 않는다.
+Host는 HTTPS로 수신한 사본을 실행 금지 `Work/output/<세션>`에 두고,
+목록 확인 → 서비스 검사 → 최종 보관 승인 후 다운로드에 공개한다.
+`artifact_list`로 상태를 확인하고 `artifact_export`로 실행 중 반출을 요청할 수 있다.
+정상 종료에서는 종료 전 확보 후 같은 승인 절차가 자동 진행된다.
+`--shared`와 `--unified-export`는 지원하지 않는다. 기존 설치는 전체 갱신하며
+이전 Shared 잔여물은 자동 삭제·이관하지 않는다. [설치와 갱신](docs/solution-install.md).
 
 | 단계 | 누가 | 무엇을 |
 |---|---|---|

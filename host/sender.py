@@ -256,6 +256,8 @@ async def handle(ws, run_demo: str | None, sessions: Sessions, limits: dict) -> 
     conn = Connection(ws, hello, rec.identity(), profile=session.contract)
     reconnect = registry.issue_reconnect(rec.identity())
     allowed = ALLOWED_CAPABILITIES + ([ARTIFACT_CAPABILITY] if session.contract == ARTIFACT_EXPORT_V1 else [])
+    if "artifact.output.v1" in session.profile.required_capabilities:
+        allowed.append("artifact.output.v1")
     granted = [c for c in hello["payload"]["capabilities"] if c in allowed]
     session.granted_capabilities = set(granted)       # the Broker's tool catalog follows this (B-11)
     await conn.send(conn.me.reply(hello, "HELLO_ACK", {

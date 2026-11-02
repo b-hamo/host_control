@@ -28,7 +28,7 @@ class EvidenceClient(Client):
         self.evidence_dir = Path(profile["state"]) / ("verification-" + uuid.uuid4().hex)
         self.evidence_dir.mkdir()
 
-    def rpc(self, method, params, timeout=210):
+    def rpc(self, method, params, timeout=950):
         response = super().rpc(method, params, timeout)
         if method == "tools/call" and params.get("name") == "computer_observe":
             for item in response.get("content", []):
@@ -39,11 +39,11 @@ class EvidenceClient(Client):
 
 def sample_command(identity, name, data):
     payload = base64.b64encode(data).decode()
-    if "-output-" in name:
-        path = "'" + output_directory(identity) + "\\" + name + "'"
-    else:
-        path = f"(Join-Path ([Environment]::GetFolderPath('Desktop')) 'Shared\\{name}')"
-    command = f'powershell -NoP -C "[IO.File]::WriteAllBytes({path},[Convert]::FromBase64String(\'{payload}\'))"'
+    if not name or any(c not in 'abcdefghijklmnopqrstuvwxyz0123456789-.' for c in name):
+        raise ValueError('verification filename must be a simple lowercase basename')
+    command = ("powershell -NoP -C \"$p=(New-Object -Com WScript.Shell).CreateShortcut("
+               "$env:USERPROFILE+'\\Desktop\\Output.lnk').TargetPath;"
+               f"[IO.File]::WriteAllBytes(($p+'\\{name}'),[Convert]::FromBase64String('{payload}'))\"")
     # The Run dialog can truncate long input even if SendInput reports success.
     if len(command) > 259:
         raise ValueError("verification command exceeds the Run dialog input limit")
@@ -83,12 +83,27 @@ def verify_file(item, expected, root):
     return dict(path=str(path), sha256=sha, size=len(expected), artifact_id=item["artifact_id"], source=item["source"])
 
 
-def main():
+def wait_for_final_output(client):
+    """Runner termination precedes scanner/dialog completion on the Host."""
+    while True:
+        runtime = runtime_state(client)
+        sandbox = runtime.get("sandbox", {})
+        if sandbox.get("state") == "FAILED":
+            raise RuntimeError(f"Output cleanup/export failed: {sandbox.get('error')}")
+        result = sandbox.get("output", {}).get("at_end")
+        if runtime.get("runtime_state") == "TERMINATED" and result is not None:
+            if not result.get("acquisition", {}).get("complete"):
+                raise RuntimeError("final Output acquisition was not complete")
+            return result
+        time.sleep(2)
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--await-review", action="store_true",
                         help="pause before opening dialogs so an operator can review the report first")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     profile = read_profile(args.config)
     report_path = Path(profile["state"]) / "unified-export-verification.json"
     report = {"status": "STARTING", "exports": []}
@@ -102,7 +117,7 @@ def main():
     try:
         client.rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                                   "clientInfo": {"name": "unified-export-verifier", "version": "1"}})
-        submitted = client.call("task_submit", goal="Verify unified export of benign Shared and Output files, then automatic Shared export on user closure.",
+        submitted = client.call("task_submit", goal="Verify Output binary export and automatic Output acquisition/export on user closure.",
                                 required_capabilities=["gui.observe", "gui.input", "filesystem.workspace", "process.execute"],
                                 artifact_expected=True)
         deadline = time.monotonic() + 210
@@ -113,15 +128,15 @@ def main():
             if runtime.get("runtime_state") in ("FAILED", "TERMINATED") or time.monotonic() > deadline:
                 raise RuntimeError(f"not READY: {runtime}")
             time.sleep(2)
-        share = Path(runtime["sandbox"]["shared"]["host_folder"])
-        identity = (share.name, submitted["runtime_id"], runtime["sandbox"]["generation"])
-        report["session_id"] = share.name
+        session_id = runtime["sandbox"]["output"]["session_id"]
+        identity = (session_id, submitted["runtime_id"], runtime["sandbox"]["generation"])
+        report["session_id"] = session_id
         from sandbox_manager.importer import downloads_folder
-        destination = downloads_folder() / "SandboxShared" / share.name
-        nonce = uuid.uuid4().hex[:10]
-        samples = {f"unified-shared-{nonce}.bin": b"Shared binary\x00\xff " + nonce.encode(),
-                   f"unified-output-{nonce}.bin": b"Output binary\x00\xfe " + nonce.encode(),
-                   f"unified-close-{nonce}.txt": b"automatic closure " + nonce.encode()}
+        destination = downloads_folder() / "SandboxOutput" / session_id
+        nonce = uuid.uuid4().hex[:6]
+        samples = {f"o-{nonce}.bin": b"O\x00\xff" + nonce.encode(),
+                   f"p-{nonce}.zip": b"PK\x00" + nonce.encode(),
+                   f"c-{nonce}.txt": b"close " + nonce.encode()}
         commands = [sample_command(identity, name, data) for name, data in samples.items()]
         report["destination_root"] = str(destination)
         report["samples"] = [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
@@ -163,7 +178,7 @@ def main():
                     raise RuntimeError("session ended while awaiting operator review")
                 time.sleep(1)
             decision = json.loads(signal.read_text(encoding="utf-8-sig"))
-            if decision != {"session_id": share.name, "reviewed": True}:
+            if decision != {"session_id": session_id, "reviewed": True}:
                 raise RuntimeError("operator review signal does not match this session")
         save("WAITING_FOR_MANUAL_EXPORT_REVIEW_AND_APPROVAL")
         for name in list(samples)[:2]:
@@ -184,11 +199,7 @@ def main():
             save("MANUAL_EXPORT_VERIFIED")
         save("WAITING_FOR_USER_CLOSE_REVIEW_AND_KEEP")
         print("Close this Sandbox window, confirm the remaining file list, then approve final Keep.", flush=True)
-        while True:
-            runtime = runtime_state(client)
-            if runtime.get("runtime_state") == "TERMINATED":
-                break
-            time.sleep(2)
+        wait_for_final_output(client)
         completed = listed(client, "EXPORTED")
         name = list(samples)[2]
         matches = [a for a in completed if a["path"] == name]

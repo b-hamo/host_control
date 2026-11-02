@@ -145,6 +145,8 @@ class RuntimeSession:
         self._watchdog: asyncio.Task | None = None
         self._on_startup = on_startup
         self.demo_task: asyncio.Task | None = None
+        self.before_terminate = None
+        self._termination_lock = asyncio.Lock()
 
     # -- state (spec D-2 Runtime states) ----------------------------------------
     @property
@@ -449,6 +451,12 @@ class RuntimeSession:
         return await self._state(self._live(), action_id)
 
     async def terminate(self, reason: str = "TASK_COMPLETE") -> dict:
+        async with self._termination_lock:
+            if self.before_terminate is not None:
+                await self.before_terminate(self, reason)
+            return await self._terminate_acquired(reason)
+
+    async def _terminate_acquired(self, reason: str) -> dict:
         conn = self._live()
         msg = conn.me.envelope("TERMINATE", {"reason": reason, "grace_ms": 1000})
         self.terminated = True                     # no reconnects from here on, even if the reply is lost

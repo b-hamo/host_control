@@ -40,7 +40,7 @@ class Client:
                 self.responses.put({'error': {'message': 'non-JSON MCP stdout'}})
         self.responses.put({'error': {'message': 'MCP Host exited'}})
 
-    def rpc(self, method: str, params: dict, timeout=210):
+    def rpc(self, method: str, params: dict, timeout=950):
         self.seq += 1
         self.process.stdin.write(json.dumps(dict(jsonrpc='2.0', id=self.seq, method=method, params=params))+'\n')
         self.process.stdin.flush()
@@ -68,6 +68,9 @@ def main():
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--verify', action='store_true')
     args = parser.parse_args()
+    if args.verify:
+        from host.unified_verification import main as verify_output
+        return verify_output(['--config', str(args.config)]) or 0
     profile = read_profile(args.config)
     state = Path(profile['state'])
     client = Client(args.config, profile)
@@ -83,8 +86,7 @@ def main():
     try:
         client.rpc('initialize', {'protocolVersion': '2024-11-05', 'capabilities': {},
                                  'clientInfo': {'name': 'solution-session', 'version': '1'}})
-        client.call('task_submit', goal=('Verify Shared export with a benign file and actual user approval.' if args.verify
-                    else 'Start the integrated Sandbox for user-operated work. Save results in Desktop/Shared.'),
+        client.call('task_submit', goal='Start the integrated Sandbox for user-operated work. Save results through the Desktop Output shortcut.',
                     required_capabilities=['gui.observe', 'gui.input', 'filesystem.workspace', 'process.execute'],
                     artifact_expected=True)
         deadline = time.monotonic() + 200
@@ -98,53 +100,12 @@ def main():
         report.update(status='READY', sandbox=runtime.get('sandbox'))
         save()
         print('SOLUTION_READY. Close the Sandbox window when finished; choose keep/delete in the Host dialog.', flush=True)
-        if args.verify:
-            filename = 'solution-verify-' + uuid.uuid4().hex[:12] + '.txt'
-            content = 'SecureCUA integrated verification ' + uuid.uuid4().hex
-            expected = b'\xef\xbb\xbf' + content.encode('utf-8')
-            command = f'powershell -NoProfile -Command "[IO.File]::WriteAllText((Join-Path ([Environment]::GetFolderPath(\'Desktop\')) \'Shared\\{filename}\'),\'{content}\',[Text.Encoding]::UTF8)"'
-            client.call('computer_observe')
-            client.call('computer_hotkey', keys=['win', 'r'])
-            client.call('computer_observe')
-            client.call('computer_type', text=command)
-            client.call('computer_observe')
-            client.call('computer_keypress', key='enter')
-            mirror = Path(runtime['sandbox']['shared']['host_folder'])
-            deadline = time.monotonic() + 20
-            while not (mirror / filename).exists() and time.monotonic() < deadline:
-                time.sleep(.5)
-            if (mirror / filename).read_bytes() != expected:
-                raise RuntimeError('Guest file missing or content differs')
-            report.update(status='WAITING_FOR_USER_CLOSE_AND_KEEP', filename=filename,
-                          session_id=mirror.name, sha256=hashlib.sha256(expected).hexdigest(), size=len(expected))
-            save()
-            print('VERIFY: Guest file exists. Close the Sandbox window and select Keep in the real dialog.', flush=True)
         while True:
             runtime = client.call('runtime_get_state')
             if runtime.get('runtime_state') == 'TERMINATED':
                 break
             time.sleep(2)
-        if args.verify:
-            from sandbox_manager.importer import downloads_folder
-            exported = client.call('artifact_list', status='EXPORTED', limit=200)['artifacts']
-            matches = [a for a in exported if a['path'] == report['filename']]
-            if len(matches) != 1 or not matches[0].get('export_path'):
-                raise RuntimeError('Expected exactly one completed export for the verification file')
-            destination = Path(matches[0]['export_path'])
-            if not destination.is_relative_to(downloads_folder() / 'SandboxShared' / report['session_id']):
-                raise RuntimeError('Verification file was exported outside the designated download directory')
-            deadline = time.monotonic() + 120
-            # User approval and cleanup may finish after the runtime becomes TERMINATED.
-            while not destination.exists() and time.monotonic() < deadline:
-                time.sleep(1)
-            actual = destination.read_bytes()
-            zone = Path(str(destination)+':Zone.Identifier').read_text(encoding='utf-8')
-            host_log = (state/'host.log').read_text(encoding='utf-8')
-            if actual != expected or 'ZoneId=3' not in zone or f"SHARED {report['session_id']} at session end: EXPORTED" not in host_log:
-                raise RuntimeError('Export content/MOTW/Host EXPORTED evidence mismatch')
-            report.update(status='EXPORTED', destination=str(destination))
-        else:
-            report['status'] = 'TERMINATED'
+        report['status'] = 'TERMINATED'
         save()
         client.process.stdin.close()
         client.process.wait(timeout=30)

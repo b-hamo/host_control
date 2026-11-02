@@ -75,6 +75,7 @@ ERROR_HINTS = {
     "RUNTIME_UNAVAILABLE": (True, "runtime_get_state"),
     "RUNTIME_START_FAILED": (False, "RECLASSIFY_RUNTIME"),
     "ARTIFACT_BUSY": (True, "artifact_list"),
+    "ARTIFACT_BLOCKED": (False, "runtime_get_state"),       # inspect acquisition/scan failure; do not bypass it
     "ACTION_FAILED": (False, "computer_observe"),
     "ACTION_TIMEOUT": (False, "runtime_get_state"),          # never repeat the input blindly
     "SECURITY_BLOCKED": (False, "session_stop"),
@@ -361,7 +362,17 @@ class Broker:
             summary = {"tool": tool, "arguments": mask(tool, args), "session_id": self.session.identity[0],
                        "runtime_id": self.session.identity[1], "reason": decision.reason, **(shown or {})}
             if tool == "artifact_export" and self.artifacts is not None and self.artifacts.unified is not None:
-                approved = await self.artifacts.unified.review(summary) == "keep"
+                output = self.artifacts.unified
+                if getattr(output, "output_only", False):
+                    from host.artifacts import ArtifactError
+                    try:
+                        summary.update(await output.prepare_review(self.session, args["artifact_id"]))
+                    except ArtifactError as exc:
+                        raise BrokerError(exc.code, exc.message) from exc
+                choice = await output.review(summary)
+                approved = choice == "keep"
+                if not approved and getattr(output, "output_only", False):
+                    await output.decline_review(args["artifact_id"], choice)
             else:
                 approved = await self.approver(summary)
             if not approved:

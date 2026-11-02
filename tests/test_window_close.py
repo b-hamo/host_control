@@ -125,74 +125,47 @@ def test_terminate_failure_still_stops_owned_vm(tmp_path):
     run(body())
 
 
-@pytest.mark.parametrize('choice,status', [('keep', 'EXPORTED'), ('delete', 'DELETED'), ('hold', 'HELD')])
-def test_close_asks_first_and_applies_the_choice_only_after_vm_stop_and_scan(tmp_path, choice, status):
-    # 배주한 요청 2026-10-17: the question appears right after the window closes (about 1.5 s), while the
-    # VM stops and the scan runs; the answer is applied only after both (a scan problem overrides "keep").
-    from sandbox_manager.shared import finish_shared
-    manager = WindowManager(tmp_path / 'sbx')
-    share = tmp_path / 'share'
-    share.mkdir()
-    (share / 'result.txt').write_text('saved in Shared', encoding='utf-8')
-    events = []
-
-    def scan(folder):
-        assert ('stop', 'USER_STOP', False) in manager.calls
-        events.append('scan')
-        return 'clean', 'test scanner'
-
-    async def choose(summary):
-        assert events == [] and summary['before_scan'] is True
-        assert not any(c[0] == 'stop' for c in manager.calls)      # asked before the VM is stopped
-        events.append('choose')
-        return choice
-
+def test_output_capture_precedes_terminate_and_finish_follows_vm_cleanup(tmp_path):
+    manager, events = WindowManager(tmp_path / 'sbx'), []
     async def body():
         host = Host(tmp_path, manager)
-        runner, boot, serving = await start_ready(host, manager, tmp_path)
+        _, _, serving = await start_ready(host, manager, tmp_path)
         launcher = host.backend.launcher
-        launcher.shared = share
-        launcher._choose_shared = choose
-        launcher._finish_shared = lambda folder, decide: finish_shared(
-            folder, dest=tmp_path / 'downloads', scan=scan, decide=decide)
+        async def capture(session, reason):
+            assert not session.terminated and 'stop' not in manager.names()
+            events.append('capture')
+        class Output:
+            acquisition = {}
+            async def finish_closed(self):
+                assert 'cleanup' in manager.names() and host.backend.session.terminated
+                events.append('finish')
+                return {'held': 0}
+        launcher.output = Output()
+        host.backend.session.before_terminate = capture
         manager.window = 'CLOSED'
         await asyncio.wait_for(serving, 10)
         await finished(host)
-        assert launcher.shared_result['status'] == status
-        assert events == ['choose', 'scan']
-        assert (tmp_path / 'downloads' / 'share' / 'result.txt').exists() == (choice == 'keep')
-        assert share.exists() == (choice == 'hold')
+        assert events == ['capture', 'finish'] and launcher.output_result == {'held': 0}
         await asyncio.to_thread(host.backend.shutdown)
     run(body())
 
 
-def test_keep_answered_early_is_not_honoured_when_the_scan_fails(tmp_path):
-    from sandbox_manager.shared import finish_shared
+def test_failed_output_capture_preserves_vm_until_explicit_retry(tmp_path):
+    from scrp.validate import ProtocolError
     manager = WindowManager(tmp_path / 'sbx')
-    share = tmp_path / 'share'
-    share.mkdir()
-    (share / 'bad.exe').write_bytes(b'MZ')
-    told = []
-
-    async def choose(summary):
-        return 'keep'
-
-    async def notify(result):
-        told.append(result['status'])
-
     async def body():
         host = Host(tmp_path, manager)
-        runner, boot, serving = await start_ready(host, manager, tmp_path)
-        launcher = host.backend.launcher
-        launcher.shared = share
-        launcher._choose_shared, launcher._notify_shared = choose, notify
-        launcher._finish_shared = lambda folder, decide: finish_shared(
-            folder, dest=tmp_path / 'downloads', scan=lambda f: ('threat', 'test'), decide=decide)
+        _, _, serving = await start_ready(host, manager, tmp_path)
+        async def capture(session, reason):
+            raise ProtocolError('ARTIFACT_BLOCKED', 'unfinished file')
+        host.backend.session.before_terminate = capture
         manager.window = 'CLOSED'
+        await asyncio.sleep(1)
+        assert not host.backend.session.terminated and 'stop' not in manager.names()
+        assert 'unfinished file' in host.backend.launcher.error
+        host.backend.session.before_terminate = None
+        await host.call('session_stop', {'reason': 'TASK_COMPLETE'})
         await asyncio.wait_for(serving, 10)
         await finished(host)
-        assert launcher.shared_result['status'] == 'BLOCKED'
-        assert told == ['BLOCKED']
-        assert not (tmp_path / 'downloads').exists() and (share / 'bad.exe').exists()
         await asyncio.to_thread(host.backend.shutdown)
     run(body())
