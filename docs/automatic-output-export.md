@@ -47,13 +47,36 @@ output 또는 artifact_list로 조회한다. 같은 MCP 연결에서 다음 세�
 대기 취소, 종료 후 MCP 결과 조회, 공개 후 상태 기록 실패다.
 Windows Named Pipe 테스트 서비스와 가짜 백신을 사용하며 실제 Defender 검증과 구분한다.
 
-이번 채팅의 실행 검증은 SCRP task_submit에서 RUNTIME_UNAVAILABLE로 중단됐다.
-Host의 0.0.0.0:17444 바인딩이 WinError 10048(포트 사용 중)로 실패했고,
-runtime_get_state도 START_FAILED를 반환했다. router_execute 및 pytest는 호출하지 않았으며
-Host에서 대신 실행하지 않았다. 다른 채팅에서 준비한 검사 묶음도 이 최종 소스의 실행 증거로 취급하지 않는다.
+최초 시도는 SCRP Host의 17444 포트 충돌로 시작하지 못했다. 사용자가 기존 Sandbox를 닫은 뒤
+포트 해제를 확인했다. 다음 시작에서는 등록된 구형 Runner에 artifact.output.v1이 없어 종료됐다.
+기존 실행 파일과 solution.json을 로컬 build/auto110-runner-backup에 백업하고, #105에서 검증한
+Runner(SHA-256 2a9c0f156e74aa0371a34ba6f66515359846e4fab101a9168ee2e2e4e2205641)로
+등록 경로의 실행 파일 및 프로필 해시를 갱신했다. Host에서 Runner나 테스트를 직접 실행하지 않았다.
 
-git diff --check는 통과했다. 빠른 점검·전체 테스트·실제 서비스 자동 반출은 미검증이며,
-연결 복구 후 다음 검증이 필요하다.
+커밋 98c63f3690d7c9635fe90384424085b8430baa5a를 새 묶음으로 반입해 다음 결과를 얻었다.
+
+- Guest input-check에서 ZIP/실행 스크립트의 OK와 SHA-256 일치를 확인했다.
+- 빠른 점검: **18 passed**, 0.50초.
+- 전체 테스트: **717 passed, 55 skipped**, 191.93초. 실패 0개.
+- SCRP RUN-0006: **SUCCEEDED / GUEST_PROCESS_VERIFIED / exit_code=0 / FULL_EXIT=0**.
+- 세션: SES-7c90d6c123a147faa502a9c0dc0614ac. Python 3.13.7 embedded.
+- 소스/의존성 ZIP SHA-256: 330696ff5b4c2aa5360ec7370e303017a581a3eff3f3b5eddcd56acd75b38a28.
+
+검증 준비 중 Guest의 PowerShell Archive 모듈을 로드하지 못해 .NET ZIP API를 사용했고,
+pytest의 py.py 및 pythoncom.py 누락과 pywin32 DLL 검색 경로를 보완했다. 준비 실패의 로그는
+테스트 실패나 통과로 계산하지 않았다. 최종 실행은 같은 SCRP Sandbox 안에서 수행했다.
+
+실제 서비스 정상 반출도 확인했다. 전체 로그 ART-000017은 936바이트이며 SHA-256은
+ce5d5bd4d22ad9ab217db09833fab52439c1c48418be28bbc995fd9e20d85a95다.
+artifact_export는 반출 확인창 없이 EXPORTED/completed=true/notification=mcp와 다운로드 경로를
+반환했다. 실제 파일의 해시, MOTW ZoneId=3 및 동일 ID 재요청 후 사본 1개를 확인했다.
+빠른 점검 로그 ART-000012도 동일 서비스 경로로 EXPORTED가 됐다.
+
+55개 제외 항목은 통과로 계산하지 않는다. 악성·검사 오류·서비스 부재·종료 시 혼합 파일 처리와
+종료 후 MCP 조회는 자동 회귀로 확인했으며 실제 악성 파일 실험이나 이번 새 세션의 창 닫기 후
+전체 자동 저장을 재현한 것은 아니다. 현 MCP 프로세스의 일부 설명/진입점은 이전 로드 상태이므로,
+새 MCP 프로세스에서 최신 설명·종료 응답 전체를 확인하는 실환경 검증도 남는다. 검증용 Sandbox는 유지했다.
+git diff --check도 통과했다.
 
 ```text
 python -m pytest -q tests/test_repo_rules.py tests/test_codex_skill.py
