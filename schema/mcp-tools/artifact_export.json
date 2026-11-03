@@ -1,6 +1,6 @@
 {
   "name": "artifact_export",
-  "description": "Ask to bring one file the runtime reported (from artifact_list) out to this computer. The user is asked to approve it on the Host; then the Host receives the file, checks its format and scans it, and only a file that passes is saved to the results folder. This returns at once with the accepted state; follow progress with artifact_list until the status is EXPORTED (export_path is then set) or BLOCKED (result says why). Calling it again for the same artifact_id returns its current state without starting a second transfer. Only plain UTF-8 .txt files are exported for now.",
+  "description": "Export an Output candidate through SecureArtifactScanner without Host review or result dialogs. Only verified CLEAN bytes are saved to Downloads/SandboxOutput; malware, unavailable scanner and errors are not published. Waits up to wait_ms; completed=false means still processing, so call artifact_list with wait_ms. EXPORTED includes export_path; BLOCKED/FAILED includes result. Repeated requests do not duplicate transfer/publication. Legacy non-Output mode retains its configured approval policy.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -17,8 +17,15 @@
       "reason": {
         "type": "string",
         "maxLength": 256,
-        "description": "Why the user needs this file; shown to the user in the approval prompt (marked as written by you) and kept in the audit log.",
+        "description": "Purpose of this export, recorded in the audit log.",
         "default": ""
+      },
+      "wait_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 30000,
+        "default": 30000,
+        "description": "Wait up to this many milliseconds for ongoing Output exports; timeout does not cancel them."
       }
     }
   },

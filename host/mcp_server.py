@@ -154,6 +154,7 @@ class HostBackend(threading.Thread):
         self.final_status = None
         self.final_runs = None                     # sandbox_run/router_* results, queryable after the end
         self.final_artifacts = None
+        self.final_output = None                    # acquisition and automatic export results after retirement
         self.cleanup_confirmed = False
 
     def run(self) -> None:
@@ -178,6 +179,12 @@ class HostBackend(threading.Thread):
                 if self.artifacts is not None:
                     self.final_artifacts = [self.artifacts.view(a) for a in self.artifacts._by_id.values()
                                             if a.identity[:2] == self.session.identity[:2]]
+            if self.launcher is not None and self.launcher.output is not None:
+                self.final_output = self.launcher.output_result or {
+                    "acquisition": self.launcher.output.acquisition,
+                    "completed": False,
+                    "detail": self.launcher.error or "Output finalization did not complete",
+                    "artifacts": self.final_artifacts or []}
             if self.runner is not None:
                 self.final_runs = self.runner.snapshot()
             self.loop.close()
@@ -462,8 +469,8 @@ class HostBackend(threading.Thread):
             request.close()
             return _error_result("SESSION_TERMINATED", "Host session ended", False, "task_submit")
         try:
-            # Output acquisition and two sequential UI steps can exceed the
-            # ordinary input-call budget. They remain bounded and cancellable.
+            # Output acquisition and scanner finalization can exceed the
+            # ordinary input-call budget. Client waits do not repeat exports.
             timeout = ({"artifact_export": 180.0, "artifact_list": 300.0, "session_stop": 900.0}.get(tool, CALL_TIMEOUT_S)
                        if getattr(self.args, "output_root", None) else CALL_TIMEOUT_S)
             result = fut.result(timeout)
@@ -618,7 +625,7 @@ def main(argv: list[str] | None = None) -> None:
                     help="antivirus for exported files; none = every export is BLOCKED (SCANNER_UNAVAILABLE); "
                          "defender-service = the SecureArtifactScanner Windows service (installer/install.ps1, "
                          "-ExportRoot must be --export-dir) receives, scans with Microsoft Defender and publishes; "
-                         "with --output-root it scans Output receipts before approved Downloads/SandboxOutput export "
+                         "with --output-root it scans Output receipts before automatic CLEAN-only Downloads/SandboxOutput export "
                          "(scan-only service support is installed by install_solution.ps1)")
     ap.add_argument("--scanner-pipe", default=None,
                     help="with defender-service: Named Pipe of the scanner service (default "
@@ -635,7 +642,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--unified-export", action="store_true",
                     help=argparse.SUPPRESS)
     ap.add_argument("--output-root", type=Path, default=None,
-                    help="execution-denied Host staging root for Output-only acquisition, scan and approval")
+                    help="execution-denied Host staging root for Output acquisition and CLEAN-only automatic export")
     ap.add_argument("--save-downloads", action="store_true",
                     help="with --inbox: inbox_download also saves a copy in the user's Downloads folder (marked as "
                          "from the internet) that stays after the session")
@@ -706,22 +713,8 @@ def main(argv: list[str] | None = None) -> None:
                 tool["description"] += (
                     " Save result files using the Sandbox Desktop/Output.lnk shortcut, which opens the Runner's "
                     "session Output folder. It is the only result export location. Received Host copies remain "
-                    "unpublished until list review, service scan and final user approval. Normal session stop "
+                    "unpublished until SecureArtifactScanner verifies CLEAN, then are saved automatically. Normal session stop "
                     "acquires remaining Output files before terminating the Runner. Close files after saving.")
-            elif tool["name"] == "artifact_list":
-                tool["description"] = (
-                    "List Runner Output candidates and verified Host receipts. Save files using Desktop/Output.lnk. "
-                    "Follow next_cursor for the full list. STAGED/HELD copies are not published. "
-                    "Only EXPORTED includes the actual path under Downloads/SandboxOutput/<session>.")
-            elif tool["name"] == "artifact_export":
-                tool["description"] = (
-                    "Export an Output candidate ID from artifact_list. First the person "
-                    "at this computer confirms the file list, then SecureArtifactScanner scans the fixed bytes, "
-                    "then a SEPARATE final keep/delete/hold dialog asks the person. Only approved CLEAN bytes "
-                    "reach Downloads/SandboxOutput/<session>. No extension allowlist; size/link/content checks "
-                    "still apply. Never approve dialogs for the user. Poll artifact_list until EXPORTED or BLOCKED; "
-                    "an accepted request is not a completed export. Repeating an ID does not duplicate it. "
-                    "Normal Sandbox termination acquires Output before shutdown and offers the files through these gates.")
     if args.agent_guard:
         guard_descriptions(tools)
     if args.save_downloads:

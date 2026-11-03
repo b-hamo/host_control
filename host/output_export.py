@@ -1,7 +1,7 @@
-"""Output is acquired over HTTPS, then reviewed, scanned and approved locally.
+"""Output is staged over HTTPS, scanned and automatically published only on CLEAN.
 
 Staging is never publication. A received copy survives VM retirement and a
-missing dialog answer. No writable Host folder is mapped into the Guest.
+failed scan. MCP carries results; no writable Host folder is mapped into the Guest.
 """
 from __future__ import annotations
 
@@ -34,7 +34,9 @@ class Receipt:
 class OutputExport:
     output_only = True
 
-    def __init__(self, artifacts, finisher, approver, launcher, *, destination=None):
+    def __init__(self, artifacts, finisher, approver, launcher, *, destination=None, automatic=True):
+        self.automatic = automatic
+        self._exports: dict[str, asyncio.Task] = {}
         self.artifacts, self.finisher, self.approver, self.launcher = artifacts, finisher, approver, launcher
         self.destination = destination
         self.receipts: dict[str, Receipt] = {}
@@ -91,6 +93,9 @@ class OutputExport:
         return await callback(summary | {"unified_export": True, "output_only": True}) if callback else "hold"
 
     async def decide(self, summary):
+        if self.automatic:
+            # The scanner calls this only after all bytes have a verified CLEAN receipt.
+            return "keep" if summary.get("status") == "CLEAN" else "hold"
         callback = getattr(self.approver, "choose_shared", None)
         return await callback(summary | {"unified_export": True, "output_only": True}) if callback else "hold"
 
@@ -126,6 +131,8 @@ class OutputExport:
         self.artifacts.grants.bytes_held -= receipt.size
 
     async def notify(self, result):
+        if self.automatic:
+            return  # MCP responses replace all Output result dialogs.
         callback = getattr(self.approver, "notify_output", None)
         if callback:
             await callback(result)
@@ -330,20 +337,52 @@ class OutputExport:
                 async with self._transfer_lock:
                     await self._receive(session, art)
                 await self._publish(art, reviewed=True)
-            except (ArtifactError, ProtocolError, OSError) as exc:
-                art.result = {"code": "OUTPUT_FAILED", "detail": str(exc)}
-                art.stage = HELD if self.owns(art) else FAILED
-                self._persist()
+            except asyncio.CancelledError:
+                self._record_failure(art, "export interrupted during Host shutdown")
+                raise
+            except Exception as exc:  # Each failed file must have a terminal MCP result.
+                self._record_failure(art, str(exc))
             finally:
                 self.requested.discard(art.artifact_id)
-        # The Broker already obtained list review for this exact candidate ID.
+        # Automatic Output uses the explicit MCP request; legacy mode reviewed the ID.
         task = asyncio.create_task(finish())
+        self._exports[art.artifact_id] = task
         self._prefetch.add(task)
         task.add_done_callback(self._prefetch.discard)
         return self.artifacts.view(art) | {"accepted": True}
 
+    def _record_failure(self, art, detail):
+        if art.stage == EXPORTED:
+            # A journal/notification failure after publication must not hide a
+            # real download or make the next request publish it a second time.
+            art.result = dict(art.result or {}, post_export_error=detail)
+        else:
+            art.result = {"code": "OUTPUT_FAILED", "detail": detail}
+            art.stage = BLOCKED if self.automatic else HELD if self.owns(art) else FAILED
+        try:
+            self._persist()
+        except OSError:
+            log.exception("Output result journal unavailable for %s", art.artifact_id)
+
+    async def wait(self, wait_ms, artifact_id=None):
+        tasks = [task for aid, task in self._exports.items()
+                 if not task.done() and (artifact_id is None or aid == artifact_id)]
+        if tasks and wait_ms:
+            # A client timeout/cancellation must not cancel or repeat publication.
+            await asyncio.wait(tasks, timeout=wait_ms / 1000)
+
+    def result_view(self, art):
+        view = self.artifacts.view(art)
+        terminal = art.stage in (EXPORTED, BLOCKED, FAILED, HELD, DELETED, "SUPERSEDED", "CANCELLED")
+        completed = terminal and art.artifact_id not in self.requested
+        return view | {"completed": completed,
+                       "next_step": None if completed else "artifact_list",
+                       "notification": "mcp", "automatic_export": self.automatic}
+
     async def _publish(self, art, *, reviewed=False):
         async with self._finish_lock:
+            if art.stage in (EXPORTED, BLOCKED, DELETED):
+                return
             receipt = self.receipts.get(art.artifact_id)
             if receipt is None:
                 return
@@ -361,7 +400,7 @@ class OutputExport:
             art.stage = SCANNING
             result = await self.finisher._finish(
                 receipt.folder, self.destination_for(art.identity[0]), self.decide,
-                review=None if reviewed else self.review,
+                review=None if reviewed or self.automatic else self.review,
                 expected={receipt.name: (receipt.size, receipt.sha256)},
                 target_name=art.artifact_id, session_identity=art.identity)
             status = result["status"]
@@ -404,13 +443,19 @@ class OutputExport:
                 except OSError:
                     log.warning("Output cleanup pending for %s", aid, exc_info=True)
                 continue
-            if current is not None and aid not in current:
+            if art.stage == BLOCKED:
+                continue
+            if (self.automatic and current is None) or (current is not None and aid not in current):
                 art.stage = HELD
                 art.result = {"code": "OLDER_COPY_HELD", "detail": "not selected by final Output manifest"}
                 continue
-            await self._publish(art)
+            try:
+                await self._publish(art)
+            except Exception as exc:  # One failure must not skip the remaining Output files.
+                self._record_failure(art, str(exc))
         self._persist()
-        return {"acquisition": self.acquisition, "held": len(self.receipts)}
+        return {"acquisition": self.acquisition, "held": len(self.receipts), "completed": True,
+                "artifacts": [self.result_view(a) for a in self.artifacts._by_id.values()]}
 
     def cancel(self):
         self._closing = True

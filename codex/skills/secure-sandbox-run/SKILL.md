@@ -36,8 +36,8 @@ not a complete outbound firewall. The flow below applies to ordinary user-reques
 1. This PC imports/downloads the requested package into the protected inbox.
 2. The same Windows Sandbox runs the hash-verified copy in Desktop/Input.
 3. Save results in the Guest Output directory. Host receives them over HTTPS,
-   asks for list review, scans with SecureArtifactScanner, then asks for final
-   keep/delete/hold. Only approved CLEAN files reach Downloads/SandboxOutput.
+   scans with SecureArtifactScanner and automatically saves only CLEAN files.
+   Results and failures are returned through MCP, without Output dialogs.
 
 ## Tools and session
 
@@ -57,7 +57,7 @@ No new Sandbox or session termination without the user's instruction.
   installation. Observe before coordinate input and verify actual Guest results.
   Input delivered is not evidence of successful execution.
 - Complete ordinary installer steps. Ask only for genuinely missing information
-  or user decisions such as credentials, payments and final export disposition.
+  or user decisions such as credentials and payments.
 - If a tool denies an action or execution is uncertain, report its exact state.
   Do not repeat by another route or run on the Host.
 
@@ -73,8 +73,10 @@ No new Sandbox or session termination without the user's instruction.
   stay Sandbox-only. Do not claim that exported files recreate an installed app.
 - Save and close the file before requesting export. artifact_list identifies
   candidates and received copies; artifact_export requests the selected ID.
-- The first dialog confirms the list; the service then scans the fixed bytes;
-  a separate final dialog chooses keep/delete/hold. Do not decide for the user.
+- The service scans fixed bytes; CLEAN files are automatically saved.
+  MCP returns completed/status/export_path or result.code/detail instead of dialogs.
+  If completed=false, use artifact_list with wait_ms (up to 30000) to await the
+  same export. A client timeout does not cancel the underlying operation.
 - Report completion only when EXPORTED includes a verified destination under
   Downloads/SandboxOutput/<session>/<artifact ID>. STAGED, HELD, uploaded, CLEAN,
   or accepted alone are not publication. There is no extension allowlist, but
@@ -90,7 +92,10 @@ If acquisition fails while the VM remains connected, keep it running and report
 which stage failed. Existing Host receipts remain unpublished. A forced VM loss
 cannot recover bytes never received; do not describe old prefetched copies as
 confirmed final versions. Actual window close and session_stop use the same
-Output approval procedure after acquisition and VM cleanup.
+Output automatic CLEAN-only scan/save procedure after acquisition and VM cleanup.
+Read session_stop's output or the subsequent runtime_get_state/artifact_list
+response for acquisition completeness and individual file results. completed
+means processing ended, not that every file was exported.
 
 ## Reporting
 

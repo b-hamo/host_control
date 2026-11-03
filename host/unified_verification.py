@@ -1,4 +1,4 @@
-"""Interactive verification with real MCP, Manager, Runner, scanner and human dialogs.
+"""Interactive verification with real MCP, Manager, Runner and scanner.
 
 Run after closing other test Sandboxes. This never answers a dialog or terminates
 the VM. Failures keep the MCP connection alive until the person closes the VM.
@@ -102,7 +102,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--await-review", action="store_true",
-                        help="pause before opening dialogs so an operator can review the report first")
+                        help="pause before automatic export so an operator can review the report first")
     args = parser.parse_args(argv)
     profile = read_profile(args.config)
     report_path = Path(profile["state"]) / "unified-export-verification.json"
@@ -171,8 +171,7 @@ def main(argv=None):
             report["samples"] = [{"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
                                  for name, data in samples.items()]
             save("WAITING_FOR_OPERATOR_REVIEW")
-            # This gate never answers either product dialog. It only allows the
-            # operator to prepare before their existing 45-second UI deadlines.
+            # Optional diagnostic pause, separate from automatic product export.
             while not signal.exists():
                 if runtime_state(client).get("runtime_state") != "READY":
                     raise RuntimeError("session ended while awaiting operator review")
@@ -180,10 +179,10 @@ def main(argv=None):
             decision = json.loads(signal.read_text(encoding="utf-8-sig"))
             if decision != {"session_id": session_id, "reviewed": True}:
                 raise RuntimeError("operator review signal does not match this session")
-        save("WAITING_FOR_MANUAL_EXPORT_REVIEW_AND_APPROVAL")
+        save("WAITING_FOR_AUTOMATIC_EXPORT")
         for name in list(samples)[:2]:
             candidate = own[name]
-            print(f"Confirm list then final approval in the real Host dialogs: {name}", flush=True)
+            print(f"Waiting for SecureArtifactScanner and automatic CLEAN export: {name}", flush=True)
             response = client.call("artifact_export", artifact_id=candidate["artifact_id"], reason="Interactive unified export verification")
             if not response.get("accepted"):
                 raise RuntimeError(f"export was not accepted: {response}")
