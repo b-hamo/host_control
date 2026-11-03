@@ -64,7 +64,8 @@ class McpRuntime:
                 if tool == "runtime_get_state":
                     return self._state(args)
                 if tool == "session_stop":
-                    return success(stopped=True, reason=args["reason"], host_released=True)
+                    return success(stopped=True, reason=args["reason"], host_released=True,
+                                   output=getattr(backend, "final_output", None))
                 answer = self._ended_query(backend, tool, args)
                 if answer is not None:
                     return answer
@@ -101,7 +102,8 @@ class McpRuntime:
                 if not backend.cleanup_confirmed:
                     return _error_result("CLEANUP_UNCONFIRMED", backend.error or "Sandbox cleanup failed", False,
                                          "runtime_get_state")
-                return success(stopped=True, reason=args["reason"], host_released=True)
+                return success(stopped=True, reason=args["reason"], host_released=True,
+                               output=getattr(backend, "final_output", None))
             return result
 
     @staticmethod
@@ -116,7 +118,7 @@ class McpRuntime:
                 views = [v for v in views if v["status"] == args["status"]]
             page = views[:args["limit"]]
             return success(artifacts=page, next_cursor=page[-1]["artifact_id"] if len(views) > len(page) else None,
-                           session_ended=True)
+                           session_ended=True, output=getattr(backend, "final_output", None))
         final = getattr(backend, "final_runs", None)
         if not final:
             return None
@@ -149,4 +151,5 @@ class McpRuntime:
                        health=status.get("health", "UNKNOWN"), source="host", host_released=True,
                        session_id=status.get("session_id"), end_reason=status.get("end_reason"),
                        host_error=self.backend.error if self.backend else None,
+                       output=getattr(self.backend, "final_output", None),
                        action={"action_id": wanted, "status": state} if wanted else None)

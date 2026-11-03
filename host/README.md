@@ -58,12 +58,12 @@ Sandbox 안 Runner
 | `runtime_session.py` | 연결이 끊겨도 이어지는 세션. 5초마다 HEARTBEAT, 연속 2회 누락 DEGRADED · 3회 UNRESPONSIVE. 끊길 때 결과를 못 받은 Action은 재전송하지 않고 재접속 후 STATE_REQUEST로 확인. task_id·action_id 발급, 마지막 화면과 받은 시각 보관, `status()`로 상태 조회 | 4.4, 4.5 |
 | `inbox_download.py` | `inbox_download` 도구의 본체. 공개 https만, 확인한 IP로 접속(DNS rebinding 차단), 리다이렉트마다 검사, 크기·개수 한도, 다 받은 뒤에만 받는 폴더로, MOTW 표시, zip은 Host에서 안 풂. 받는 폴더가 Host에서 실행 금지인지 시작 때 시험 | 5.9 |
 | `sandbox_run.py` | `sandbox_run`·`sandbox_run_status` 본체 (`--sandbox-run`). 이 세션에서 받은 파일만, Host가 받을 때 남긴 해시가 출처. 정확한 명령에 묶인 Router `Authority` 위임을 이번 한 번 만들고(승인 창 없음, 기록), `RouterGuiPolicy`로 Win+R·한 줄·Enter만 허용(Enter 직전 재확인). 도우미 `sandbox_run_guest.ps1`과 명령서는 받는 폴더로 전달, 결과는 Guest 영수증을 반출 검사로 확인 | 7.x |
-| `artifacts.py` | 파일 반출 전송 (artifact-export-v1). 후보 등록·artifact_id → 일회용 업로드 권한 → ARTIFACT_REQUEST → 수신 기록과 ARTIFACT_RESULT 대조. Output 사전 수신은 검사 전 임시 보관이며, 공개는 별도 검사와 승인을 거친다. 종료 때 미완료 전송을 취소하고 검증된 Output 수신본은 보존한다 | 5.8 |
+| `artifacts.py` | 파일 반출 전송 (artifact-export-v1). 후보 등록·artifact_id → 일회용 업로드 권한 → ARTIFACT_REQUEST → 수신 기록과 ARTIFACT_RESULT 대조. Output 사전 수신은 검사 전 임시 보관이며, 공개는 CLEAN 검사 후 자동 진행한다. 종료 때 미완료 전송을 취소하고 검증된 Output 수신본은 보존한다 | 5.8 |
 | `artifact_scan.py` | 반출 전 검사. 형식 정책(UTF-8 `.txt`) + 백신. 기본은 검사기 없음 = 차단. AMSI는 EICAR 자체 시험을 통과해야만 사용. `defender-service`는 SecureArtifactScanner 서비스의 상태 확인·검사 결과 해석 | 5.8 |
 | `scanner_client.py` | `defender-service`의 Named Pipe 클라이언트: 업로드 청크 전송·검사·상태·공개·취소, 응답 ID·Job 신원 확인, 서비스 PID 확인, 모든 호출을 작업 스레드에서 | 5.8 |
-| `shared_scanner.py` | 기존 파일명을 유지한 공통 검사·공개 처리. Output 수신본을 잠근 채 검사 서비스 격리·Defender 검사 → 최종 보관 선택 → 다운로드 복사를 수행한다. 검사기 대체나 Shared 매핑은 사용하지 않는다 | 5.8 |
-| `output_export.py` | Output 단일 반출. 후보 사전 수신·영수증 보관, 전체 잠금 목록 확보·해시 대조·종료 전 확인, 목록 확인 → 검사 → 최종 보관 승인 → Downloads/SandboxOutput 공개를 연결한다. 확보 실패 시 정상 종료를 막고 파일을 보류한다 (#105) | 5.8 |
-| `approval.py` | Host의 사용자 확인·최종 보관·결과 알림 창. 무응답은 보류하며 AI가 대신 선택하지 않는다. Output 반출과 종료 호출은 여러 창을 처리할 별도 제한 시간을 가진다 | 5.6 |
+| `shared_scanner.py` | 기존 파일명을 유지한 공통 검사·공개 처리. Output 수신본을 잠근 채 검사 서비스 격리·Defender 검사 → CLEAN 확인 → 다운로드 복사를 수행한다. 검사기 대체나 Shared 매핑은 사용하지 않는다 | 5.8 |
+| `output_export.py` | Output 단일 반출. 후보 사전 수신·영수증 보관, 전체 잠금 목록 확보·해시 대조·종료 전 확인, CLEAN 자동 다운로드 저장·MCP 결과 응답을 연결한다. 확보 실패 시 정상 종료를 막고 파일을 보류한다 (#105, #109) | 5.8 |
+| `approval.py` | 종료·inbox·레거시 반출의 사용자 확인 창. 통합 Output 자동 반출은 목록 확인·최종 보관·결과 알림 창을 호출하지 않는다 | 5.6 |
 | `lifecycle.py` | Sandbox 켜고 끄기 (Lifecycle 담당의 Sandbox Manager 호출). `task_submit` 때 백그라운드로 켜기 시작 → Sandbox가 보는 Host 주소로 인증서·bootstrap 작성 → READY면 token 파일 삭제 → 세션이 끝나면(정상·실패·Codex 종료) 끄고 치운다. Runner가 응답이 없으면 같은 Sandbox에서 Runner만 다시 켜거나 Sandbox를 새로 켠다(다음 세대). `mcp_server.py --runner-exe`일 때만 쓴다 | 5.9 |
 | `startup.py` | Startup Verification. Runner가 "준비됐다"고 해도 Host가 7가지(버전·Capability·Monitor·시계 / Worker 생존·첫 캡처·Heartbeat)를 확인한 뒤에만 READY. 등록 후 120초 안에 안 되면 실패 | 4.5 |
 
@@ -152,7 +152,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | Heartbeat 간격, 이상 판정 기준 | `runtime_session.py` 위쪽 상수 |
 | token 유효시간 | `session_registry.py`의 `TOKEN_TTL_S`, `RECONNECT_TTL_S` |
 | Runner에게서 받는 메시지 검사 | `connection.py`의 `check()`, `scrp/validate.py` |
-| Output 수신·종료 전 확보·중복 방지·검사와 승인 | `output_export.py`, `artifacts.py`, `shared_scanner.py`, `approval.py`, `lifecycle.py` |
+| Output 수신·종료 전 확보·중복 방지·자동 검사와 MCP 결과 | `output_export.py`, `artifacts.py`, `shared_scanner.py`, `lifecycle.py`, `mcp_runtime.py`, `mcp_server.py` |
 | Output 바로가기와 잠금 목록 계약 | sandbox_runner의 `output_shortcut`·`output_snapshot`, `schema/payload/OUTPUT_SNAPSHOT_*.schema.json` |
 
 ## 테스트
@@ -176,7 +176,8 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_artifact_export.py` | 파일 반출: Runner 계약 예제 14개, bootstrap 선택, token 종류 분리, Telemetry 없으면 READY 안 됨, 중복 후보, 한글·빈 파일 반출(바이트·해시 일치, 빈 201), 승인 거부, 검사 통과·차단·오류·시간 초과·형식, Runner 거부·결과 불일치·결과 없음, 채널·연결 끊김·세션 종료 취소, 수신 거부 코드, AMSI EICAR 자체 시험 |
 | `tests/test_repo_rules.py` | 저장소 규칙([AGENTS.md](../AGENTS.md)): 코드가 비교하는 도구 이름·도구 표·거부 단축키가 도구 규격과 맞는지, Agent에게 가는 오류 코드마다 `ERROR_HINTS`가 있는지, 패키지 의존 방향, 한글 .ps1의 BOM, README의 도구 수와 모듈 표, AGENTS.md가 가리키는 파일 |
 | `tests/test_codex_skill.py` | 팀 공용 코덱스 Skill이 이 Host에 있는 도구·옵션만 부르는지 |
-| `tests/test_output_export.py` | 검증된 수신본 유지, 목록 확인·검사·최종 승인 순서, 차단·보류, 동일 바이트 재사용, 정리 실패, 잠금 해제 오류, 확보 실패 시 종료 금지, 세대 교체 후 재확보와 이전 응답 거부 |
+| `tests/test_output_export.py` | CLEAN 자동 저장·악성/오류 차단·팝업 없음·혼합 파일 종료 처리, MCP 완료 대기·취소·중복 방지, 레거시 승인 순서, 정리 실패·잠금 오류·확보 실패 시 종료 금지·세대 교체 |
+| `tests/test_mcp_runtime.py` | MCP 수명주기, 종료와 창 닫기 후 반출 결과 보존·조회, 조회 시 VM 재시작 없음 |
 | `tests/test_shared_folder.py`, `tests/test_window_close.py` | Shared 옵션 거부, Output 승인 창, 창 닫힘 시 확보 → 종료 → 반출 순서와 확보 실패 시 VM 유지 |
 | `tests/test_unified_verification.py`, `tests/test_solution_session.py` | 실제 Output 바로가기 기반 검증 명령, 반출 해시·MOTW·중복 확인, 통합 실행 진입점 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |

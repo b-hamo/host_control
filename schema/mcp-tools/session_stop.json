@@ -1,6 +1,6 @@
 {
   "name": "session_stop",
-  "description": "End this session and discard its runtime. Everything inside the runtime is destroyed, so export anything you need with artifact_export first. Use it when the goal is met, or when you decide the task cannot be completed safely.",
+  "description": "End this session when the user requests it. In integrated Output mode, normal termination acquires remaining Output files before shutdown and automatically saves each verified CLEAN file to Downloads/SandboxOutput. Malware and scanner errors remain unpublished. The output response reports acquisition and per-file results; artifact_list and runtime_get_state keep the results readable after termination. Security termination or forced VM loss may leave acquisition incomplete. In legacy mode export needed files with artifact_export before stopping.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -678,6 +678,13 @@ class ArtifactBroker:
         if self.unified is not None:
             out["source"] = "output"
             out["export_flow"] = "review -> scan -> final approval -> Downloads/SandboxOutput"
+            if getattr(self.unified, "automatic", False):
+                terminal = art.stage in (EXPORTED, BLOCKED, FAILED, "HELD", "DELETED", "SUPERSEDED", CANCELLED)
+                completed = terminal and art.artifact_id not in self.unified.requested
+                out.update(completed=completed,
+                           notification="mcp", automatic_export=True,
+                           next_step=None if completed else "artifact_list",
+                           export_flow="receive -> scan -> CLEAN -> Downloads/SandboxOutput")
         if not received:
             out["unverified"] = "size, type and hash are unknown until the Host has received the file"
         return out

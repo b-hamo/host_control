@@ -305,6 +305,8 @@ class Broker:
         if not self.artifacts.needs_new_attempt(art):
             return Decision("ALLOW", "P-ARTIFACT-EXISTING", "already requested; returns its state"), {}
         shown = {"path": art.relative_path, "artifact_id": art.artifact_id}
+        if (getattr(self.artifacts.unified, "automatic", False) and decision.result != "DENY"):
+            return Decision("ALLOW", "P-OUTPUT-AUTO-SCAN", "publish only after verified CLEAN scan"), shown
         if self.artifacts.unified is not None:
             shown.update(self.artifacts.unified.summary(art))
             if decision.result != "DENY":
@@ -517,12 +519,19 @@ class Broker:
             if tool == "artifact_list":
                 try:
                     if self.artifacts.unified is not None and not s.terminated:
+                        if getattr(self.artifacts.unified, "automatic", False):
+                            await self.artifacts.unified.wait(args.get("wait_ms", 0))
                         await self.artifacts.unified.refresh(s)
                     return self.artifacts.list(s, args["status"], args["limit"], args["cursor"])
                 except ArtifactError as e:
                     raise BrokerError(e.code, e.message, next_step=e.next_step) from None
             try:
-                return await self.artifacts.export(s, args["artifact_id"])
+                result = await self.artifacts.export(s, args["artifact_id"])
+                output = self.artifacts.unified
+                if getattr(output, "automatic", False):
+                    await output.wait(args.get("wait_ms", 30000), args["artifact_id"])
+                    result = result | output.result_view(self.artifacts.get(args["artifact_id"]))
+                return result
             except ArtifactError as e:
                 raise BrokerError(e.code, e.message, next_step=e.next_step) from None
         if tool == "session_stop":

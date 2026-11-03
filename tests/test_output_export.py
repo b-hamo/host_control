@@ -44,12 +44,12 @@ def setup(tmp_path, runtime, client, **choices):
     session = RuntimeSession(("SES-OUTPUT", "RT-1", 1))
     human = Human(runtime.scanner, **choices)
     output = OutputExport(broker, finisher(client), human, SimpleNamespace(session=session),
-                          destination=tmp_path / "Downloads" / "SandboxOutput")
+                          destination=tmp_path / "Downloads" / "SandboxOutput", automatic=False)
     return broker, session, human, output
 
 
-async def receive(broker, output, session, data=b"arbitrary binary\x00\xff"):
-    payload = dict(event_id=str(uuid.uuid4()), relative_path="nested/result.bin",
+async def receive(broker, output, session, data=b"arbitrary binary\x00\xff", path="nested/result.bin"):
+    payload = dict(event_id=str(uuid.uuid4()), relative_path=path,
                    observed_at="2026-11-03T00:00:00Z", category="OUTPUT_SNAPSHOT")
     assert broker.store(session.identity, payload)
     art = broker._by_event[(session.identity, payload["event_id"])]
@@ -120,7 +120,7 @@ def test_mcp_broker_https_upload_and_both_gates(tmp_path, service, first, last):
         host = Host(tmp_path / "host", approver=human)
         async def install():
             output = OutputExport(host.backend.artifacts, finisher(client), human,
-                                  SimpleNamespace(session=host.backend.session), destination=tmp_path / "Downloads")
+                                  SimpleNamespace(session=host.backend.session), destination=tmp_path / "Downloads", automatic=False)
             async def no_snapshot(*args, **kwargs):
                 pass  # this fixture exercises transport/gates, not final manifest acquisition
             output.refresh = no_snapshot
@@ -334,4 +334,188 @@ def test_late_snapshot_reply_from_retired_generation_never_completes_current_cap
         await output.refresh(new, closing=True)
         assert output._captured == new.identity and output.acquisition["complete"]
         assert output.acquisition["identity"] == list(new.identity)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("verdict", [Verdict.CLEAN, Verdict.DETECTED, Verdict.ERROR, Verdict.UNVERIFIABLE])
+def test_automatic_exit_scan_has_no_dialogs_and_only_clean_is_saved(tmp_path, service, verdict):
+    runtime, client = service(FakeScanner(verdict))
+    async def run():
+        broker, session, human, output = setup(tmp_path, runtime, client)
+        output.automatic = True
+        art = await receive(broker, output, session)
+        session.terminated = True
+        output._captured = session.identity
+        output.acquisition = {"complete": True, "artifacts": [art.artifact_id]}
+        result = await output.finish_closed()
+        view = result["artifacts"][0]
+        assert human.events == []
+        assert view["completed"] and view["notification"] == "mcp"
+        assert art.stage == ("EXPORTED" if verdict == Verdict.CLEAN else "BLOCKED")
+        assert bool(view["export_path"]) == (verdict == Verdict.CLEAN)
+        files = list((tmp_path / "Downloads").rglob("result.bin"))
+        assert len(files) == (1 if verdict == Verdict.CLEAN else 0)
+        if files:
+            assert files[0].read_bytes() == b"arbitrary binary\x00\xff"
+            assert "ZoneId=3" in Path(str(files[0]) + ":Zone.Identifier").read_text()
+        await output.finish_closed()
+        assert len(runtime.scanner.scanned) == 1
+    asyncio.run(run())
+
+
+def test_automatic_incomplete_manifest_keeps_received_bytes_unpublished(tmp_path, service):
+    runtime, client = service()
+    async def run():
+        broker, session, human, output = setup(tmp_path, runtime, client)
+        output.automatic = True
+        art = await receive(broker, output, session)
+        session.terminated = True
+        await output.finish_closed()
+        assert art.stage == "HELD" and output.owns(art)
+        assert not runtime.scanner.scanned and not human.events
+        assert not (tmp_path / "Downloads").exists()
+    asyncio.run(run())
+
+
+def test_mcp_automatic_export_returns_terminal_result_without_approver(tmp_path, service):
+    from test_artifact_export import Host
+    runtime, client = service()
+    human = Human(runtime.scanner, "hold", "hold")
+    async def run():
+        host = Host(tmp_path / "host", approver=human)
+        async def install():
+            output = OutputExport(host.backend.artifacts, finisher(client), human,
+                                  SimpleNamespace(session=host.backend.session), destination=tmp_path / "Downloads")
+            async def no_snapshot(*args, **kwargs):
+                pass
+            output.refresh = no_snapshot
+        await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(install(), host.backend.loop))
+        runner, serving = await host.start()
+        try:
+            await runner.report("bundle.zip", b"PK\x00binary")
+            art = (await host.call("artifact_list"))["artifacts"][0]
+            result = await host.call("artifact_export", {"artifact_id": art["artifact_id"]})
+            assert result["ok"] and result["accepted"] and result["completed"] and result["status"] == "EXPORTED", result
+            assert Path(result["export_path"]).read_bytes() == b"PK\x00binary"
+            assert not human.events
+            repeat = await host.call("artifact_export", {"artifact_id": art["artifact_id"]})
+            assert repeat["export_path"] == result["export_path"] and repeat["completed"]
+            assert len(runtime.scanner.scanned) == 1
+        finally:
+            await host.close(serving)
+    asyncio.run(run())
+
+
+def test_wait_timeout_and_cancel_do_not_cancel_export():
+    async def run():
+        output = object.__new__(OutputExport)
+        gate = asyncio.Event()
+        task = asyncio.create_task(gate.wait())
+        output._exports = {"ART-1": task}
+        await output.wait(1, "ART-1")
+        assert not task.done()
+        waiter = asyncio.create_task(output.wait(30000))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert not task.cancelled()
+        gate.set()
+        await task
+    asyncio.run(run())
+
+
+def test_exit_processes_each_file_after_malware_error_and_explicit_export(tmp_path, service):
+    class MixedScanner(FakeScanner):
+        def scan_file(self, path, cancel=None):
+            self.verdict = {b"bad": Verdict.DETECTED, b"error": Verdict.ERROR}.get(
+                path.read_bytes(), Verdict.CLEAN)
+            return super().scan_file(path, cancel)
+
+    runtime, client = service(MixedScanner())
+    async def run():
+        broker, session, human, output = setup(tmp_path, runtime, client)
+        output.automatic = True
+        arts = [await receive(broker, output, session, data, path=f"{index}.bin")
+                for index, data in enumerate([b"requested", b"bad", b"error", b"remaining"])]
+        await output.export(session, arts[0])
+        await output.wait(30000)
+        assert arts[0].stage == "EXPORTED"
+        session.terminated = True
+        output._captured = session.identity
+        output.acquisition = {"complete": True, "artifacts": [a.artifact_id for a in arts]}
+        result = await output.finish_closed()
+        assert [a.stage for a in arts] == ["EXPORTED", "BLOCKED", "BLOCKED", "EXPORTED"]
+        assert all(v["completed"] for v in result["artifacts"])
+        assert not human.events and len(runtime.scanner.scanned) == 4
+        assert sorted(p.read_bytes() for p in (tmp_path / "Downloads").rglob("*.bin")) == [b"remaining", b"requested"]
+        await output.finish_closed()
+        assert len(runtime.scanner.scanned) == 4
+    asyncio.run(run())
+
+
+def test_unexpected_file_failure_does_not_abort_other_exit_exports(tmp_path, service, monkeypatch):
+    runtime, client = service()
+    async def run():
+        broker, session, human, output = setup(tmp_path, runtime, client)
+        output.automatic = True
+        failed = await receive(broker, output, session, path="failed.bin")
+        good = await receive(broker, output, session, path="good.bin")
+        finish = output.finisher._finish
+        async def fail_one(share, *args, **kwargs):
+            if share == output.receipts[failed.artifact_id].folder:
+                raise RuntimeError("injected scanner failure")
+            return await finish(share, *args, **kwargs)
+        monkeypatch.setattr(output.finisher, "_finish", fail_one)
+        session.terminated = True
+        output._captured = session.identity
+        output.acquisition = {"complete": True, "artifacts": [failed.artifact_id, good.artifact_id]}
+        await output.finish_closed()
+        assert failed.stage == "BLOCKED" and failed.result["code"] == "OUTPUT_FAILED"
+        assert good.stage == "EXPORTED" and not human.events
+        assert not list((tmp_path / "Downloads").rglob("failed.bin"))
+    asyncio.run(run())
+
+
+def test_journal_failure_after_publication_preserves_real_export(tmp_path, service, monkeypatch):
+    runtime, client = service()
+    async def run():
+        broker, session, human, output = setup(tmp_path, runtime, client)
+        output.automatic = True
+        art = await receive(broker, output, session)
+        def fail_journal():
+            raise OSError("injected journal failure")
+        monkeypatch.setattr(output, "_persist", fail_journal)
+        await output.export(session, art)
+        await output.wait(30000)
+        view = output.result_view(art)
+        assert view["status"] == "EXPORTED" and view["completed"]
+        assert Path(view["export_path"]).read_bytes() == b"arbitrary binary\x00\xff"
+        assert "journal failure" in view["result"]["post_export_error"]
+        assert not broker.needs_new_attempt(art) and not human.events
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("problem", ["unavailable", "changed"])
+def test_automatic_unavailable_scanner_and_changed_bytes_never_publish(tmp_path, service, monkeypatch, problem):
+    runtime, client = service()
+    async def run():
+        broker, session, human, output = setup(tmp_path, runtime, client)
+        output.automatic = True
+        art = await receive(broker, output, session, b"first")
+        if problem == "unavailable":
+            async def unavailable():
+                raise ConnectionError("scanner service unavailable")
+            monkeypatch.setattr(output.finisher, "_health", unavailable)
+        else:
+            import stat
+            receipt = output.receipts[art.artifact_id]
+            path = receipt.folder / receipt.name
+            path.chmod(stat.S_IWRITE)
+            path.write_bytes(b"other")
+        await output.export(session, art)
+        await output.wait(30000)
+        assert output.result_view(art)["completed"] and art.stage == "BLOCKED"
+        assert not human.events and not runtime.scanner.scanned
+        assert not (tmp_path / "Downloads").exists()
     asyncio.run(run())

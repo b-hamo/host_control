@@ -1,6 +1,6 @@
 {
   "name": "artifact_list",
-  "description": "List the files this session's runtime reported as export candidates, with their status: PENDING (reported, or being transferred), QUARANTINED (received, waiting), SCANNING, EXPORTED (export_path is the file on this computer) or BLOCKED (result.code says why). Size and hash are unknown until the Host has received the file. This reads the Host's registry of reported files; it is not a live directory listing, so a file changed or deleted after it was reported is refused when exported.",
+  "description": "List Output files and per-file export results, including after Sandbox termination. completed=true is terminal, not necessarily successful: only EXPORTED with export_path means saved. STAGED is received but unscanned. wait_ms waits for ongoing explicit exports without starting a new one. Remaining current Output files are scanned and automatically saved only on CLEAN at normal Sandbox termination; failures remain unpublished.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -34,6 +34,13 @@
         "maxLength": 128,
         "default": null,
         "description": "next_cursor from a previous call, to get the following page."
+      },
+      "wait_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 30000,
+        "default": 0,
+        "description": "Wait up to this many milliseconds for ongoing Output exports; timeout does not cancel them."
       }
     }
   },

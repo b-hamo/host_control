@@ -284,3 +284,31 @@ def test_session_private_files_do_not_touch_another_hosts_upload(tmp_path):
     controller = McpRuntime(config, capture)
     with pytest.raises(RuntimeError, match="captured before launch"):
         controller.call("task_submit", {"goal": "inert"})
+
+
+@pytest.mark.parametrize("already_retired", [False, True])
+def test_output_results_survive_stop_and_remain_readable(tmp_path, already_retired):
+    from types import SimpleNamespace
+    from host.mcp_runtime import success
+    files = [{"artifact_id": "ART-000001", "status": "EXPORTED", "completed": True,
+              "export_path": "Downloads/SandboxOutput/SES-1/ART-000001/clean.bin"},
+             {"artifact_id": "ART-000002", "status": "BLOCKED", "completed": True,
+              "export_path": None, "result": {"code": "SCAN_ERROR"}}]
+    output = {"completed": True, "acquisition": {"complete": True}, "artifacts": files}
+    session = SimpleNamespace(terminated=already_retired)
+    def shutdown():
+        session.terminated = True
+    backend = SimpleNamespace(session=session, is_alive=lambda: not session.terminated,
+                              shutdown=shutdown, cleanup_confirmed=True, error=None,
+                              call=lambda *_: success(stopped=True), final_status={"state": "TERMINATED"},
+                              final_output=output, final_artifacts=files)
+    def forbidden(_):
+        pytest.fail("query must not restart the Sandbox")
+    controller = McpRuntime(args(tmp_path), forbidden)
+    controller.backend = backend
+    stopped = body(controller.call("session_stop", {"reason": "USER_STOP"}))
+    assert stopped["output"] == output and stopped["host_released"]
+    assert body(controller.call("runtime_get_state", {}))["output"] == output
+    listed = body(controller.call("artifact_list", {"status": "BLOCKED", "limit": 1}))
+    assert listed["artifacts"] == [files[1]] and listed["session_ended"]
+    assert listed["output"]["acquisition"]["complete"]
