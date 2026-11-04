@@ -18,6 +18,8 @@ def test_profile_always_connects_all_three_components_and_service(tmp_path):
                         '--approval': 'dialog'}.items():
         assert args[args.index(flag) + 1] == str(value)
     assert {'--artifact-export', '--sandbox-run', '--agent-guard'} <= set(args)
+    # 2026-11-03 멘토링: only a publicly trusted signed program also goes to Downloads
+    assert '--signed-downloads' in args and '--save-downloads' not in args
     assert '--shared' not in args and '--unified-export' not in args
     assert args[args.index('--artifact-max-bytes') + 1] == '52428800'
     runner = tmp_path / "한글 dir's" / 'runner.exe'

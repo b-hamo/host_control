@@ -21,7 +21,7 @@ def host_arguments(runner: Path, work: Path, state: Path) -> list[str]:
     return [
         "--runner-exe", str(runner), "--sandbox-root", str(state / "sandbox"),
         "--inbox", str(work / "inbox"), "--output-root", str(work / "output"),
-        "--save-downloads", "--agent-guard", "--artifact-export",
+        "--signed-downloads", "--agent-guard", "--artifact-export",
         "--artifact-max-bytes", "52428800",
         "--artifact-scanner", "defender-service", "--approval", "dialog",
         "--sandbox-run", "--router-capture",

@@ -57,6 +57,7 @@ Sandbox 안 Runner
 |---|---|---|
 | `runtime_session.py` | 연결이 끊겨도 이어지는 세션. 5초마다 HEARTBEAT, 연속 2회 누락 DEGRADED · 3회 UNRESPONSIVE. 끊길 때 결과를 못 받은 Action은 재전송하지 않고 재접속 후 STATE_REQUEST로 확인. task_id·action_id 발급, 마지막 화면과 받은 시각 보관, `status()`로 상태 조회 | 4.4, 4.5 |
 | `inbox_download.py` | `inbox_download` 도구의 본체. 공개 https만, 확인한 IP로 접속(DNS rebinding 차단), 리다이렉트마다 검사, 크기·개수 한도, 다 받은 뒤에만 받는 폴더로, MOTW 표시, zip은 Host에서 안 풂. 받는 폴더가 Host에서 실행 금지인지 시작 때 시험 | 5.9 |
+| `signature_check.py` | `--signed-downloads`의 서명 검사. exe·msi만. 기본은 공인 서명이면 제작사와 상관없이 통과(Windows 11 Smart App Control과 같은 기준), `--trusted-publishers`로 좁힘(B2B). 다른 코드를 실행하는 프로그램(Microsoft 권장 차단 목록 + 인터프리터)과 원격 제어 도구는 이름·버전 정보의 원래 이름·서명자로 제외, 서명 뒤·서명 표 안에 덧붙인 바이트 거부(CVE-2013-3900), 루트는 이 PC의 컴퓨터 저장소만, 폐기 확인(10초 안에 못 하면 불신). "신뢰"는 안전이 아니라 "공인된 유효한 서명" | 5.9 |
 | `sandbox_run.py` | `sandbox_run`·`sandbox_run_status` 본체 (`--sandbox-run`). 이 세션에서 받은 파일만, Host가 받을 때 남긴 해시가 출처. 정확한 명령에 묶인 Router `Authority` 위임을 이번 한 번 만들고(승인 창 없음, 기록), `RouterGuiPolicy`로 Win+R·한 줄·Enter만 허용(Enter 직전 재확인). 도우미 `sandbox_run_guest.ps1`과 명령서는 받는 폴더로 전달, 결과는 Guest 영수증을 반출 검사로 확인 | 7.x |
 | `artifacts.py` | 파일 반출 전송 (artifact-export-v1). 후보 등록·artifact_id → 일회용 업로드 권한 → ARTIFACT_REQUEST → 수신 기록과 ARTIFACT_RESULT 대조. Output 사전 수신은 검사 전 임시 보관이며, 공개는 CLEAN 검사 후 자동 진행한다. 종료 때 미완료 전송을 취소하고 검증된 Output 수신본은 보존한다 | 5.8 |
 | `artifact_scan.py` | 반출 전 검사. 형식 정책(UTF-8 `.txt`) + 백신. 기본은 검사기 없음 = 차단. AMSI는 EICAR 자체 시험을 통과해야만 사용. `defender-service`는 SecureArtifactScanner 서비스의 상태 확인·검사 결과 해석 | 5.8 |
@@ -169,6 +170,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
 | `tests/test_sandbox_run.py` | 받은 파일 실행: 받은 파일만·정확한 명령 표시·바뀐 파일 거부, 실행은 세 입력만(Win+R은 `POL-0.1.1`부터 Agent에게도 허용), Enter 직전 파일·도우미 변조 시 Enter 안 보냄, 영수증 대조, 자기 결과만 승인 없이 반출, MCP 전 구간(승인 창 없음·감사·도우미 삭제), 옵션 |
 | `tests/test_inbox_download.py` | 내려받기: 공개 https만·사설/메타데이터 주소 거부, 확인한 IP로만 접속(두 번째 DNS 없음), 리다이렉트 검사, 크기·개수 한도, 이름 정리·덮어쓰기 없음·MOTW, zip 안 풂, 실행 금지 시험, MCP 경로(정책·감사·쿼리 제거·받는 폴더 연결·감시 시작/종료), 잘못된 옵션 |
+| `tests/test_signature_check.py` | 서명 판정(스크립트·인터프리터·Microsoft 권장 차단 목록·원격 제어 도구 제외, 무효·폐기·확인 불가·사용자 루트 거부, 시간 초과, 기본은 공인 서명이면 통과·`--trusted-publishers`로 좁힘), 실제 Windows: Microsoft 서명 프로그램 통과, 이름 바꾼 python 거부, 서명 뒤·표 안 덧붙임 거부, `--signed-downloads`로 신뢰된 것만 다운로드 폴더에 |
 | `tests/test_scanner_client.py` | `scanner_client.py`를 스크립트형 가짜 파이프 서버로: 다른 요청·다른 Job의 응답, 끊김·무응답, 서비스 없음, 이벤트 루프 비차단, 종료 전 ABORT 완료 |
 | `tests/test_scanner_security.py` | `defender-service`의 공격·장애: 업로드 중단, 파이프 단절, 한도·용량, 승인 없음, 다른 세션·세대, 공개 중 취소·실패, 공개 파일 ACL, 링크, Host 종료 |
 | `tests/test_scanner_integration.py` | 실제 Windows (환경 변수로 켬): MpCmdRun 판정 근거, 설치된 서비스를 일반 사용자로(ACL·패키징·전 구간), 관리자로(중지·강제 종료·재설치). `scanner_service/README.md` §18 |
