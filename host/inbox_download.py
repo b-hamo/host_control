@@ -18,8 +18,8 @@ Based on the Lifecycle team's demo tool (sandbox_manager acf5f9f tools/inbox_dow
     user's Downloads folder like a browser download (marked as from the Internet) and stays there after
     the session; the Sandbox still gets the inbox copy (Downloads itself is never mapped)
   - optional (signed_to_downloads, Host --signed-downloads, 2026-11-03 멘토링): the same copy, but only for a
-    program with a valid signature of a trusted publisher (host/signature_check.py); anything else stays in
-    the inbox only. The result says why either way (signature)
+    program with a valid, publicly trusted signature (host/signature_check.py; --trusted-publishers narrows the
+    signers); anything else stays in the inbox only. The result says why either way (signature)
 
 Nothing downloaded is ever opened or run on the Host; it is only read to hash it.
 """
@@ -169,6 +169,7 @@ class Downloader:
     save_to_downloads: bool = False      # --save-downloads: also keep a copy in Downloads
     signed_to_downloads: bool = False    # --signed-downloads: that copy only for a trusted publisher's program
     signature_check: Callable | None = None   # tests inject one; None = host.signature_check.check
+    trusted_publishers: list[str] | None = None   # --trusted-publishers (B2B); None = any valid signature
 
     def _check(self, url: str) -> tuple[urllib.parse.SplitResult, str]:
         u = urllib.parse.urlsplit(url)
@@ -262,7 +263,7 @@ class Downloader:
                 verdict = None
                 if self.signed_to_downloads:
                     from host.signature_check import check
-                    verdict = (self.signature_check or check)(got)
+                    verdict = (self.signature_check or (lambda p: check(p, self.trusted_publishers)))(got)
                     log.info("INBOX signature %s: %s", got.name, verdict.reason)
                 keep = self.save_to_downloads or (verdict is not None and verdict.trusted)
                 saved = self._save_copy(got, digest, final_url) if keep else None

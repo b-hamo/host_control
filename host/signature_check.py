@@ -1,20 +1,24 @@
-"""Signature check for inbox_download --signed-downloads: is this download a program from a trusted publisher?
+"""Signature check for inbox_download --signed-downloads: does this download carry a valid, publicly trusted signature?
 
-Design (2026-11-03 멘토링, 서명 검사와 격리 폴더): a downloaded file whose Authenticode signature is valid and
-belongs to a trusted publisher may also go to the user's Downloads folder; everything else stays only in the
-inbox (deny-execute on the Host, run in the Sandbox). Ported from the 10/31 speed experiment
+Design (2026-11-03 멘토링, 서명 검사와 격리 폴더): a downloaded program with a valid Authenticode signature may
+also go to the user's Downloads folder; everything else stays only in the inbox (deny-execute on the Host, run
+in the Sandbox). By default any signer passes whose chain ends in a root of the machine stores, the rule
+Windows 11 Smart App Control uses for consumers when its cloud service cannot judge an app; since 2023 the
+CA/Browser Forum requires those code-signing keys in hardware (FIPS 140-2 Level 2). --trusted-publishers
+narrows it to a list (B2B). Ported from the 10/31 speed experiment
 (experiments/speed-2026-10-31/fastpath.py, L2 by publisher), with what the review found missing:
   - only .exe and .msi are judged; a script is code whatever its signature says
-  - interpreters and system tools that run other code (powershell, python, mshta, msiexec, ...) are refused
-    even when signed, by file name AND by the OriginalFileName in the version resource, so a renamed
-    powershell.exe ("setup.exe", genuinely signed by Microsoft) does not pass
+  - programs that run other code are refused even when signed: Microsoft's recommended block rules plus
+    interpreters (Survivalism, IEEE S&P 2021: living-off-the-land in 9.41% of 31.8M samples), by file name AND
+    by the OriginalFileName in the version resource, so a renamed powershell.exe does not pass (ATT&CK T1036.003)
+  - remote control tools are refused by name or signer (CISA AA23-025A)
   - nothing may follow the signature (CVE-2013-3900: Windows accepts bytes appended inside the certificate
     table unless EnableCertPaddingCheck is set, and the 3CX attack used that)
   - the chain must end in a root of the machine stores (LocalMachine Root or AuthRoot); a root only in the
     current user's store is something any program of this user, the Agent included, can add
   - revocation is checked over the network; when it cannot be checked within the time limit, not trusted
 
-"Trusted" here means "a valid signature of a listed publisher", never "safe": a publisher whose build was
+"Trusted" here means "a valid, publicly trusted signature (of a listed publisher, if listed)", never "safe": a publisher whose build was
 compromised (SolarWinds 2020, 3CX 2023) signs genuine malware. That is EDR territory (보호 경계).
 """
 
@@ -27,18 +31,31 @@ from pathlib import Path
 from typing import Callable
 
 CHECKED_SUFFIXES = {".exe", ".msi"}
-# Signed by their makers, but what they run is the code they are given (ATT&CK T1059, T1218 / LOLBAS).
-RUNS_OTHER_CODE = {
-    "python.exe", "pythonw.exe", "py.exe", "pyw.exe", "pwsh.exe", "powershell.exe", "powershell_ise.exe", "cmd.exe",
-    "wscript.exe", "cscript.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe", "msiexec.exe", "msbuild.exe",
-    "installutil.exe", "regasm.exe", "regsvcs.exe", "cmstp.exe", "certutil.exe", "bitsadmin.exe", "wmic.exe",
-    "forfiles.exe", "node.exe", "java.exe", "javaw.exe", "bash.exe", "wsl.exe", "conhost.exe", "explorer.exe",
+# Microsoft recommended block rules, user mode, executables (Microsoft Learn "Applications that can bypass
+# App Control", fetched 2026-11-05): Microsoft-signed programs that run code they are given.
+MICROSOFT_BLOCK_RULES = {
+    "addinprocess.exe", "addinprocess32.exe", "addinutil.exe", "aspnet_compiler.exe", "bash.exe", "bginfo.exe",
+    "cdb.exe", "cscript.exe", "csi.exe", "dbghost.exe", "dbgsvc.exe", "dbgsrv.exe", "dnx.exe", "dotnet.exe",
+    "fsi.exe", "fsianycpu.exe", "infdefaultinstall.exe", "kd.exe", "kill.exe", "lxrun.exe",
+    "microsoft.workflow.compiler.exe", "msbuild.exe", "mshta.exe", "ntkd.exe", "ntsd.exe", "powershellcustomhost.exe",
+    "rcsi.exe", "runscripthelper.exe", "texttransform.exe", "visualuiaverifynative.exe", "wfc.exe", "windbg.exe",
+    "wmic.exe", "wscript.exe", "wsl.exe", "wslconfig.exe", "wslhost.exe",
 }
-TRUSTED_PUBLISHERS = (
-    "Microsoft Corporation", "Google LLC", "Mozilla Corporation", "Python Software Foundation",
-    "Oracle America, Inc.", "Adobe Inc.", "JetBrains s.r.o.", "GitHub, Inc.", "Zoom Communications, Inc.",
-    "Docker Inc", "Notepad++",
-)
+# Interpreters and system proxies not on that list (ATT&CK T1059, T1218 / LOLBAS; Survivalism, IEEE S&P 2021).
+RUNS_OTHER_CODE = MICROSOFT_BLOCK_RULES | {
+    "python.exe", "pythonw.exe", "py.exe", "pyw.exe", "pwsh.exe", "powershell.exe", "powershell_ise.exe", "cmd.exe",
+    "rundll32.exe", "regsvr32.exe", "msiexec.exe", "installutil.exe", "regasm.exe", "regsvcs.exe", "cmstp.exe",
+    "certutil.exe", "bitsadmin.exe", "forfiles.exe", "node.exe", "java.exe", "javaw.exe", "conhost.exe",
+    "explorer.exe",
+}
+# Remote control tools: signed, not detected by antivirus, and they hand this computer to whoever is on the
+# other end (CISA AA23-025A: AnyDesk and ScreenConnect in the October 2022 refund scam). Matched as parts of
+# the file name, the OriginalFileName or the signer. Not a complete list.
+REMOTE_CONTROL = ("anydesk", "teamviewer", "screenconnect", "connectwise", "splashtop", "rustdesk", "supremo",
+                  "nanosystems", "ultraviewer", "ammyy", "ateraagent", "atera networks", "rutserv", "rutview", "remote utilities")
+# None: any valid signature that chains to a root of the machine stores, like Windows 11 Smart App Control
+# for an app its cloud service cannot judge (B2C). A list (--trusted-publishers, B2B) narrows it to those signers.
+TRUSTED_PUBLISHERS = None
 REVOCATION_TIMEOUT_S = 10.0
 
 
@@ -72,10 +89,14 @@ def check(path: Path, publishers=TRUSTED_PUBLISHERS, *, revocation: bool = True,
         return Verdict(False, None, "signature checks need Windows")
     if path.name.lower() in RUNS_OTHER_CODE:
         return Verdict(False, None, f"{path.name} runs other code; signed or not, it stays in the inbox")
+    if _remote_control(path.name):
+        return Verdict(False, None, f"{path.name} is a remote control tool; signed or not, it stays in the inbox")
     if suffix == ".exe":
         original = original_file_name(path)
         if original and original.lower() in RUNS_OTHER_CODE:
             return Verdict(False, None, f"this is {original} renamed; it runs other code and stays in the inbox")
+        if original and _remote_control(original):
+            return Verdict(False, None, f"this is {original} renamed; a remote control tool stays in the inbox")
         why = certificate_table_problem(path)
         if why:
             return Verdict(False, None, why)
@@ -87,9 +108,25 @@ def check(path: Path, publishers=TRUSTED_PUBLISHERS, *, revocation: bool = True,
     if not sig.machine_root:
         return Verdict(False, sig.signer, "the signing chain ends in a root this computer's user added, "
                                           "not one of the machine's trusted roots")
-    if sig.signer not in publishers:
+    if _remote_control(sig.signer or ""):
+        return Verdict(False, sig.signer, f"signed by {sig.signer}, a remote control vendor; it stays in the inbox")
+    if publishers is not None and sig.signer not in publishers:
         return Verdict(False, sig.signer, f"signed by {sig.signer}, which is not on the trusted publisher list")
     return Verdict(True, sig.signer, f"valid signature of {sig.signer}")
+
+
+def _remote_control(name: str) -> bool:
+    low = name.lower()
+    return any(word in low for word in REMOTE_CONTROL)
+
+
+def load_publishers(path: Path) -> list[str]:
+    """--trusted-publishers: a UTF-8 JSON list of signer names (the certificate's simple display name)."""
+    import json
+    names = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) and n.strip() for n in names):
+        raise ValueError(f"{path}: expected a non-empty JSON list of signer names")
+    return [n.strip() for n in names]
 
 
 def _verify_in_time(verify: Callable, path: Path, timeout_s: float) -> Signature | None:

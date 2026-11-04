@@ -107,7 +107,7 @@ SAVE_DOWNLOADS_RULE = (" WITH THIS HOST: the downloaded file is also saved in th
                        "deleted at the end. Never run it on this computer; it runs in the Sandbox only.")
 
 
-SIGNED_DOWNLOADS_RULE = (" WITH THIS HOST: a program (.exe, .msi) with a valid signature of a trusted publisher is "
+SIGNED_DOWNLOADS_RULE = (" WITH THIS HOST: a program (.exe, .msi) with a valid, publicly trusted signature is "
                          "also saved in the user's Downloads folder (downloads_copy); the result's signature says "
                          "whether it was and why. Anything else stays in the inbox only and runs in the Sandbox only. "
                          "Never run a download on this computer yourself.")
@@ -324,7 +324,8 @@ class HostBackend(threading.Thread):
                         raise RuntimeError(f"inbox {inbox}: {why}")
                     downloader = getattr(a, "inbox_downloader", None) or Downloader(   # tests inject one
                         Path(inbox), save_to_downloads=bool(getattr(a, "save_downloads", False)),
-                        signed_to_downloads=bool(getattr(a, "signed_downloads", False)))
+                        signed_to_downloads=bool(getattr(a, "signed_downloads", False)),
+                        trusted_publishers=getattr(a, "trusted_publisher_names", None))
                     log.info("inbox %s: %s; inbox_download on", inbox, why)
                 self.session = sessions.get(identity)      # startup clock starts at task_submit
                 def switch(new_session, notice: str) -> None:
@@ -654,8 +655,11 @@ def main(argv: list[str] | None = None) -> None:
                     help="with --inbox: inbox_download also saves a copy in the user's Downloads folder (marked as "
                          "from the internet) that stays after the session")
     ap.add_argument("--signed-downloads", action="store_true",
-                    help="with --inbox: like --save-downloads, but only for a program (.exe, .msi) with a valid "
-                         "signature of a trusted publisher (host/signature_check.py); the rest stays in the inbox")
+                    help="with --inbox: like --save-downloads, but only for a program (.exe, .msi) with a valid, "
+                         "publicly trusted signature (host/signature_check.py); the rest stays in the inbox")
+    ap.add_argument("--trusted-publishers", type=Path, default=None,
+                    help="with --signed-downloads: JSON list of signer names; only these pass (default: any valid "
+                         "publicly trusted signer). Keep the file where the Agent cannot write")
     ap.add_argument("--shared", type=Path, default=None,
                     help=argparse.SUPPRESS)
     ap.add_argument("--sandbox-run", action="store_true",
@@ -712,6 +716,15 @@ def main(argv: list[str] | None = None) -> None:
         ap.error("--signed-downloads needs --inbox (it is part of inbox_download)")
     if args.signed_downloads and args.save_downloads:
         ap.error("--signed-downloads and --save-downloads: pick one (--save-downloads copies every download)")
+    args.trusted_publisher_names = None
+    if args.trusted_publishers is not None:
+        if not args.signed_downloads:
+            ap.error("--trusted-publishers needs --signed-downloads")
+        from host.signature_check import load_publishers
+        try:
+            args.trusted_publisher_names = load_publishers(args.trusted_publishers)
+        except (OSError, ValueError) as e:
+            ap.error(f"--trusted-publishers: {e}")
     if args.sandbox_run and (args.inbox is None or not args.artifact_export):
         ap.error("--sandbox-run needs --inbox (the file to run) and --artifact-export (its checked result)")
     if args.router_capture and not args.sandbox_run:

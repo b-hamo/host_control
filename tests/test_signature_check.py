@@ -1,4 +1,4 @@
-"""--signed-downloads: only a trusted publisher's validly signed program also goes to Downloads (2026-11-03 멘토링).
+"""--signed-downloads: only a program with a valid, publicly trusted signature also goes to Downloads (2026-11-03 멘토링).
 
 The decisions are tested with an injected WinVerifyTrust result; the real Windows checks use a program that
 Microsoft signs and that stays installed (Edge), and are skipped where there is none.
@@ -39,7 +39,8 @@ def test_only_programs_are_judged(tmp_path, name):
     assert not v.trusted and "only .exe and .msi" in v.reason
 
 
-@pytest.mark.parametrize("name", ["powershell.exe", "python.exe", "msiexec.exe", "mshta.exe", "rundll32.exe"])
+@pytest.mark.parametrize("name", ["powershell.exe", "python.exe", "msiexec.exe", "mshta.exe", "rundll32.exe",
+                                  "msbuild.exe", "dotnet.exe", "wmic.exe"])
 def test_a_program_that_runs_other_code_is_refused_even_signed(tmp_path, name):
     v = check(msi(tmp_path, name), verify=fixed())
     assert not v.trusted and "runs other code" in v.reason
@@ -51,18 +52,43 @@ def test_a_program_that_runs_other_code_is_refused_even_signed(tmp_path, name):
     (Signature(0x800B010C, "Microsoft Corporation", True), "revoked"),
     (Signature(0x800B010E, "Microsoft Corporation", True), "could not be checked"),
     (Signature(0, "Microsoft Corporation", False), "root this computer's user added"),
-    (Signature(0, "Some Small Vendor Ltd", True), "not on the trusted publisher list"),
 ])
-def test_only_a_valid_signature_of_a_listed_publisher_is_trusted(tmp_path, sig, reason):
+def test_only_a_valid_publicly_trusted_signature_is_trusted(tmp_path, sig, reason):
     v = check(msi(tmp_path), verify=lambda p: sig)
     assert not v.trusted and reason in v.reason
     assert check(msi(tmp_path), verify=fixed()) == Verdict(True, "Microsoft Corporation",
                                                            "valid signature of Microsoft Corporation")
 
 
-def test_the_publisher_list_can_be_replaced(tmp_path):
+def test_any_valid_signer_passes_by_default_and_a_list_narrows_it(tmp_path):
+    """B2C: like Smart App Control, any publicly trusted signer. B2B: --trusted-publishers."""
+    assert check(msi(tmp_path), verify=fixed(signer="Some Small Vendor Ltd")).trusted
     assert check(msi(tmp_path), ["Contoso Ltd"], verify=fixed(signer="Contoso Ltd")).trusted
-    assert not check(msi(tmp_path), ["Contoso Ltd"], verify=fixed()).trusted
+    v = check(msi(tmp_path), ["Contoso Ltd"], verify=fixed())
+    assert not v.trusted and "not on the trusted publisher list" in v.reason
+
+
+@pytest.mark.parametrize("name, signer", [
+    ("AnyDesk.exe", "Microsoft Corporation"),
+    ("TeamViewer_Setup_x64.exe", "Microsoft Corporation"),
+    ("ScreenConnect.ClientSetup.msi", "Microsoft Corporation"),
+    ("helper.msi", "AnyDesk Software GmbH"),
+    ("helper.msi", "ConnectWise, LLC"),
+])
+def test_a_remote_control_tool_stays_in_the_inbox(tmp_path, name, signer):
+    """CISA AA23-025A: signed AnyDesk and ScreenConnect handed victims' computers to scammers."""
+    v = check(msi(tmp_path, name), verify=fixed(signer=signer))
+    assert not v.trusted and "remote control" in v.reason
+
+
+def test_the_publisher_file_is_a_list_of_names(tmp_path):
+    good = tmp_path / "publishers.json"
+    good.write_text('["Contoso Ltd", " Fabrikam, Inc. "]', encoding="utf-8")
+    assert sc.load_publishers(good) == ["Contoso Ltd", "Fabrikam, Inc."]
+    for bad in ('[]', '{"a": 1}', '["", "x"]', '[1]'):
+        good.write_text(bad, encoding="utf-8")
+        with pytest.raises(ValueError):
+            sc.load_publishers(good)
 
 
 def test_a_check_that_hangs_is_not_trusted(tmp_path):
@@ -168,3 +194,21 @@ def test_the_agent_is_told_and_the_option_is_checked(capsys):
     with pytest.raises(SystemExit):
         main(["--signed-downloads"])
     assert "--signed-downloads needs --inbox" in capsys.readouterr().err
+
+
+def test_the_publisher_list_reaches_the_check(tmp_path, server):
+    server.routes["/tool.exe"] = ("body", BODY)
+    seen = []
+    import host.signature_check as real
+
+    def spy(path, publishers=None, **kw):
+        seen.append(publishers)
+        return Verdict(False, None, "not signed")
+    d, _ = downloader(tmp_path, server, downloads=tmp_path, signed_to_downloads=True,
+                      trusted_publishers=["Contoso Ltd"])
+    orig, real.check = real.check, spy
+    try:
+        d.download(f"{server.base}/tool.exe")
+    finally:
+        real.check = orig
+    assert seen == [["Contoso Ltd"]]
