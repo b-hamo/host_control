@@ -17,12 +17,16 @@ Based on the Lifecycle team's demo tool (sandbox_manager acf5f9f tools/inbox_dow
   - optional (save_to_downloads, Host --save-downloads, 배주한 결정 2026-10-15): a copy also goes to the
     user's Downloads folder like a browser download (marked as from the Internet) and stays there after
     the session; the Sandbox still gets the inbox copy (Downloads itself is never mapped)
+  - optional (signed_to_downloads, Host --signed-downloads, 2026-11-03 멘토링): the same copy, but only for a
+    program with a valid signature of a trusted publisher (host/signature_check.py); anything else stays in
+    the inbox only. The result says why either way (signature)
 
 Nothing downloaded is ever opened or run on the Host; it is only read to hash it.
 """
 
 from __future__ import annotations
 
+import contextlib
 import email.message
 import hashlib
 import http.client
@@ -163,6 +167,8 @@ class Downloader:
     file_max: int = FILE_MAX
     deadline_s: float = DEADLINE_S
     save_to_downloads: bool = False      # --save-downloads: also keep a copy in Downloads
+    signed_to_downloads: bool = False    # --signed-downloads: that copy only for a trusted publisher's program
+    signature_check: Callable | None = None   # tests inject one; None = host.signature_check.check
 
     def _check(self, url: str) -> tuple[urllib.parse.SplitResult, str]:
         u = urllib.parse.urlsplit(url)
@@ -242,20 +248,30 @@ class Downloader:
             raise DownloadError("POLICY_DENIED", f"inbox already holds {files} files (limit {FILES_MAX})")
         with tempfile.TemporaryDirectory(prefix="scrp-inbox-dl-") as tmp:
             got, final_url = self.fetch(url, Path(tmp))
-            size = got.stat().st_size
-            if total + size > TOTAL_MAX:
-                raise DownloadError("POLICY_DENIED", f"inbox would exceed {TOTAL_MAX} bytes")
-            digest = _sha256(got)
-            try:
-                dst = place(self.inbox, got.name, got)
-            except OSError as e:
-                raise DownloadError("RUNTIME_UNAVAILABLE", f"could not write into the inbox ({type(e).__name__})") from None
-            mark_internet(dst, final_url)
-            saved = self._save_copy(got, digest, final_url) if self.save_to_downloads else None
+            with _hold_unchanged(got):          # the hashed and checked bytes are the copied bytes
+                size = got.stat().st_size
+                if total + size > TOTAL_MAX:
+                    raise DownloadError("POLICY_DENIED", f"inbox would exceed {TOTAL_MAX} bytes")
+                digest = _sha256(got)
+                try:
+                    dst = place(self.inbox, got.name, got)
+                except OSError as e:
+                    raise DownloadError("RUNTIME_UNAVAILABLE",
+                                        f"could not write into the inbox ({type(e).__name__})") from None
+                mark_internet(dst, final_url)
+                verdict = None
+                if self.signed_to_downloads:
+                    from host.signature_check import check
+                    verdict = (self.signature_check or check)(got)
+                    log.info("INBOX signature %s: %s", got.name, verdict.reason)
+                keep = self.save_to_downloads or (verdict is not None and verdict.trusted)
+                saved = self._save_copy(got, digest, final_url) if keep else None
         log.info("INBOX download %s -> %s (%d bytes, sha256=%s…)", _host_of(final_url), dst.name, size, digest[:12])
         result = {"source": url, "final_url": final_url,
                   "file": {"name": dst.name, "size": size, "sha256": digest},
                   "sandbox_path": f"{GUEST_INPUT}\\{dst.name}", "inbox_path": f"{GUEST_INBOX}\\{dst.name}"}
+        if verdict is not None:
+            result["signature"] = verdict.to_dict()
         if saved is not None:
             result["downloads_copy"] = saved
         return result
@@ -377,6 +393,29 @@ def _create_exclusive(path: Path):
             raise FileExistsError(str(path))
         raise ctypes.WinError(err)
     return os.fdopen(msvcrt.open_osfhandle(h, os.O_WRONLY | os.O_BINARY), "wb")
+
+
+@contextlib.contextmanager
+def _hold_unchanged(path: Path):
+    """Keep the file open with read-only sharing: until released, nobody can write, rename or delete it."""
+    if sys.platform != "win32":
+        yield
+        return
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING = 0x80000000, 0x1, 3
+    h = k32.CreateFileW(str(path), GENERIC_READ, FILE_SHARE_READ, None, OPEN_EXISTING, 0, None)
+    if h in (None, wintypes.HANDLE(-1).value):
+        raise DownloadError("RUNTIME_UNAVAILABLE", f"could not hold the downloaded file ({ctypes.get_last_error()})")
+    try:
+        yield
+    finally:
+        k32.CloseHandle(h)
 
 
 def mark_internet(path: Path, url: str) -> None:

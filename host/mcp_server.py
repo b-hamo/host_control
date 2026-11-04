@@ -107,11 +107,17 @@ SAVE_DOWNLOADS_RULE = (" WITH THIS HOST: the downloaded file is also saved in th
                        "deleted at the end. Never run it on this computer; it runs in the Sandbox only.")
 
 
-def save_downloads_description(tools: list[dict]) -> None:
-    """--save-downloads: tell the Agent the download also stays in Downloads."""
+SIGNED_DOWNLOADS_RULE = (" WITH THIS HOST: a program (.exe, .msi) with a valid signature of a trusted publisher is "
+                         "also saved in the user's Downloads folder (downloads_copy); the result's signature says "
+                         "whether it was and why. Anything else stays in the inbox only and runs in the Sandbox only. "
+                         "Never run a download on this computer yourself.")
+
+
+def save_downloads_description(tools: list[dict], rule: str = SAVE_DOWNLOADS_RULE) -> None:
+    """--save-downloads / --signed-downloads: tell the Agent what goes to Downloads."""
     for t in tools:
         if t["name"] == "inbox_download":
-            t["description"] = t["description"].rstrip() + SAVE_DOWNLOADS_RULE
+            t["description"] = t["description"].rstrip() + rule
 
 
 def guard_descriptions(tools: list[dict]) -> None:
@@ -317,7 +323,8 @@ class HostBackend(threading.Thread):
                     if not ok and not getattr(a, "inbox_skip_exec_check", False):   # tests only
                         raise RuntimeError(f"inbox {inbox}: {why}")
                     downloader = getattr(a, "inbox_downloader", None) or Downloader(   # tests inject one
-                        Path(inbox), save_to_downloads=bool(getattr(a, "save_downloads", False)))
+                        Path(inbox), save_to_downloads=bool(getattr(a, "save_downloads", False)),
+                        signed_to_downloads=bool(getattr(a, "signed_downloads", False)))
                     log.info("inbox %s: %s; inbox_download on", inbox, why)
                 self.session = sessions.get(identity)      # startup clock starts at task_submit
                 def switch(new_session, notice: str) -> None:
@@ -646,6 +653,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--save-downloads", action="store_true",
                     help="with --inbox: inbox_download also saves a copy in the user's Downloads folder (marked as "
                          "from the internet) that stays after the session")
+    ap.add_argument("--signed-downloads", action="store_true",
+                    help="with --inbox: like --save-downloads, but only for a program (.exe, .msi) with a valid "
+                         "signature of a trusted publisher (host/signature_check.py); the rest stays in the inbox")
     ap.add_argument("--shared", type=Path, default=None,
                     help=argparse.SUPPRESS)
     ap.add_argument("--sandbox-run", action="store_true",
@@ -698,6 +708,10 @@ def main(argv: list[str] | None = None) -> None:
         args.bootstrap_out = HOST_DIR / ".bootstrap" / "bootstrap.json"
     if args.save_downloads and args.inbox is None:
         ap.error("--save-downloads needs --inbox (it is part of inbox_download)")
+    if args.signed_downloads and args.inbox is None:
+        ap.error("--signed-downloads needs --inbox (it is part of inbox_download)")
+    if args.signed_downloads and args.save_downloads:
+        ap.error("--signed-downloads and --save-downloads: pick one (--save-downloads copies every download)")
     if args.sandbox_run and (args.inbox is None or not args.artifact_export):
         ap.error("--sandbox-run needs --inbox (the file to run) and --artifact-export (its checked result)")
     if args.router_capture and not args.sandbox_run:
@@ -719,6 +733,8 @@ def main(argv: list[str] | None = None) -> None:
         guard_descriptions(tools)
     if args.save_downloads:
         save_downloads_description(tools)
+    if args.signed_downloads:
+        save_downloads_description(tools, SIGNED_DOWNLOADS_RULE)
     instructions = INSTRUCTIONS + (ROUTER_INSTRUCTIONS if args.router_capture else "")
     server = McpServer(McpRuntime(args, HostBackend), tools, instructions=instructions, strict_tools=True)
     log.info("MCP server up (pid %s), %d tools", __import__("os").getpid(), len(server.tools))
