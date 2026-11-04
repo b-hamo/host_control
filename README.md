@@ -306,7 +306,8 @@ Router(#33·#35)의 부품을 GUI 모드에 붙인 것이다. Router 전용 서�
 결과의 `downloads_copy`에 위치가 나온다. 사본 저장에 실패해도 다운로드 자체는 실패로 치지 않는다.
 
 `--signed-downloads` (`--inbox`와 같이, 2026-11-03 멘토링 "서명 검사로 빠르게, 못 믿는 파일은 격리 폴더로"): `--save-downloads`와
-같은 다운로드 폴더 사본을 **공인된 유효한 서명이 있는 프로그램(.exe·.msi)에만** 만든다. 나머지는 지금처럼 받는 폴더에만
+같은 다운로드 폴더 사본을 **공인된 유효한 서명이 있는 프로그램(.exe·.msi)에만** 만든다. 통합 설치(`host/solution.py`)는 이 옵션으로 켠다
+(전에는 `--save-downloads`로 모든 파일을 복사했다). 나머지는 지금처럼 받는 폴더에만
 있고(Host에서 실행 금지) Sandbox에서만 실행한다. 두 옵션은 같이 쓸 수 없다. 결과의 `signature`(`trusted`·`signer`·`reason`)에 판정과
 이유가 나온다. 검사는 `host/signature_check.py`이고, 규칙마다 근거가 있다:
 
