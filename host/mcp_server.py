@@ -309,7 +309,7 @@ class HostBackend(threading.Thread):
                              ident[0], ident[2], rec.expires_utc)
                     return pem
 
-                manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root, audit)
+                manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root, audit, options=a)
                 downloader = None
                 inbox = getattr(a, "inbox", None)
                 if inbox is not None or getattr(a, "agent_guard", False):
@@ -327,6 +327,8 @@ class HostBackend(threading.Thread):
                         signed_to_downloads=bool(getattr(a, "signed_downloads", False)),
                         trusted_publishers=getattr(a, "trusted_publisher_names", None))
                     log.info("inbox %s: %s; inbox_download on", inbox, why)
+                    if getattr(manager, "guest_input_root", None):
+                        downloader.guest_input_root = manager.guest_input_root
                 self.session = sessions.get(identity)      # startup clock starts at task_submit
                 def switch(new_session, notice: str) -> None:
                     self.session = new_session             # recovery: next generation of the same session
@@ -356,7 +358,8 @@ class HostBackend(threading.Thread):
                         captures = CaptureStore(Path(a.artifact_dir) / "captures",
                                                 **({"clipboard": a.capture_clipboard}
                                                    if getattr(a, "capture_clipboard", None) else {}))   # tests only
-                    self.runner = SandboxRunner(Path(inbox), captures=captures)
+                    self.runner = SandboxRunner(Path(inbox), captures=captures,
+                        guest_input_root=getattr(manager, "guest_input_root", None))
                     policy, base_approver = self.runner.policy, approver
 
                     async def approver(summary: dict) -> bool:
@@ -510,7 +513,7 @@ class HostBackend(threading.Thread):
 SECURITY_INBOX_EVENTS = ("INBOX_LINK_REMOVED", "INBOX_HARDLINK_REMOVED")
 
 
-def _real_sandbox_manager(root: Path | None, audit=None):
+def _real_sandbox_manager(root: Path | None, audit=None, *, options=None):
     try:
         from sandbox_manager import SandboxManager
     except ImportError as e:
@@ -525,7 +528,17 @@ def _real_sandbox_manager(root: Path | None, audit=None):
         log.warning("SECURITY inbox: %s", msg)
         if audit is not None:
             audit.record(event="SECURITY_EVENT", category=kind, detail=msg[:512])
-    return SandboxManager(root, log=on_event)
+    if getattr(options, "micro_vm_package", None):
+        from sandbox_manager.micro_vm import MicroVmManager
+        if not root or not options.micro_vm_root or not options.micro_vm_relay:
+            raise RuntimeError("micro_VM requires explicit --sandbox-root, --micro-vm-root and --micro-vm-relay")
+        manager = MicroVmManager(root, package=options.micro_vm_package, vm_root=options.micro_vm_root,
+                                 relay=options.micro_vm_relay, log=on_event)
+    else:
+        manager = SandboxManager(root, log=on_event)
+    import inspect
+    log.info("loaded Manager class=%s path=%s", type(manager).__name__, inspect.getfile(type(manager)))
+    return manager
 
 
 def _error_result(code: str, message: str, retryable: bool, next_step: str | None) -> dict:
@@ -603,6 +616,10 @@ def _setup_logging(log_file: Path) -> None:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description="SCRP MCP Server (WBS 5.7)")
     ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--micro-vm-package", type=Path, default=None,
+                    help="explicit micro_VM app-window backend package (no automatic VM migration)")
+    ap.add_argument("--micro-vm-root", type=Path, default=None, help="micro_VM broker state root")
+    ap.add_argument("--micro-vm-relay", type=Path, default=None, help="built ScrpRelay.exe")
     ap.add_argument("--port", type=int, default=17443, help="wss port for the Runner (0 = any free port)")
     ap.add_argument("--upload-port", type=int, default=17444, help="https port for screenshot uploads (0 = any)")
     ap.add_argument("--session", default=None, help="session id (default: SES-<date>-<time>)")

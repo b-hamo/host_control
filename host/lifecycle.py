@@ -124,7 +124,9 @@ class SandboxLauncher:
             st["window_state"] = self._window_state()
         if self.output is not None:
             from host.router_command_bundle import output_directory
-            st["output"] = {"guest_folder": "Desktop\\Output.lnk",
+            st["output"] = {"guest_folder": (output_directory(self.session.identity)
+                                             if getattr(self.manager, "guest_input_root", None)
+                                             else "Desktop\\Output.lnk"),
                             "session_id": self.session.identity[0],
                             "guest_path": output_directory(self.session.identity),
                             "acquisition": self.output.acquisition, "at_end": self.output_result}

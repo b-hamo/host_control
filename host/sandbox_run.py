@@ -25,6 +25,7 @@ Nothing here starts a process on the Host.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -52,6 +53,58 @@ MSIEXEC = r"C:\Windows\System32\msiexec.exe"
 CAPABILITIES = ("process.execute", "gui.input", "gui.observe", "artifact.export.v1")
 HELPER = Path(__file__).with_name("sandbox_run_guest.ps1")
 CONTRACT = "sandbox-run-v1"
+
+
+def transport_wait_command(files) -> str:
+    """Wait inside this VM for exact immutable transport bytes, without replay.
+
+    Native VMSMB may expose a newly created directory entry after the SCRP
+    input has already arrived. Keep both verified files open against writes
+    until the original helper exits. Only generated basenames enter the code.
+    """
+    import re
+    if len(files) != 2:
+        raise ValueError("helper and manifest are required")
+    items = []
+    for path, digest_hex in files:
+        if not re.fullmatch(r"run-[a-f0-9]{16}\.(?:ps1|json)", path.name) or not re.fullmatch(r"[a-f0-9]{64}", digest_hex):
+            raise ValueError("invalid generated transport identity")
+        items.append("@('" + str(GUEST_INBOX / path.name) + "','" + digest_hex + "')")
+    script = ("$ErrorActionPreference='Stop';$d=[DateTime]::UtcNow.AddSeconds(120);$l=@();$a=@(" +
+              ",".join(items) + ");try{foreach($i in $a){while($true){$h=$null;try{"
+              "$h=[IO.File]::Open($i[0],'Open','Read','Read');$s=[Security.Cryptography.SHA256]::Create();"
+              "try{$x=[BitConverter]::ToString($s.ComputeHash($h)).Replace('-','').ToLowerInvariant()}finally{$s.Dispose()};"
+              "if($x -ne $i[1]){throw 'transport hash mismatch'};$l+=,$h;break"
+              "}catch{if($h){$h.Dispose()};if([DateTime]::UtcNow -ge $d){throw};Start-Sleep -Milliseconds 200}}};"
+              "& $a[0][0] -Manifest $a[1][0]}finally{foreach($h in $l){$h.Dispose()}}")
+    command = (POWERSHELL + " -NoLogo -NoProfile -WindowStyle Minimized -ExecutionPolicy Bypass -EncodedCommand " +
+               base64.b64encode(script.encode("utf-16le")).decode("ascii"))
+    if len(command.encode("utf-8")) > 4096:
+        raise ValueError("transport launch exceeds SCRP input limit")
+    return command
+
+
+def select_run_output(found: list[dict]) -> dict | None:
+    """Snapshot and watcher may report the same immutable bytes under two IDs.
+
+    Conflicting content is still ambiguous. Never let an older CLEAN copy mask
+    a blocked current copy; only the scanner-verified selected artifact is read.
+    """
+    current = [item for item in found if item.get("stage") != "SUPERSEDED"]
+    if not current:
+        return None
+    if len(current) == 1:
+        return current[0]
+    fingerprints = {(item.get("sha256"), item.get("size_bytes")) for item in current}
+    if len(fingerprints) != 1:
+        raise ValueError("ambiguous run output")
+    sha, size = next(iter(fingerprints))
+    if not isinstance(sha, str) or len(sha) != 64 or type(size) is not int:
+        raise ValueError("ambiguous run output")
+    blocked = next((item for item in current if item["status"] == "BLOCKED"), None)
+    if blocked:
+        return blocked
+    return next((item for item in current if item["status"] == "EXPORTED"), current[-1])
 GRANT_TTL_S = 3600              # a GUI program may stay open a while before its receipt comes back
 WAIT_INPUTS_S = 120             # how long the helper waits for the Desktop\Input copy
 MAX_EVIDENCE = 65536
@@ -161,8 +214,13 @@ class Run:
 
 
 class SandboxRunner:
-    def __init__(self, inbox: Path, *, base_policy: Policy | None = None, clock=time.time, captures=None):
+    def __init__(self, inbox: Path, *, base_policy: Policy | None = None, clock=time.time, captures=None,
+                 guest_input_root: str | None = None):
         self.inbox = Path(inbox)
+        self.guest_input = PureWindowsPath(guest_input_root) if guest_input_root else GUEST_INPUT
+        self.wait_for_transport = guest_input_root is not None
+        if not self.guest_input.is_absolute() or ".." in self.guest_input.parts:
+            raise ValueError("Guest input root must be an absolute Windows path")
         # host/router_capture.py CaptureStore (--router-capture). None: no router_* tools.
         self.captures = captures
         self._requests: dict[str, tuple[str, str]] = {}       # router_execute request_id -> (signature, run_id)
@@ -214,7 +272,7 @@ class SandboxRunner:
         if not self._verify_source(src):
             raise RunError("POLICY_DENIED", f"{path.name} changed after it was downloaded; download it again")
         suffix = path.suffix.lower()
-        target = str(GUEST_INPUT / path.name)
+        target = str(self.guest_input / path.name)
         if suffix == ".exe":
             exe, argv = target, tuple(arguments)
         elif suffix == ".msi":
@@ -228,7 +286,7 @@ class SandboxRunner:
         run_id = f"RUN-{self._seq:04d}"
         scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
         action = Action(run_id, "sandbox-run", Operation.EXECUTE, scope, run_id, sources=(src,),
-                        command=Command(exe, argv, str(GUEST_INPUT), src.source_id), outputs=("stdout",))
+                        command=Command(exe, argv, str(self.guest_input), src.source_id), outputs=("stdout",))
         run = Run(run_id, action, path.name, uuid4().hex[:16], identity)
         shown = {"run_id": run_id, "file": path.name, "source": src.reference.removeprefix("download:"),
                  "sha256": src.sha256, "command": list2cmdline([exe, *argv])}
@@ -289,14 +347,14 @@ class SandboxRunner:
         self._paths[derived.source_id] = path
         self.authority.sources[derived.source_id] = derived
         self.authority.sources[capture.source_id] = capture
-        target = str(GUEST_INPUT / path.name)
+        target = str(self.guest_input / path.name)
         exe, argv = POWERSHELL, ("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", target)
         self._seq += 1
         run_id = f"RUN-{self._seq:04d}"
         scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
         # The script first: the helper waits for sources[0] in Desktop\Input.
         action = Action(run_id, "router-execute", Operation.EXECUTE, scope, run_id, sources=(derived, capture),
-                        command=Command(exe, argv, str(GUEST_INPUT), derived.source_id), outputs=("stdout",))
+                        command=Command(exe, argv, str(self.guest_input), derived.source_id), outputs=("stdout",))
         origin = {"request_id": args["request_id"], "source_id": capture.source_id,
                   "script_source_id": derived.source_id, "transform": transform["transform"]}
         run = Run(run_id, action, path.name, uuid4().hex[:16], identity, origin=origin)
@@ -362,6 +420,8 @@ class SandboxRunner:
         run.transport = tuple(files)
         run.launch_line = (POWERSHELL + " -NoLogo -NoProfile -WindowStyle Minimized -ExecutionPolicy Bypass -File "
                            + str(GUEST_INBOX / files[0][0].name) + " -Manifest " + str(GUEST_INBOX / files[1][0].name))
+        if self.wait_for_transport:
+            run.launch_line = transport_wait_command(files)
 
     def _transport_intact(self, run: Run) -> bool:
         try:
@@ -493,9 +553,9 @@ class SandboxRunner:
                 break
         if not found:
             return None
-        if len(found) != 1:
-            raise ValueError("ambiguous run output")
-        view = found[0]
+        view = select_run_output(found)
+        if view is None:
+            return None
         if view["status"] == "BLOCKED":
             run.set("HELD", "RESULT_BLOCKED_BY_CHECK")
             return None

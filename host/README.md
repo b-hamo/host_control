@@ -1,5 +1,10 @@
 # host/ — Host 쪽 코드 안내
 
+micro_VM 앱 창 연결은 `mcp_server.py`의 Manager 선택, `lifecycle.py`의 Guest 경로,
+`inbox_download.py`의 입력 위치, `sandbox_run.py`의 전송 대기·결과 판정에서 처리한다.
+[구성과 검증 절차](../docs/micro-vm-app-window.md)를 따른다.
+`tests/test_micro_vm_transport.py`는 전송 해시·명령 제한과 중복 결과의 검사/충돌 처리를 검증한다.
+
 Agent(Codex)의 요청을 받아 검사하고, 격리된 Sandbox 안의 Runner로 전달하는 Host 프로그램이다.
 핵심 파일은 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.
 Router 부품(`router_*.py`)과 통합 솔루션(`solution*.py` 등)은 층 표 아래에 따로 정리했다.
