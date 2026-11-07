@@ -549,15 +549,8 @@ class McpServer:
             return
         if self.backend.is_alive() or self.backend.ident is not None:
             return
-        a = getattr(self.backend, "args", None)            # the Router's backend has none
-        if getattr(a, "agent_guard", False):
-            # One GUI Host per PC: the conversation that starts working takes the ports over from an
-            # older conversation's Host the Codex app kept running.
-            from host.single_host import reclaim_sandboxes, take_over
-            if take_over((getattr(a, "port", 0), getattr(a, "upload_port", 0))):
-                # Its Sandbox still maps the inbox, and nothing can be renamed in a mapped inbox
-                # (the start's no-execute probe would fail): stop it now, as the next start would.
-                reclaim_sandboxes(getattr(a, "sandbox_root", None))
+        # Legacy HostBackend callers also preserve every other conversation.
+        # A bind failure is not permission to terminate a process or its VM.
         self.backend.start()
 
     def handle(self, msg: dict) -> dict | None:

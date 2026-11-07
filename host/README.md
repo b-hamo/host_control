@@ -41,7 +41,7 @@ Sandbox 안 Runner
 | `tool_availability.py` | 이 세션에서 보여줄 도구를 정하는 규칙. Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 빼버리므로, 무거운 라이브러리 없이 쓸 수 있게 따로 뺐다 | 5.7 |
 | `tool_catalog.py` | `schema/mcp-tools/`의 도구 20개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
 | `mcp_runtime.py` | 오래 연결된 stdio MCP 뒤에서 실제 실행 Host를 필요할 때 켜고 바꾼다. 끝난 세션은 새 작업 요청으로만 대신하고, 조회·GUI 호출은 작업을 다시 돌리거나 다른 프로세스의 포트를 가져오지 않는다 (#54) | 5.7 |
-| `single_host.py` | `--agent-guard`: 이 PC에서 GUI MCP Host를 한 번에 하나만, 필요할 때 켠다. Codex 앱이 대화마다 띄운 Host가 시작 때 17443/17444를 잡아 두 번째 대화부터 포트 충돌(WinError 10048)이 나던 문제 때문 (#58) | 5.7 |
+| `single_host.py` | 이전 통합용 무동작 호환 API. 다른 채팅의 Host 종료와 Sandbox 회수를 하지 않는다. 포트 충돌은 시작 실패로 보고한다 (#113) | 5.7 |
 
 ## ② 요청을 검사하는 층 (Broker)
 
@@ -148,6 +148,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | 새 도구 추가, 도구 입력 규칙 변경 | `schema/mcp-tools/*.json` → `broker.py`의 `OPERATIONS`·`translate()` (같이 고칠 곳 전체는 [AGENTS.md](../AGENTS.md) 규칙 1) |
 | 보안 규칙 추가 (차단할 요청) | `policy.py` |
 | 호출 빈도 제한 변경 | `broker.py`의 `RATE_LIMITS` |
+| 다른 채팅의 Host·VM 보존 | `mcp_server.py`, `mcp_runtime.py`, `single_host.py`(무동작 호환 API), Manager의 배정 잠금 |
 | 오류별로 Agent에게 안내할 다음 행동 | `broker.py`의 `ERROR_HINTS` |
 | READY 전에 확인할 항목 | `startup.py`의 `StartupProfile`, `check_hello()`, `verify_runtime()` |
 | Heartbeat 간격, 이상 판정 기준 | `runtime_session.py` 위쪽 상수 |
@@ -165,6 +166,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_startup.py` | 정상 승격, 고장 Runner 거부, 시간 초과, 시계 오차 |
 | `tests/test_broker.py` | 검사별 거부, 정책, 빈도 제한, 감사 로그 마스킹, 도구 규격 ↔ 프로토콜 교차 검사 |
 | `tests/test_mcp_server.py` | 실제 자식 프로세스로 기동, 도구 목록 속도, Codex → Runner 전 구간, 스크린샷이 MCP image로 전달 |
+| `tests/test_single_host.py` | 이전 HostBackend 진입점도 다른 Host·부모 프로세스·VM을 종료하거나 회수하지 않음 |
 | `tests/test_observation_upload.py` | upload_id(1회용·만료), PNG 검사, HTTPS 수신 거부 코드, 해시·크기 대조, 조작된 업로드 차단, 세션 종료 시 삭제 |
 | `tests/test_sandbox_recovery.py` | Runner만 다시 켜기, 창 닫힘은 다시 안 켬, 먹통이면 Sandbox 새로 켜기, 실패 시 넘어가기·종료, 옛 세대 token 거부, 실제 Sandbox Manager로 재시작 확인 |
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
