@@ -88,6 +88,13 @@ container `7d4388c7-311b-4f61-86b6-1a2ae91c2e01`)에서 1MiB 결과 파일과 Ro
 `1794114302506-B-sandbox_run_status.result.json`에서 SUCCEEDED/GUEST_PROCESS_VERIFIED,
 exit_code=0, 자기 세션 stdout을 확인했다. 세 파일이 모두 Defender 검사 후 EXPORTED이며
 영수증은 execution_count=1이다. A/C는 기존 세션으로 계속 READY였다.
+같은 request_id 재호출(`1794114325291-B-router_execute.result.json`)도 기존 RUN-0001과
+SUCCEEDED/repeated=true를 반환했다. 이 B는 14:06 정상 종료했고 반출 3건/held=0/정리를 확인했다.
+
+14:07 확인 시 A/C는 계속 READY였다. 앞선 `reconnect2-20261108`의 B
+`SES-1782cfb03f8e47e9b9f9484d5a9aed67` / container `06fdcf74-b1d1-43ce-a6a7-5e1893e4b299`는
+Control만 READY이고 반출 채널 장애 상태로 남아 있다. 검사되지 않은 시험 결과가 있는 이 실패 재현 VM을
+정상 반출/종료 성공으로 세거나 강제 정리하지 않았다. 후속 두 B의 정상 종료 결과와 구분한다.
 
 ## 소스와 바이너리
 
@@ -156,3 +163,14 @@ SUCCEEDED를 확인했다. 테스트 내부 Worker는 대역이며 실제 장애
 장애 주입은 전체 VM ID·소유 SID·세션 label·Host 부모 PID·service GUID가 일치하는 relay 하나만 대상으로 한다.
 복구는 새 HELLO_ACK·재동기화·READY·실제 화면과 작업 유지로 판정한다. listener ready 파일은 성공 기준이 아니다.
 모든 반출은 검사된 EXPORTED 경로의 내용/해시를 영수증과 대조한다.
+
+이번 실제 장애/뷰어 시험에 사용한 로컬 스크립트는
+`C:\minobox\tmp\fault-artifact-b-control-relay-20261108.ps1`과
+`C:\minobox\tmp\verify-b-viewer-close-20261108.ps1`이다. 각각 해당 시험의 정확한 container/세션/소유자를
+검사하므로 다른 실행에는 새 ID로 준비해야 한다. 수집 결과는 같은 증거 루트의
+`b-control-relay-fault.json`, `viewer-close.json`, `viewer-frames.json`이다.
+새 설치/실행은 `micro-vm-app-window.md`의 checkout 경로 설정과 `tools/micro_vm_session_lab.py`를 사용한다.
+새 artifact.reconnect.v1 Host/Runner를 함께 배포한 후 새 증거 루트를 사용하며, 동작 중인 A/C의
+프로세스를 교체하지 않는다. 결과 영수증 경합 시험은 Router로 1MiB 텍스트를 생성한 뒤
+그 파일에 artifact_export(wait_ms=0), 이어 sandbox_run_status를 호출해 실제 ARTIFACT_BUSY와
+후속 SUCCEEDED를 확인한다. 정책/시간 초과 오류를 재시도 대상으로 바꾸지 않는다.
