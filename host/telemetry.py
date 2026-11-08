@@ -51,14 +51,17 @@ async def handle_telemetry(ws, registry: SessionRegistry, sessions, artifacts: A
 
     conn = Connection(ws, hello, rec.identity(), profile=ARTIFACT_EXPORT_V1, prefix="TEL",
                       max_bytes=TELEMETRY_MAX_EVENT_BYTES)
-    await conn.send(conn.me.reply(hello, "CHANNEL_ACK",
-                                  {"channel": "telemetry", "max_event_bytes": TELEMETRY_MAX_EVENT_BYTES}))
-    artifacts.channel_up(rec.identity())
-    log.info("TELEMETRY %s up for %s gen %d", conn.id, rec.session_id, rec.generation)
+    if not artifacts.channel_up(rec.identity(), conn.id, rec.control_connection_id):
+        raise ProtocolError("PROTOCOL_DENIED", "Telemetry token does not admit the current artifact connection")
     why = "closed"
     try:
+        await conn.send(conn.me.reply(hello, "CHANNEL_ACK",
+                                      {"channel": "telemetry", "max_event_bytes": TELEMETRY_MAX_EVENT_BYTES}))
+        log.info("TELEMETRY %s up for %s gen %d", conn.id, rec.session_id, rec.generation)
         async for raw in ws:
             try:
+                if not artifacts.current_channel(rec.identity(), conn.id):
+                    raise ProtocolError("PROTOCOL_DENIED", "Telemetry connection was replaced")
                 msg = conn.parse(raw)
                 conn.check(msg)
                 if msg["type"] != "SECURITY_EVENT":
@@ -77,5 +80,5 @@ async def handle_telemetry(ws, registry: SessionRegistry, sessions, artifacts: A
         why = f"connection closed ({e.rcvd.code if e.rcvd else 'no close frame'})"
     finally:
         conn.closed.set()
-        artifacts.channel_down(rec.identity(), why)
+        artifacts.channel_down(rec.identity(), why, conn.id)
         log.info("TELEMETRY %s down: %s", conn.id, why)

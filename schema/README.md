@@ -48,5 +48,11 @@ payload/<TYPE>.schema.json  type별 payload 20종 (정의에 없는 필드는 �
 
 ## 동결 (M2)
 
+혼합 VM 후속 계약: Host/Runner PR #115/#39는 `artifact.reconnect.v1` capability를 함께 추가한다.
+이 capability는 이전 파일 작업과 Telemetry를 정리한 Runner만 선언하며, Host는 새 Control 연결에
+결합한 일회성 자격으로 유휴 Output 채널만 재개한다. 메시지 본문·검사·업로드 권한은 유지한다.
+두 구현을 함께 배포해야 하며, 이전 Host가 새 Runner를 허용한다고 가정하지 않는다.
+자세한 재개/차단 경계는 [반출 재연결 계약](../docs/artifact-reconnect.md)에 있다.
+
 위 "확정 필요" 항목이 정해지면 `git tag scrp-schema-v1.0`을 붙인다. 이후 변경은 Envelope의
 `version` 값을 올리는 경우에만 한다.

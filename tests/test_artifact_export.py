@@ -135,6 +135,39 @@ def candidate_id(lst, path):
     return next(a["artifact_id"] for a in lst["artifacts"] if a["path"] == path)
 
 
+def test_fresh_control_credential_resumes_idle_artifact_channel(tmp_path):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    async def body():
+        host = Host(tmp_path)
+        session = host.backend.session
+        session.profile = replace(session.profile,
+                                  required_capabilities=(*session.profile.required_capabilities, "artifact.output.v1"))
+        host.backend.artifacts.unified = SimpleNamespace(
+            output_only=True, reconnect_idle=lambda identity: identity == session.identity,
+            candidate=lambda identity, art: None, owns=lambda art: False, requested=set(),
+            decorate=lambda art, view: view)
+        r, serving = await host.start(capabilities=["gui.observe", "gui.input", "artifact.export.v1",
+                                                    "artifact.output.v1", "artifact.reconnect.v1"])
+        assert "artifact.reconnect.v1" in session.granted_capabilities
+        assert (await r.report("before.txt", b"before"))["status"] == "STORED"
+        old_token = r.telemetry_token
+        r.drop()
+        await serving
+        await r.tws.close()
+        await r.connect(r.reconnect_token)
+        serving = asyncio.create_task(r.serve())
+        await r.open_telemetry()
+        await host.wait_ready()
+        assert (await r.report("after.txt", b"after"))["status"] == "STORED"
+        with pytest.raises(InvalidStatus):
+            await r.open_telemetry(old_token)
+        await r.tws.close()
+        await host.close(serving)
+    run(body())
+
+
 # --------------------------------------------------------------------- contract shape
 def test_runner_examples_validate_only_under_the_profile():
     ex = json.loads((ROOT / "schema/profiles/artifact-export-v1/examples.json").read_text(encoding="utf-8"))

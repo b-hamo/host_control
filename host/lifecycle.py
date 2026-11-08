@@ -124,7 +124,9 @@ class SandboxLauncher:
             st["window_state"] = self._window_state()
         if self.output is not None:
             from host.router_command_bundle import output_directory
-            st["output"] = {"guest_folder": "Desktop\\Output.lnk",
+            st["output"] = {"guest_folder": (output_directory(self.session.identity)
+                                             if getattr(self.manager, "guest_input_root", None)
+                                             else "Desktop\\Output.lnk"),
                             "session_id": self.session.identity[0],
                             "guest_path": output_directory(self.session.identity),
                             "acquisition": self.output.acquisition, "at_end": self.output_result}
@@ -313,6 +315,14 @@ class SandboxLauncher:
 
     async def _recover(self, kind: str, why: str) -> None:
         if await self._window_prevents_recovery():
+            return
+        if getattr(self.manager, "fixed_vm_binding", False):
+            # A lost connection is not proof the Guest or its programs stopped.
+            # Retain identity, generation, credentials and the action ledger so
+            # the same Runner may resync. Input remains blocked by session health.
+            # Explicit termination and security failures still use normal cleanup.
+            log.error("SANDBOX %s %s; fixed VM preserved, awaiting authenticated reconnect",
+                      self.session.identity[0], why)
             return
         if not self.auto_recover:
             log.error("SANDBOX %s %s; automatic restart is off, ending the session", self.session.identity[0], why)

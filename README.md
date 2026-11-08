@@ -1,5 +1,7 @@
 # host_control
 
+micro_VM 앱 창 연결: [구성·제한·실제 B·C 검증 절차](docs/micro-vm-app-window.md).
+
 Host에서 Agent 요청을 통제·전달하는 프로그램.
 AI Agent(Codex)의 요청을 검사해서 격리된 Sandbox 안의 Runner(`b-hamo/sandbox_runner`)로 전달하고,
 돌아온 결과를 검증한다.

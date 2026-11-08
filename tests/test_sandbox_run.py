@@ -26,6 +26,44 @@ from artifact_runner import ArtifactRunner
 from host.broker import ToolResult
 from host.mcp_server import HostBackend, load_tool_list
 from host.sandbox_run import EMPTY_SHA256, RunError, SandboxRunner, screen_change
+
+
+@pytest.mark.parametrize("code,retry", [("ARTIFACT_BUSY", True), ("RATE_LIMITED", True),
+                                      ("POLICY_DENIED", False), ("ACTION_TIMEOUT", False)])
+def test_result_export_admission_does_not_rerun_or_permanently_hold_busy_result(tmp_path, code, retry):
+    runner, _ = registered(tmp_path)
+    run, _ = runner.plan("ZoomIt64.exe", [], ID)
+    run.set("RUNNING", "INPUT_DELIVERED_AWAITING_PROCESS_RESULT")
+    calls = []
+    async def send(broker, tool, args):
+        calls.append(tool)
+        if tool == "artifact_list":
+            return ToolResult(True, data={"artifacts": [{"path": "receipt.txt", "generation": 1,
+                "status": "PENDING", "can_export": True, "artifact_id": "ART-000001"}], "next_cursor": None})
+        assert tool == "artifact_export"
+        return ToolResult(False, error={"error": code})
+    runner._send = send
+    async def check_result():
+        assert await runner._exported(None, run, "receipt.txt") is None
+        assert ("ART-000001" not in run.exports) == retry
+        assert run.state == ("RUNNING" if retry else "HELD")
+        if retry:
+            assert await runner._exported(None, run, "receipt.txt") is None
+    asyncio.run(check_result())
+    assert calls == ["artifact_list", "artifact_export"] * (2 if retry else 1)
+
+
+def test_selected_guest_path_is_bound_before_execution(tmp_path):
+    runner = SandboxRunner(tmp_path)
+    runner.bind_guest_input(r"C:\RunnerInput")
+    assert str(runner.guest_input) == r"C:\RunnerInput"
+    assert runner.wait_for_transport
+    runner.runs["RUN-existing"] = object()
+    runner.bind_guest_input(r"C:\RunnerInput")
+    with pytest.raises(RuntimeError, match="cannot move"):
+        runner.bind_guest_input(None)
+    with pytest.raises(ValueError, match="absolute"):
+        runner.bind_guest_input(r"relative\input")
 from test_inbox_download import BODY, InboxManager, Watcher, downloader, server  # noqa: F401
 from test_sandbox_launch import args as launch_args, paths, run
 

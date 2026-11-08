@@ -95,10 +95,10 @@ ARTIFACT_CAPABILITY = "artifact.export.v1"      # only for sessions that selecte
 TELEMETRY_PATH = "/scrp/v1/telemetry"
 
 
-def _telemetry_credential(registry: SessionRegistry, session: RuntimeSession) -> dict:
+def _telemetry_credential(registry: SessionRegistry, session: RuntimeSession, control_connection_id=None) -> dict:
     if session.contract == ARTIFACT_EXPORT_V1:
         # A real, registered credential: it opens only this session's Telemetry channel, once.
-        rec = registry.issue_telemetry(session.identity)
+        rec = registry.issue_telemetry(session.identity, control_connection_id=control_connection_id)
         return {"token": rec.token, "expires_at": rec.expires_utc}
     # No Telemetry channel is served for this session; still a random value so
     # nothing guessable is ever handed out, and the registry does not know it.
@@ -258,14 +258,18 @@ async def handle(ws, run_demo: str | None, sessions: Sessions, limits: dict) -> 
     allowed = ALLOWED_CAPABILITIES + ([ARTIFACT_CAPABILITY] if session.contract == ARTIFACT_EXPORT_V1 else [])
     if "artifact.output.v1" in session.profile.required_capabilities:
         allowed.append("artifact.output.v1")
+        allowed.append("artifact.reconnect.v1")
     granted = [c for c in hello["payload"]["capabilities"] if c in allowed]
     session.granted_capabilities = set(granted)       # the Broker's tool catalog follows this (B-11)
+    if sessions.artifacts is not None and session.contract == ARTIFACT_EXPORT_V1:
+        sessions.artifacts.begin_control(rec.identity(), conn.id,
+                                        resumable="artifact.reconnect.v1" in granted)
     await conn.send(conn.me.reply(hello, "HELLO_ACK", {
         "selected_version": "1.0",
         "allowed_capabilities": granted,
         "limits": limits,
         "channel_credentials": {
-            "telemetry": _telemetry_credential(registry, session),
+            "telemetry": _telemetry_credential(registry, session, conn.id),
             "reconnect": {"token": reconnect.token, "expires_at": reconnect.expires_utc},
         },
     }))

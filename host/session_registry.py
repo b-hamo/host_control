@@ -53,6 +53,7 @@ class SessionRecord:
     consumed: bool = False
     kind: str = "bootstrap"                        # "bootstrap", "reconnect" or "telemetry"
     revoked: bool = False
+    control_connection_id: str | None = None
 
     def identity(self) -> tuple[str, str, int]:
         return (self.session_id, self.runtime_id, self.generation)
@@ -85,10 +86,12 @@ class SessionRegistry:
         return self.issue(*identity, kind="reconnect", ttl_s=ttl_s)
 
     def issue_telemetry(self, identity: tuple[str, str, int],
-                        ttl_s: float = TELEMETRY_TTL_S) -> SessionRecord:
+                        ttl_s: float = TELEMETRY_TTL_S, *, control_connection_id: str | None = None) -> SessionRecord:
         """Telemetry channel token for this session; any older one stops working."""
         self.revoke(identity, kind="telemetry")
-        return self.issue(*identity, kind="telemetry", ttl_s=ttl_s)
+        record = self.issue(*identity, kind="telemetry", ttl_s=ttl_s)
+        record.control_connection_id = control_connection_id
+        return record
 
     def revoke(self, identity: tuple[str, str, int], kind: str | None = None) -> None:
         for rec in self._by_token.values():

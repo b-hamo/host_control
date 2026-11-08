@@ -370,18 +370,53 @@ class ArtifactBroker:
         self._by_event: dict[tuple[Identity, str], Artifact] = {}
         self._channel: dict[Identity, asyncio.Event] = {}
         self._channel_lost: dict[Identity, str] = {}
+        self._control_connections: dict[Identity, str] = {}
+        self._telemetry_connections: dict[Identity, str] = {}
+        self._resumable: set[Identity] = set()
+        self._retired: set[Identity] = set()
         self.unified = None
 
     # -- Telemetry side --------------------------------------------------------
     def _event(self, identity: Identity) -> asyncio.Event:
         return self._channel.setdefault(identity, asyncio.Event())
 
-    def channel_up(self, identity: Identity) -> None:
+    def begin_control(self, identity: Identity, connection_id: str, *, resumable=False) -> None:
+        """Authenticated HELLO only; a new transport never revives old grants."""
+        previous = self._control_connections.get(identity)
+        self._resumable.discard(identity)
+        if previous and previous != connection_id:
+            self._channel_lost.setdefault(identity, "Control connection replaced")
+            self._cancel(identity, "CONTROL_RECONNECTED", "old Control connection retired")
+            # A pending or unconfirmed snapshot cannot be silently discarded.
+            if (resumable and identity not in self._retired and self.unified is not None and
+                    getattr(self.unified, "output_only", False) and self.unified.reconnect_idle(identity)):
+                self._resumable.add(identity)
+        self._control_connections[identity] = connection_id
+        self._telemetry_connections.pop(identity, None)
+        self._event(identity).clear()
+
+    def current_channel(self, identity: Identity, channel_id: str) -> bool:
+        return self._telemetry_connections.get(identity) == channel_id
+
+    def channel_up(self, identity: Identity, channel_id=None, control_connection_id=None) -> bool:
+        if channel_id is not None:
+            if (identity in self._retired or control_connection_id is None or
+                    self._control_connections.get(identity) != control_connection_id):
+                return False
+            if identity in self._channel_lost:
+                if identity not in self._resumable:
+                    return False
+                self._channel_lost.pop(identity)
+                self._resumable.discard(identity)
+            self._telemetry_connections[identity] = channel_id
         self._event(identity).set()
         log.info("ARTIFACT channel up for %s gen %d", identity[0], identity[2])
+        return True
 
-    def channel_down(self, identity: Identity, why: str) -> None:
+    def channel_down(self, identity: Identity, why: str, channel_id=None) -> None:
         """Telemetry lost: no new exports for this Runtime, running ones fail (contract §4)."""
+        if channel_id is not None and not self.current_channel(identity, channel_id):
+            return
         if not self._event(identity).is_set() or identity in self._channel_lost:
             return
         self._channel_lost[identity] = why
@@ -628,6 +663,8 @@ class ArtifactBroker:
     # -- end of a session / generation -------------------------------------------
     def cancel_identity(self, identity: Identity, why: str) -> None:
         """Session ended or replaced by a new generation: nothing of it is exported any more."""
+        self._retired.add(identity)
+        self._resumable.discard(identity)
         self._channel_lost.setdefault(identity, why)
         self._cancel(identity, "CANCELLED", why)
 

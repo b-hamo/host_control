@@ -170,6 +170,7 @@ class Downloader:
     signed_to_downloads: bool = False    # --signed-downloads: that copy only for a trusted publisher's program
     signature_check: Callable | None = None   # tests inject one; None = host.signature_check.check
     trusted_publishers: list[str] | None = None   # --trusted-publishers (B2B); None = any valid signature
+    guest_input_root: str = GUEST_INPUT          # trusted runtime adapter; never a downloaded value
 
     def _check(self, url: str) -> tuple[urllib.parse.SplitResult, str]:
         u = urllib.parse.urlsplit(url)
@@ -270,7 +271,7 @@ class Downloader:
         log.info("INBOX download %s -> %s (%d bytes, sha256=%s…)", _host_of(final_url), dst.name, size, digest[:12])
         result = {"source": url, "final_url": final_url,
                   "file": {"name": dst.name, "size": size, "sha256": digest},
-                  "sandbox_path": f"{GUEST_INPUT}\\{dst.name}", "inbox_path": f"{GUEST_INBOX}\\{dst.name}"}
+                  "sandbox_path": f"{self.guest_input_root}\\{dst.name}", "inbox_path": f"{GUEST_INBOX}\\{dst.name}"}
         if verdict is not None:
             result["signature"] = verdict.to_dict()
         if saved is not None:
@@ -319,7 +320,7 @@ class Downloader:
             raise DownloadError("POLICY_DENIED", f"inbox would exceed {TOTAL_MAX} bytes")
         log.info("INBOX import %s -> %s (%d bytes, sha256=%s…)", name, f["name"], f["size"], f["sha256"][:12])
         return {"source": "Downloads\\" + Path(got["source"]).name, "file": f,
-                "sandbox_path": f"{GUEST_INPUT}\\{f['name']}", "inbox_path": f"{GUEST_INBOX}\\{f['name']}"}
+                "sandbox_path": f"{self.guest_input_root}\\{f['name']}", "inbox_path": f"{GUEST_INBOX}\\{f['name']}"}
 
     def similar(self, url: str) -> list[str]:
         """Files directly in Downloads that look like the one at `url`: the same name, or one name starts

@@ -4,9 +4,22 @@
 # instead of failing at once. Without a good copy no process starts and a failure receipt says why.
 param([Parameter(Mandatory=$true)][string]$Manifest)
 $ErrorActionPreference = 'Stop'
-if ([Environment]::UserName -ne 'WDAGUtilityAccount') { throw 'Windows Sandbox only' }
 $request = Get-Content -LiteralPath $Manifest -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($request.contract -ne 'sandbox-run-v1') { throw 'Unsupported request contract' }
+if ([Environment]::UserName -ne 'WDAGUtilityAccount') {
+    # Explicit micro_VM profile, provisioned in the read-only Runner package.
+    # A username exception alone must never turn this into a Host executor.
+    $context = Get-Content -LiteralPath 'C:\RunnerPackage\guest-context.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+    $boot = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\DBI\WorkspaceRuntime' -ErrorAction Stop
+    $runnerHash = (Get-FileHash -LiteralPath 'C:\RunnerPackage\sandbox_runner.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($context.contract -ne 'scrp-micro-vm-v1' -or $boot.BootManifestSha256 -notmatch '^[a-fA-F0-9]{64}$' -or
+        $context.runner_sha256 -ne $runnerHash -or $context.runtime_id -ne $request.runtime_id -or
+        $context.generation -ne $request.generation -or $context.output_path -ne $request.output_dir -or
+        $context.session_id -notmatch '^SES-[a-f0-9]{32}$' -or
+        $context.output_path -notlike ('C:\RunnerWorkspace\Sessions\session-'+$context.session_id+'\*')) {
+        throw 'Verified micro_VM session context required'
+    }
+}
 $work = Join-Path $env:TEMP ('SandboxRun-' + $request.nonce)
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 # CreateNew is a per-request execution reservation, never removed or reused.
