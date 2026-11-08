@@ -73,6 +73,18 @@ class OutputExport:
         if session.identity != self._identity:
             raise ArtifactError("ARTIFACT_BLOCKED", "Output snapshot belongs to a retired Runner generation")
 
+    def reconnect_idle(self, identity):
+        """Resume only at a quiescent boundary; retain all checked Host copies."""
+        if (identity != self._identity or self._closing or self._lease is not None or
+                self._transfer_lock.locked() or any(not task.done() for task in self._prefetch)):
+            return False
+        self._captured = None
+        self._last_refresh = 0.0
+        self.acquisition = {"status": "INCOMPLETE", "complete": False,
+                            "identity": list(identity), "detail": "Control reconnected; fresh Output snapshot required"}
+        self._persist()
+        return True
+
     def owns(self, art):
         return art.artifact_id in self.receipts
 

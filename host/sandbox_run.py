@@ -574,8 +574,9 @@ class SandboxRunner:
                 run.exports.add(view["artifact_id"])          # reserved first: never asked twice
                 done = await self._send(broker, "artifact_export", {"artifact_id": view["artifact_id"],
                                                                     "reason": f"result of {run.run_id}"})
-                if not done.ok and done.error.get("error") == "RATE_LIMITED":
-                    run.exports.discard(view["artifact_id"])  # refused before anything happened: next poll
+                if not done.ok and done.error.get("error") in ("RATE_LIMITED", "ARTIFACT_BUSY"):
+                    # Admission refused before transfer; only poll this result again, never rerun the Guest command.
+                    run.exports.discard(view["artifact_id"])
                 elif not done.ok:
                     run.set("HELD", "RESULT_EXPORT_REFUSED")
             return None

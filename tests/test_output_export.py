@@ -64,6 +64,46 @@ async def receive(broker, output, session, data=b"arbitrary binary\x00\xff", pat
     return art
 
 
+@pytest.mark.parametrize("blocked", [None, "legacy", "lease", "busy", "retired"])
+def test_authenticated_artifact_reconnect_keeps_old_grants_dead(tmp_path, service, blocked):
+    runtime, client = service()
+    async def run():
+        broker, session, _, output = setup(tmp_path, runtime, client)
+        identity = session.identity
+        broker.begin_control(identity, "CONN-old")
+        assert broker.channel_up(identity, "TEL-old", "CONN-old")
+        checked = await receive(broker, output, session, b"already verified on Host")
+        retained = output.receipts[checked.artifact_id].folder / "result.bin"
+        payload = dict(event_id=str(uuid.uuid4()), relative_path="pending.txt",
+                       observed_at="2026-11-08T00:00:00Z", category="OUTPUT_SNAPSHOT")
+        assert broker.store(identity, payload)
+        pending = broker._by_event[(identity, payload["event_id"])]
+        grant, token = broker.grants.issue(identity, pending.artifact_id, pending.event_id, 1000)
+        pending.grant = grant
+        broker.channel_down(identity, "transport lost", "TEL-old")
+        assert pending.stage == "CANCELLED"
+        old_grant_state = grant.state
+        if blocked == "lease": output._lease = (identity, "unconfirmed-snapshot")
+        if blocked == "busy": await output._transfer_lock.acquire()
+        if blocked == "retired": broker.cancel_identity(identity, "security termination")
+        broker.begin_control(identity, "CONN-new", resumable=blocked != "legacy")
+        assert not broker.channel_up(identity, "TEL-forged", "CONN-old")
+        assert broker.channel_up(identity, "TEL-new", "CONN-new") == (blocked is None)
+        if blocked is None:
+            broker.channel_down(identity, "late old close", "TEL-old")
+            assert identity not in broker._channel_lost
+            assert broker.current_channel(identity, "TEL-new")
+            assert not broker.current_channel(identity, "TEL-old")
+            assert not output.acquisition["complete"]
+            assert broker.store(identity, dict(payload, event_id=str(uuid.uuid4()), relative_path="fresh.txt"))
+        else:
+            assert identity in broker._channel_lost
+        assert pending.stage == "CANCELLED" and grant.state == old_grant_state
+        assert retained.read_bytes() == b"already verified on Host"
+        if blocked == "busy": output._transfer_lock.release()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("review,final,stage", [
     ("keep", "keep", "EXPORTED"), ("hold", "keep", "HELD"),
     ("delete", "keep", "DELETED"), ("keep", "hold", "HELD"), ("keep", "delete", "DELETED")])

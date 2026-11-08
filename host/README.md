@@ -202,6 +202,14 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 
 ## Git에 올리지 않는 폴더
 
+혼합 VM의 연결 복구와 반출은 [artifact-reconnect.md](../docs/artifact-reconnect.md)를 따른다.
+수정 위치는 `sender.py`·`session_registry.py`의 Control 연결에 결합한 자격,
+`telemetry.py`·`artifacts.py`의 현재 채널 검사, `output_export.py`의 유휴 재개 경계다.
+`test_artifact_export.py`는 새 TLS 연결과 이전 자격 거부를,
+`test_output_export.py`는 이전 채널 종료·전송 중 상태·종료 세대의 재개 차단을 검사한다.
+`sandbox_run.py`와 `test_sandbox_run.py`는 결과 반출의 `ARTIFACT_BUSY`/`RATE_LIMITED`를
+실행 재전송 없이 다음 결과 확인으로 넘기고, 정책 거부와 불확실한 시간 초과는 계속 보류한다.
+
 실행하면 생기지만 `.gitignore`로 제외된다. 개인 키와 token이 들어 있으므로 공유하지 않는다.
 
 | 폴더 | 내용 |
