@@ -19,9 +19,10 @@ def test_skill_has_codex_front_matter():
 def test_every_tool_the_skill_names_exists_in_the_host_schema():
     tools = {json.loads(p.read_text(encoding="utf-8"))["name"] for p in (ROOT / "schema" / "mcp-tools").glob("*.json")}
     named = set(re.findall(r"`([a-z]+_[a-z_]+)`", SKILL.read_text(encoding="utf-8")))
-    not_tools = {"downloads_copy", "scrp_reconnect",          # a result field and an MCP server name
+    not_tools = {"downloads_copy", "cmd_setup_all", "scrp_reconnect",   # result fields and an MCP server name
                  "source_url", "source_id", "after_mark",     # router_capture arguments and result field
-                 "next_cursor", "export_path"}                # artifact_list result fields (#103)
+                 "next_cursor", "export_path",                 # artifact_list result fields (#103)
+                 "request_id", "run_id", "exit_code"}          # router_execute / sandbox_run fields
     assert named - not_tools <= tools, named - not_tools - tools
 
 

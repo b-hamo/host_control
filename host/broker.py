@@ -56,7 +56,7 @@ OPERATIONS = {
     "computer_click_element": "ui.click_element",
 }
 COORDINATE_TOOLS = {"computer_move", "computer_click", "computer_scroll"}
-RUNTIME_TOOLS = {"computer_observe", "artifact_export", "sandbox_run", "router_execute",
+RUNTIME_TOOLS = {"computer_observe", "artifact_export", "sandbox_run", "router_execute", "program_share",
                  *OPERATIONS}   # need a READY runtime
 
 # Rate limits per session (protocol doc §7: input 5/s, observe 2/s)
@@ -166,7 +166,7 @@ class Broker:
                  policy: Policy | None = None, audit: AuditLog | None = None,
                  approver: Approver | None = None, rates: dict[str, float] | None = None,
                  clock=time.monotonic, launcher=None, artifacts=None, inbox=None, runner=None,
-                 guard: bool = False):
+                 guard: bool = False, programs: bool = False):
         # B-3: bound to one session. Only a new generation of that same session replaces it
         # (switch_session), when the Runner or the Sandbox had to be restarted.
         self.session = session
@@ -181,6 +181,8 @@ class Broker:
         self.runner = runner
         # --agent-guard: what an Agent did on its own in the Codex app (2026-10-12) needs the person first
         self.guard = guard
+        # --share-programs: program_share (sandbox_manager share_program through the launcher)
+        self.programs = programs and launcher is not None
         self.catalog = catalog or ToolCatalog()
         self.policy = policy or Policy()
         self.audit = audit or AuditLog()
@@ -205,7 +207,7 @@ class Broker:
 
     def _granted(self) -> set[str]:
         runtime = self.session.granted_capabilities or set(self.session.profile.required_capabilities)
-        return runtime | ({"host.inbox"} if self.inbox is not None else set())             | ({"host.sandbox_run"} if self.runner is not None else set())             | ({"host.router"} if self.runner is not None and self.runner.captures is not None else set())
+        return runtime | ({"host.inbox"} if self.inbox is not None else set())             | ({"host.sandbox_run"} if self.runner is not None else set())             | ({"host.router"} if self.runner is not None and self.runner.captures is not None else set())             | ({"host.programs"} if self.programs else set())
 
     # -- the one entry point -------------------------------------------------
     async def call(self, tool: str, arguments: dict | None = None) -> ToolResult:
@@ -319,9 +321,55 @@ class Broker:
         if self.runner is None:
             raise BrokerError("POLICY_DENIED", "sandbox_run is not enabled on this Host (--sandbox-run)")
         try:
-            return self.runner.plan(args["file"], args.get("arguments", []), self.session.identity)
+            return self.runner.plan(args["file"], args.get("arguments", []), self.session.identity,
+                                    args.get("entry"))
         except RunError as e:
             raise BrokerError(e.code, e.message) from None
+
+    async def _lend_interpreter(self, run) -> None:
+        """A .py/.js/.rb/.sh run (sandbox_run or a router_execute *-script form) needs its interpreter in the
+        Sandbox: program_share lends this computer's installed copy, read-only, before the run starts."""
+        if run.program is None:
+            return
+        if not self.programs:
+            raise BrokerError("POLICY_DENIED", f"{run.file} needs {run.program} in the Sandbox; this Host does not "
+                                               "lend programs (--share-programs)")
+        from sandbox_manager import SandboxManagerError
+        try:
+            shared = await self.launcher.share_program(run.program)
+        except SandboxManagerError as e:
+            raise BrokerError(e.code, e.message) from None
+        self.runner.with_interpreter(run, shared)
+
+    async def _prepare_project(self, run) -> None:
+        """(2) a project zip: lend the tools its recipe needs (program_share), then write its Guest script
+        (host/sandbox_project.py). Installing, building and running all happen in the Sandbox."""
+        if run.project is None:
+            return
+        if not self.programs:
+            raise BrokerError("POLICY_DENIED", f"{run.file} needs {', '.join(run.project.programs)} in the Sandbox; "
+                                               "this Host does not lend programs (--share-programs)")
+        from sandbox_manager import SandboxManagerError
+        shared = {}
+        try:
+            for name in run.project.programs:
+                shared[name] = await self.launcher.share_program(name)
+        except SandboxManagerError as e:
+            raise BrokerError(e.code, e.message) from None
+        self.runner.with_project(run, shared)
+
+    async def _compile_here(self, run) -> None:
+        """A compile form (c-source, go-source, ...): this PC compiles the one source file
+        (host/local_compile.py, never runs it); the result goes to the Sandbox through the inbox."""
+        if run.build is None:
+            return
+        from host.local_compile import CompileError, build
+        _, form, source = run.build
+        try:
+            built = await asyncio.to_thread(build, form, source)
+        except CompileError as e:
+            raise BrokerError(e.code, e.message) from None
+        self.runner.with_build(run, built)
 
     def _execute_plan(self, args: dict):
         from host.sandbox_run import RunError
@@ -473,6 +521,17 @@ class Broker:
             if self.runner is not None:
                 self.runner.register(got)            # sandbox_run may run it, like a download
             return got
+        if tool == "inbox_write":
+            from host.inbox_download import DownloadError
+            if self.inbox is None:
+                raise BrokerError("POLICY_DENIED", "inbox_write is not enabled on this Host (--inbox)")
+            try:
+                got = await asyncio.to_thread(self.inbox.write_text, args["name"], args["text"])
+            except DownloadError as e:
+                raise BrokerError(e.code, e.message) from None
+            if self.runner is not None:
+                self.runner.register(got)            # sandbox_run may run it, like a download
+            return got
         if tool == "inbox_finish":
             from host.inbox_download import DownloadError
             if self.inbox is None:
@@ -481,16 +540,26 @@ class Broker:
                 return await asyncio.to_thread(self.inbox.finish, args["keep"])
             except DownloadError as e:
                 raise BrokerError(e.code, e.message) from None
+        if tool == "program_share":
+            if not self.programs:
+                raise BrokerError("POLICY_DENIED", "program_share is not enabled on this Host (--share-programs)")
+            from sandbox_manager import SandboxManagerError
+            try:
+                return await self.launcher.share_program(args["program"])
+            except SandboxManagerError as e:
+                raise BrokerError(e.code, e.message) from None
         if tool in ("sandbox_run", "sandbox_run_status"):
             from host.sandbox_run import RunError
             if self.runner is None:
                 raise BrokerError("POLICY_DENIED", "sandbox_run is not enabled on this Host (--sandbox-run)")
             try:
                 if tool == "sandbox_run":
+                    await self._prepare_project(plan)
+                    await self._lend_interpreter(plan)
                     run = await self.runner.start(self, plan)
                     return {**run.view(), "message": "Started. Call sandbox_run_status with this run_id; "
                             "a GUI program stays RUNNING while its window is open (use computer_observe)."}
-                return await self.runner.status(self, args["run_id"])
+                return await self.runner.status(self, args["run_id"], args.get("wait_ms", 0))
             except RunError as e:
                 raise BrokerError(e.code, e.message) from None
         if tool == "router_capture":
@@ -506,6 +575,8 @@ class Broker:
             if plan.run_id in self.runner.runs:
                 return {**plan.view(), "repeated": True}     # the same request: its run, not a new one
             try:
+                await self._compile_here(plan)
+                await self._lend_interpreter(plan)
                 run = await self.runner.start(self, plan)
             except RunError as e:
                 raise BrokerError(e.code, e.message) from None

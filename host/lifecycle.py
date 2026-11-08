@@ -212,6 +212,13 @@ class SandboxLauncher:
         await self._call(self.manager.publish_bootstrap, self.sandbox, cert_pem)
         self.state = PUBLISHED
 
+    async def share_program(self, name: str) -> dict:
+        """program_share (--share-programs): an installed compiler, read-only, into the running Sandbox."""
+        if self.sandbox is None or not callable(getattr(self.manager, "share_program", None)):
+            from sandbox_manager import SandboxManagerError
+            raise SandboxManagerError("RUNTIME_UNAVAILABLE", "no running Sandbox to share a program into")
+        return await self._call(self.manager.share_program, self.sandbox, name)
+
     async def _call(self, fn, *args):
         self._alive()
         return await asyncio.to_thread(fn, *args)

@@ -70,12 +70,32 @@ try {
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $info
     if (-not $process.Start()) { throw 'Process did not start' }
-    $outTask = $process.StandardOutput.ReadToEndAsync()
-    $errTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
-    $stdout = $outTask.GetAwaiter().GetResult()
-    # Drain stderr to avoid a pipe deadlock; raw stderr never goes into evidence.
-    $null = $errTask.GetAwaiter().GetResult()
+    if ($request.stderr -eq 'append') {
+        # 2026-11-07 (Bae): a language run (python, C, Go, ...). Its error output is appended to the program
+        # output file (scanned and exported like it; the receipt still holds no stderr). The bytes are read
+        # as UTF-8 when they are valid UTF-8 (C, Go, Node print UTF-8), otherwise in the OEM code page
+        # (Python, PowerShell, Java print that when redirected), so Korean text comes through either way.
+        $outMem = New-Object IO.MemoryStream
+        $errMem = New-Object IO.MemoryStream
+        $outTask = $process.StandardOutput.BaseStream.CopyToAsync($outMem)
+        $errTask = $process.StandardError.BaseStream.CopyToAsync($errMem)
+        $process.WaitForExit()
+        $outTask.GetAwaiter().GetResult()
+        $errTask.GetAwaiter().GetResult()
+        $strict = New-Object Text.UTF8Encoding($false, $true)
+        $oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+        $decode = { param($bytes) try { $strict.GetString($bytes) } catch { $oem.GetString($bytes) } }
+        $stdout = & $decode $outMem.ToArray()
+        $stderr = & $decode $errMem.ToArray()
+        if ($stderr) { $stdout = $stdout + "`r`n--- stderr ---`r`n" + $stderr }
+    } else {
+        $outTask = $process.StandardOutput.ReadToEndAsync()
+        $errTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $outTask.GetAwaiter().GetResult()
+        # Drain stderr to avoid a pipe deadlock; raw stderr never goes into evidence.
+        $null = $errTask.GetAwaiter().GetResult()
+    }
     $output = Join-Path $request.output_dir ('run-' + $request.nonce + '-stdout.txt')
     [IO.File]::WriteAllText($output, $stdout, $utf8)
     $receipt.process_id = $process.Id

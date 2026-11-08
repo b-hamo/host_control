@@ -53,6 +53,8 @@ MAX_REDIRECTS = 5
 FILE_MAX = 50 * 1024 * 1024          # = sandbox_manager config.INPUT_FILE_MAX
 TOTAL_MAX = 200 * 1024 * 1024        # = config.INPUT_TOTAL_MAX
 FILES_MAX = 200                      # = config.INBOX_FILES_MAX
+TEXT_MAX = 256 * 1024                # inbox_write: pasted code, not a program
+TEXT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9]{1,10}$")
 DEADLINE_S = 45.0                    # whole download; inside the 60 s MCP call limit
 GUEST_INBOX = r"C:\Inbox"
 GUEST_INPUT = r"Desktop\Input"
@@ -322,6 +324,15 @@ class Downloader:
         return {"source": "Downloads\\" + Path(got["source"]).name, "file": f,
                 "sandbox_path": f"{self.guest_input_root}\\{f['name']}", "inbox_path": f"{GUEST_INBOX}\\{f['name']}"}
 
+    def write_text(self, name: str, text: str) -> dict:
+        """inbox_write (see write_text): same inbox limits as a download."""
+        files, total = self._inbox_usage()
+        if files >= FILES_MAX:
+            raise DownloadError("POLICY_DENIED", f"inbox already holds {files} files (limit {FILES_MAX})")
+        if total + len(text.encode("utf-8")) > TOTAL_MAX:
+            raise DownloadError("POLICY_DENIED", f"inbox would exceed {TOTAL_MAX} bytes")
+        return write_text(self.inbox, name, text)
+
     def similar(self, url: str) -> list[str]:
         """Files directly in Downloads that look like the one at `url`: the same name, or one name starts
         the other ("tailscale-setup-1.102.4.exe" / "tailscale-setup-1.102.4-amd64.msi"). Names only."""
@@ -348,6 +359,29 @@ class Downloader:
             raise DownloadError(e.code, e.message) from None
         log.info("INBOX finish: kept %s, deleted %d files", [k["to"] for k in done["kept"]], done["deleted_files"])
         return done
+
+
+def write_text(inbox: Path, name: str, text: str) -> dict:
+    """inbox_write: code pasted in the chat becomes a file in the inbox, byte for byte as given.
+
+    Typing several lines into a Sandbox console through GUI input breaks (2026-10-31: 23 minutes,
+    never ran). As a file it reaches Desktop\\Input like any download, with its SHA-256 checked there.
+    The name is a plain file name (no folder); a name already taken gets a new one."""
+    if not isinstance(name, str) or not TEXT_NAME_RE.match(name) or name.lower().endswith(INCOMPLETE_SUFFIXES):
+        raise DownloadError("INVALID_ARGUMENT", "name must be a plain file name with an extension, e.g. main.py")
+    data = text.encode("utf-8")
+    if not data:
+        raise DownloadError("INVALID_ARGUMENT", "text is empty")
+    if len(data) > TEXT_MAX:
+        raise DownloadError("POLICY_DENIED", f"text is {len(data)} bytes (limit {TEXT_MAX})")
+    try:
+        dst = place(inbox, name, data)
+    except OSError as e:
+        raise DownloadError("RUNTIME_UNAVAILABLE", f"could not write into the inbox ({type(e).__name__})") from None
+    digest = hashlib.sha256(data).hexdigest()
+    log.info("INBOX write %s (%d bytes, sha256=%s…)", dst.name, len(data), digest[:12])
+    return {"source": "chat", "file": {"name": dst.name, "size": len(data), "sha256": digest},
+            "sandbox_path": f"{GUEST_INPUT}\\{dst.name}", "inbox_path": f"{GUEST_INBOX}\\{dst.name}"}
 
 
 def place(inbox: Path, name: str, content: Path | bytes) -> Path:
@@ -440,7 +474,14 @@ def check_no_execute(inbox: Path) -> tuple[bool, str]:
     exe = probe.with_suffix("")                          # *.exe; created via the .part name first
     try:
         shutil.copyfile(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "whoami.exe", probe)
-        os.replace(probe, exe)
+        try:
+            os.replace(probe, exe)
+        except PermissionError as e:
+            if getattr(e, "winerror", None) != 32:              # ERROR_SHARING_VIOLATION
+                raise
+            # A running Sandbox maps the inbox live: nothing can be renamed in it (2026-11-07)
+            return False, ("the inbox is in use by a Sandbox that is still running (perhaps one left from an "
+                           "earlier conversation): close that Windows Sandbox window, then try again")
         try:
             subprocess.run([str(exe)], capture_output=True, timeout=10)
         except PermissionError:
