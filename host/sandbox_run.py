@@ -32,7 +32,7 @@ import logging
 import struct
 import time
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PureWindowsPath
 from subprocess import list2cmdline
 from uuid import uuid4
@@ -109,8 +109,18 @@ GRANT_TTL_S = 3600              # a GUI program may stay open a while before its
 WAIT_INPUTS_S = 120             # how long the helper waits for the Desktop\Input copy
 MAX_EVIDENCE = 65536
 MAX_STDOUT_SHOWN = 16384
+MAX_STATUS_WAIT_MS = 30000      # sandbox_run_status wait_ms cap (like artifact_list)
+STATUS_POLL_S = 2.0
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
-SUFFIXES = (".exe", ".msi", ".ps1")
+SUFFIXES = (".exe", ".msi", ".ps1", ".py", ".js", ".rb", ".sh", ".zip")   # .zip: a project (host/sandbox_project.py)
+# 배주한 2026-11-05: a script in another language runs with the interpreter program_share lends the Sandbox
+# (read-only, from this computer's install). The Broker shares it right before the run (needs --share-programs).
+INTERPRETERS = {".py": "python", ".js": "node", ".rb": "ruby", ".sh": "git"}
+SCRIPT_FORMS = {"python-script": ".py", "javascript-script": ".js", "ruby-script": ".rb", "sh-script": ".sh"}
+INTERPRETER_PENDING = r"C:\Tools\interpreter-pending.exe"   # replaced by with_interpreter() before the run
+# 배주한 2026-11-05: one C, C++, Go, Zig, Java or C# file is compiled on this PC (host/local_compile.py)
+# and only the result runs in the Sandbox (Java and C# with java / dotnet lent by program_share).
+from host.local_compile import GUEST_ROOT, LANGS as COMPILE_FORMS, TARGET  # noqa: E402
 # The Runner cannot report which window has focus (ui.click_element is not implemented), so the
 # launch checks the screen itself: rows of the screenshot that changed, the taskbar (clock) left out.
 TASKBAR_SHARE = 0.08
@@ -186,6 +196,10 @@ class Run:
     task: asyncio.Task | None = None
     exports: set = field(default_factory=set)
     origin: dict | None = None         # router_execute: request_id and the capture it analyzes
+    program: str | None = None         # program_share name of the interpreter this run still needs
+    build: tuple | None = None         # (capture, form, source): a compile form not compiled yet
+    project: object | None = None      # sandbox_project.Project: a project zip whose script is not written yet
+    with_stderr: bool = False          # a language run: its error output is shown too (after stdout)
 
     @property
     def evidence_name(self) -> str:
@@ -273,7 +287,55 @@ class SandboxRunner:
             return False
 
     # -- the exact command (from the Host's own record) ---------------------
-    def plan(self, file: str, arguments: list[str], identity: tuple) -> tuple[Run, dict]:
+    def _plan_project(self, src: Source, path: Path, entry, arguments, identity) -> tuple[Run, dict]:
+        """② a project zip: the recipe now (from the zip's names only), the Guest script after the tools
+        are lent (with_project). Nothing of the project is unpacked or run on this computer."""
+        from host.sandbox_project import ProjectError, inspect
+        try:
+            project = inspect(path, entry, arguments)
+        except ProjectError as e:
+            raise RunError(e.code, e.message) from None
+        self._seq += 1
+        run_id = f"RUN-{self._seq:04d}"
+        target = str(self.guest_input / path.name)
+        scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
+        action = Action(run_id, "sandbox-run", Operation.EXECUTE, scope, run_id, sources=(src,),
+                        command=Command(POWERSHELL, (), str(self.guest_input), src.source_id), outputs=("stdout",))
+        run = Run(run_id, action, path.name, uuid4().hex[:16], identity, project=project)
+        shown = {"run_id": run_id, "file": path.name, "source": src.reference.removeprefix("download:"),
+                 "sha256": src.sha256, "project": project.kind, "marker": project.marker, "entry": project.entry,
+                 "command": f"install, build and run the {project.kind} project inside the Sandbox"}
+        return run, shown
+
+    def with_project(self, run: Run, shared: dict) -> None:
+        """Write the Guest script for the lent tools ({program: program_share answer}) and make it the run."""
+        from host.sandbox_project import ProjectError, script
+        zip_src = run.action.sources[0]
+        try:
+            text = script(run.project, run.file, zip_src.sha256, run.nonce, shared, self.guest_input)
+        except (ProjectError, KeyError) as e:
+            raise RunError("RUNTIME_UNAVAILABLE", f"cannot prepare the project run ({e})") from None
+        data = b"\xef\xbb\xbf" + text.encode("utf-8")
+        try:
+            path = place(self.inbox, f"{Path(run.file).stem}-project.ps1", data)
+        except OSError as e:
+            raise RunError("RUNTIME_UNAVAILABLE", f"could not put the project script in the inbox ({e.__class__.__name__})")
+        derived = Source(f"{zip_src.source_id}-PROJECT", f"derived:{zip_src.source_id}:project-{run.project.kind}",
+                         hashlib.sha256(data).hexdigest(), "generated", (zip_src.source_id,))
+        self._paths[derived.source_id] = path
+        self.authority.sources[derived.source_id] = derived
+        target = str(self.guest_input / path.name)
+        scope = Scope(reads=(target, run.action.scope.reads[0]), writes=run.action.scope.writes,
+                      capabilities=CAPABILITIES)
+        # The script first: the helper waits for sources[0]; the script itself waits for the zip.
+        run.action = Action(run.run_id, "sandbox-run", Operation.EXECUTE, scope, run.run_id, sources=(derived, zip_src),
+                            command=Command(POWERSHELL, ("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                                         "-File", target), str(self.guest_input), derived.source_id),
+                            outputs=("stdout",))
+        run.project = None
+        run.with_stderr = True               # the script's own errors too (it merges each step's)
+
+    def plan(self, file: str, arguments: list[str], identity: tuple, run_entry: str | None = None) -> tuple[Run, dict]:
         entry = self._files.get(file.casefold())
         if entry is None:
             raise RunError("INVALID_ARGUMENT", f"{file!r} was not downloaded with inbox_download in this session; "
@@ -289,6 +351,10 @@ class SandboxRunner:
             exe, argv = MSIEXEC, ("/i", target, *arguments)
         elif suffix == ".ps1":
             exe, argv = POWERSHELL, ("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", target, *arguments)
+        elif suffix in INTERPRETERS:
+            exe, argv = INTERPRETER_PENDING, (target, *arguments)
+        elif suffix == ".zip":
+            return self._plan_project(src, path, run_entry, arguments, identity)
         else:
             raise RunError("INVALID_ARGUMENT", f"sandbox_run runs {', '.join(SUFFIXES)} files; open other files "
                                                "(e.g. unpack a .zip) inside the Sandbox with the computer_* tools")
@@ -297,10 +363,45 @@ class SandboxRunner:
         scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
         action = Action(run_id, "sandbox-run", Operation.EXECUTE, scope, run_id, sources=(src,),
                         command=Command(exe, argv, str(self.guest_input), src.source_id), outputs=("stdout",))
-        run = Run(run_id, action, path.name, uuid4().hex[:16], identity)
+        run = Run(run_id, action, path.name, uuid4().hex[:16], identity, program=INTERPRETERS.get(suffix),
+                  with_stderr=suffix in INTERPRETERS)
         shown = {"run_id": run_id, "file": path.name, "source": src.reference.removeprefix("download:"),
                  "sha256": src.sha256, "command": list2cmdline([exe, *argv])}
         return run, shown
+
+    def with_interpreter(self, run: Run, shared: dict) -> None:
+        """Put the interpreter program_share just lent the Sandbox (its Guest path) into the run's command.
+        Before start(): the delegation is made from this final command."""
+        exe = shared.get("shell") if run.program == "git" else shared.get("exe")
+        if not exe:
+            raise RunError("RUNTIME_UNAVAILABLE", f"{run.program} has no program for {run.file} in the Sandbox")
+        c = run.action.command
+        argv = tuple(a.replace(GUEST_ROOT, shared.get("guest_root", "")) for a in c.argv)   # C#: the SDK's runtimeconfig
+        run.action = replace(run.action, command=Command(exe, argv, c.cwd, c.target_source))
+        run.program = None
+
+    def with_build(self, run: Run, built) -> None:
+        """A compile form (host/local_compile.py): put what this PC compiled into the inbox and make it the
+        run's input. Before start(): the delegation binds this final command, the capture stays the parent."""
+        capture, form, _ = run.build
+        try:
+            path = place(self.inbox, f"{capture.source_id}{built.suffix}", built.data)
+        except OSError as e:
+            raise RunError("RUNTIME_UNAVAILABLE", f"could not put the program in the inbox ({e.__class__.__name__})")
+        derived = Source(f"{capture.source_id}-{built.suffix[1:].upper()}", f"derived:{capture.source_id}:compile-{built.lang}",
+                         hashlib.sha256(built.data).hexdigest(), "generated", (capture.source_id,))
+        self._paths[derived.source_id] = path
+        self.authority.sources[derived.source_id] = derived
+        target = str(self.guest_input / path.name)
+        argv = tuple(target if a == TARGET else a for a in built.argv)
+        exe = INTERPRETER_PENDING if built.program else argv[0]
+        argv = argv if built.program else argv[1:]
+        scope = Scope(reads=(target,), writes=(output_directory(run.identity),), capabilities=CAPABILITIES)
+        run.action = Action(run.run_id, "router-execute", Operation.EXECUTE, scope, run.run_id,
+                            sources=(derived, capture), command=Command(exe, argv, str(self.guest_input), derived.source_id),
+                            outputs=("stdout",))
+        run.file, run.program, run.build = path.name, built.program, None
+        run.origin = {**run.origin, "script_source_id": derived.source_id, "compiled_by": built.compiler}
 
     # -- a captured web page command (router_execute, #94) -------------------
     def repeated(self, args: dict) -> Run | None:
@@ -315,6 +416,8 @@ class SandboxRunner:
 
     def plan_capture(self, args: dict, identity: tuple) -> tuple[Run, dict]:
         """A PowerShell script derived from a capture, put in the inbox and run like a downloaded .ps1.
+        A *-script form (python, javascript, ruby, sh) takes the whole capture unchanged as that language's
+        file and runs it with the interpreter program_share lends the Sandbox.
 
         The capture stays the parent source: Authority checks both SHA-256 values again before
         the run and right before Enter. The script is derived as data on the Host, never run here."""
@@ -336,7 +439,11 @@ class SandboxRunner:
                 # The clipboard may hold something the user copied, not the page: only a complete
                 # powershell -Command/-EncodedCommand line (what ClickFix copies) is ever run from it.
                 raise ValueError("a clipboard capture runs only as powershell-command")
-            if form == "powershell-command":
+            if form in SCRIPT_FORMS or form in COMPILE_FORMS:
+                if "start" in args or "end" in args:
+                    raise ValueError(f"{form} uses the whole capture")
+                script, transform = text, {"transform": "identity"}
+            elif form == "powershell-command":
                 if not clipboard or "start" in args or "end" in args:
                     raise ValueError("powershell-command needs a source the Host read from the clipboard itself, "
                                      "used in full")
@@ -345,20 +452,44 @@ class SandboxRunner:
                 script, transform = script_from_source(text, form, args.get("start"), args.get("end"))
         except ValueError as e:
             raise RunError("INVALID_ARGUMENT", f"cannot derive a script from {capture.source_id}: {e}") from None
-        data = b"\xef\xbb\xbf" + script.encode("utf-8")      # BOM: Windows PowerShell 5.1 reads it as UTF-8
+        if form in COMPILE_FORMS:
+            # Compiled on this PC by the Broker (with_build) before start(); nothing is in the inbox yet.
+            if not script.strip() or len(script.encode("utf-8")) > 65536:
+                raise RunError("INVALID_ARGUMENT", "the source is empty or larger than 64 KiB")
+            self.authority.sources[capture.source_id] = capture
+            self._seq += 1
+            run_id = f"RUN-{self._seq:04d}"
+            pending = str(self.guest_input / f"{capture.source_id}.pending")
+            scope = Scope(reads=(pending,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
+            action = Action(run_id, "router-execute", Operation.EXECUTE, scope, run_id, sources=(capture,),
+                            command=Command(INTERPRETER_PENDING, (), str(self.guest_input), capture.source_id),
+                            outputs=("stdout",))
+            origin = {"request_id": args["request_id"], "source_id": capture.source_id, "transform": "compile"}
+            run = Run(run_id, action, f"{capture.source_id}.pending", uuid4().hex[:16], identity, origin=origin,
+                      build=(capture, form, script), with_stderr=True)
+            shown = {"run_id": run_id, "source": capture.reference, "source_id": capture.source_id,
+                     "command": f"compile {COMPILE_FORMS[form]} on this PC, then run the result in the Sandbox",
+                     "transform": "compile"}
+            return run, shown
+        suffix = SCRIPT_FORMS.get(form, ".ps1")
+        # BOM: Windows PowerShell 5.1 reads it as UTF-8. The other languages get the text as it is.
+        data = (b"\xef\xbb\xbf" if suffix == ".ps1" else b"") + script.encode("utf-8")
         if not script.strip() or len(data) > 65536:
             raise RunError("INVALID_ARGUMENT", "the derived script is empty or larger than 64 KiB")
         try:
-            path = place(self.inbox, f"{capture.source_id}.ps1", data)
+            path = place(self.inbox, f"{capture.source_id}{suffix}", data)
         except OSError as e:
             raise RunError("RUNTIME_UNAVAILABLE", f"could not put the script in the inbox ({e.__class__.__name__})")
-        derived = Source(f"{capture.source_id}-PS1", f"derived:{capture.source_id}:{transform['transform']}",
+        derived = Source(f"{capture.source_id}-{suffix[1:].upper()}", f"derived:{capture.source_id}:{transform['transform']}",
                          hashlib.sha256(data).hexdigest(), "generated", (capture.source_id,))
         self._paths[derived.source_id] = path
         self.authority.sources[derived.source_id] = derived
         self.authority.sources[capture.source_id] = capture
         target = str(self.guest_input / path.name)
-        exe, argv = POWERSHELL, ("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", target)
+        if suffix == ".ps1":
+            exe, argv = POWERSHELL, ("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", target)
+        else:
+            exe, argv = INTERPRETER_PENDING, (target,)
         self._seq += 1
         run_id = f"RUN-{self._seq:04d}"
         scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
@@ -367,7 +498,8 @@ class SandboxRunner:
                         command=Command(exe, argv, str(self.guest_input), derived.source_id), outputs=("stdout",))
         origin = {"request_id": args["request_id"], "source_id": capture.source_id,
                   "script_source_id": derived.source_id, "transform": transform["transform"]}
-        run = Run(run_id, action, path.name, uuid4().hex[:16], identity, origin=origin)
+        run = Run(run_id, action, path.name, uuid4().hex[:16], identity, origin=origin,
+                  program=INTERPRETERS.get(suffix), with_stderr=suffix != ".ps1")
         shown = {"run_id": run_id, "file": path.name, "source": capture.reference, "source_id": capture.source_id,
                  "sha256": derived.sha256, "command": list2cmdline([exe, *argv]), "transform": transform["transform"]}
         return run, shown
@@ -417,6 +549,8 @@ class SandboxRunner:
                     "argument_line": list2cmdline(c.argv), "cwd": c.cwd, "output_dir": output_directory(run.identity),
                     "wait_inputs_s": WAIT_INPUTS_S,
                     "inputs": [{"path": a.scope.reads[0], "sha256": a.sources[0].sha256}]}
+        if run.with_stderr:
+            manifest["stderr"] = "append"       # its error output follows stdout under "--- stderr ---"
         files = []
         try:
             for name, data in ((f"run-{run.nonce}.ps1", HELPER.read_bytes()),
@@ -513,10 +647,20 @@ class SandboxRunner:
         return result
 
     # -- results -------------------------------------------------------------
-    async def status(self, broker, run_id: str) -> dict:
+    async def status(self, broker, run_id: str, wait_ms: int = 0) -> dict:
+        """wait_ms (11/7): keep checking until the run ends or the time is up, so an Agent does not give up
+        on a run that needs half a minute (found 11/7: Codex stopped after 14 s while it was RUNNING)."""
         run = self.runs.get(run_id)
         if run is None:
             raise RunError("INVALID_ARGUMENT", f"no run {run_id!r} in this session")
+        deadline = time.monotonic() + max(0, min(wait_ms, MAX_STATUS_WAIT_MS)) / 1000
+        while True:
+            view = await self._status_once(broker, run)
+            if view["state"] not in ("ACCEPTED", "RUNNING") or time.monotonic() >= deadline:
+                return view
+            await asyncio.sleep(min(STATUS_POLL_S, max(0.0, deadline - time.monotonic())))
+
+    async def _status_once(self, broker, run: Run) -> dict:
         async with self._poll:
             if run.state == "RUNNING" or (run.state == "UNKNOWN" and run.dispatched):
                 if broker.session.identity != run.identity:

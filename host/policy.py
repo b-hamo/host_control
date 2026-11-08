@@ -55,6 +55,9 @@ class Policy:
         if tool == "inbox_import":
             return Decision("ALLOW", "P-INBOX-IMPORT", "a file the user already has, copied into the Sandbox inbox; "
                             "never run on the Host")
+        if tool == "inbox_write":
+            return Decision("ALLOW", "P-INBOX-WRITE", "pasted code written as a file into the Sandbox inbox; "
+                            "never run on the Host")
         if tool == "inbox_download":
             # Team decision 2026-10-08: no approval. The file only ever runs inside the Sandbox;
             # every download is audited (URL, final URL, SHA-256).
@@ -72,6 +75,10 @@ class Policy:
             # #94: same rule as sandbox_run. The script derived from a capture runs inside the
             # Sandbox only, bound to the SHA-256 of the capture and of the script.
             return Decision("ALLOW", "P-ROUTER-EXECUTE", "analyzes a captured command inside the Sandbox only; recorded")
+        if tool == "program_share":
+            # 배주한 결정 2026-10-29: no dialog. Only listed compilers, their install folder only, always
+            # read-only (sandbox_manager programs.py refuses anything else); every share is recorded.
+            return Decision("ALLOW", "P-PROGRAM-SHARE", "an installed compiler, read-only, into the Sandbox; recorded")
         if tool in self.require_approval_for:
             return Decision("REQUIRE_APPROVAL", "P-APPROVE-SENSITIVE", f"{tool} needs user approval")
         return Decision("ALLOW", "P-ALLOW-DEFAULT", "no rule restricts this call")

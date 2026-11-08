@@ -1,4 +1,5 @@
 -r requirements-base.txt
-# Sandbox 창 종료 API (#78, sandbox_manager #46·#47) + X 뒤 닫힘 약 1초 확정(sandbox_manager #50·#52), develop dea5a3b
-sandbox_manager @ git+https://github.com/b-hamo/sandbox_manager.git@dea5a3b0d4cfa3e9ae407dcffcf67e69d10d8387
+# Sandbox 창 종료 API (#78, sandbox_manager #46·#47) + X 뒤 닫힘 약 1초 확정(sandbox_manager #50·#52)
+# + micro_VM 혼합 세션(#59) + 콘솔 창 없음(#60) + program_share(#62, host #116), develop de1cfde
+sandbox_manager @ git+https://github.com/b-hamo/sandbox_manager.git@de1cfde6b134c01b398eddfe2e0c9a8da72dcdbf
 # SecureArtifactScanner service (scanner_service/, Windows only). Build tools: installer/requirements-build.txt

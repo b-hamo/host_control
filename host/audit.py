@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-MASKED_FIELDS = {"computer_type": ("text",), "router_capture": ("text",)}
+MASKED_FIELDS = {"computer_type": ("text",), "router_capture": ("text",), "inbox_write": ("text",)}
 
 
 def mask(tool: str, args: dict) -> dict:

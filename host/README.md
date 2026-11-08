@@ -48,7 +48,7 @@ Sandbox 안 Runner
 |---|---|---|
 | `mcp_server.py` | Codex가 자식 프로세스로 켜는 MCP Server. `tools/list`에 도구 목록을 주고, `tools/call`을 Broker에 넘겨 결과를 돌려준다. 켜질 때 ④층(wss 서버, 세션 등록, bootstrap 파일)도 함께 시작한다 | 5.7 |
 | `tool_availability.py` | 이 세션에서 보여줄 도구를 정하는 규칙. Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 빼버리므로, 무거운 라이브러리 없이 쓸 수 있게 따로 뺐다 | 5.7 |
-| `tool_catalog.py` | `schema/mcp-tools/`의 도구 20개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
+| `tool_catalog.py` | `schema/mcp-tools/`의 도구 22개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
 | `mcp_runtime.py` | 오래 연결된 stdio MCP 뒤에서 실제 실행 Host를 필요할 때 켜고 바꾼다. 끝난 세션은 새 작업 요청으로만 대신하고, 조회·GUI 호출은 작업을 다시 돌리거나 다른 프로세스의 포트를 가져오지 않는다 (#54) | 5.7 |
 | `single_host.py` | 이전 통합용 무동작 호환 API. 다른 채팅의 Host 종료와 Sandbox 회수를 하지 않는다. 포트 충돌은 시작 실패로 보고한다 (#113) | 5.7 |
 
@@ -66,6 +66,8 @@ Sandbox 안 Runner
 |---|---|---|
 | `runtime_session.py` | 연결이 끊겨도 이어지는 세션. 5초마다 HEARTBEAT, 연속 2회 누락 DEGRADED · 3회 UNRESPONSIVE. 끊길 때 결과를 못 받은 Action은 재전송하지 않고 재접속 후 STATE_REQUEST로 확인. task_id·action_id 발급, 마지막 화면과 받은 시각 보관, `status()`로 상태 조회 | 4.4, 4.5 |
 | `inbox_download.py` | `inbox_download` 도구의 본체. 공개 https만, 확인한 IP로 접속(DNS rebinding 차단), 리다이렉트마다 검사, 크기·개수 한도, 다 받은 뒤에만 받는 폴더로, MOTW 표시, zip은 Host에서 안 풂. 받는 폴더가 Host에서 실행 금지인지 시작 때 시험 | 5.9 |
+| `local_compile.py` | `router_execute`의 컴파일 형식(`c-source`·`cpp-source`·`go-source`·`zig-source`·`java-source`·`csharp-source`). 파일 하나짜리 코드를 이 PC 컴파일러로 빈 임시 폴더에서 번역만 함(실행 안 함), 결과만 Sandbox에서 실행. 다른 파일을 읽게 하는 코드(UNC·절대 경로·`..`·`#embed`·`.incbin`·인라인 어셈블리·`@cImport`·`#:package`)는 거부, 전처리 뒤 읽은 파일은 컴파일러 폴더 안만. Java·C#은 java·dotnet을 빌려 실행. 컴파일러가 없으면 설치 안내 | 7.x |
+| `sandbox_project.py` | `sandbox_run`의 프로젝트 zip(②). Host는 zip의 이름 목록만 읽고 표시 파일(go.mod·package.json·*.csproj·CMakeLists.txt·Gemfile·requirements.txt 등)로 정해진 순서를 고름. 도구는 program_share로 빌려주고, Sandbox가 실행할 PowerShell 하나를 만듦: zip 도착(SHA-256) 확인 → tar 풀기 → 라이브러리 설치 → 빌드 → 실행. Agent는 파일·entry·인자만 고름. Rust·Maven/Gradle·make는 아직 | 7.x |
 | `signature_check.py` | `--signed-downloads`의 서명 검사. exe·msi만. 기본은 공인 서명이면 제작사와 상관없이 통과(Windows 11 Smart App Control과 같은 기준), `--trusted-publishers`로 좁힘(B2B). 다른 코드를 실행하는 프로그램(Microsoft 권장 차단 목록 + 인터프리터)과 원격 제어 도구는 이름·버전 정보의 원래 이름·서명자로 제외, 서명 뒤·서명 표 안에 덧붙인 바이트 거부(CVE-2013-3900), 루트는 이 PC의 컴퓨터 저장소만, 폐기 확인(10초 안에 못 하면 불신). "신뢰"는 안전이 아니라 "공인된 유효한 서명" | 5.9 |
 | `sandbox_run.py` | `sandbox_run`·`sandbox_run_status` 본체 (`--sandbox-run`). 이 세션에서 받은 파일만, Host가 받을 때 남긴 해시가 출처. 정확한 명령에 묶인 Router `Authority` 위임을 이번 한 번 만들고(승인 창 없음, 기록), `RouterGuiPolicy`로 Win+R·한 줄·Enter만 허용(Enter 직전 재확인). 도우미 `sandbox_run_guest.ps1`과 명령서는 받는 폴더로 전달, 결과는 Guest 영수증을 반출 검사로 확인 | 7.x |
 | `artifacts.py` | 파일 반출 전송 (artifact-export-v1). 후보 등록·artifact_id → 일회용 업로드 권한 → ARTIFACT_REQUEST → 수신 기록과 ARTIFACT_RESULT 대조. Output 사전 수신은 검사 전 임시 보관이며, 공개는 CLEAN 검사 후 자동 진행한다. 종료 때 미완료 전송을 취소하고 검증된 Output 수신본은 보존한다 | 5.8 |
@@ -179,6 +181,8 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_observation_upload.py` | upload_id(1회용·만료), PNG 검사, HTTPS 수신 거부 코드, 해시·크기 대조, 조작된 업로드 차단, 세션 종료 시 삭제 |
 | `tests/test_sandbox_recovery.py` | Runner만 다시 켜기, 창 닫힘은 다시 안 켬, 먹통이면 Sandbox 새로 켜기, 실패 시 넘어가기·종료, 옛 세대 token 거부, 실제 Sandbox Manager로 재시작 확인 |
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
+| `tests/test_local_compile.py` | 컴파일 형식: 다른 파일 읽기 거부(UNC·절대·`..`·`#embed`·어셈블리), 읽은 파일 확인, 컴파일 결과가 실행 입력(캡처가 부모), C#은 빌린 dotnet과 SDK runtimeconfig, 컴파일러 오류·없음 |
+| `tests/test_sandbox_project.py` | 프로젝트 zip: 표시 파일로 순서 결정, 지원 안 함·entry 없음·위험한 이름 거부, 스크립트가 zip 지문을 기다리고 정해진 순서만 실행, 스크립트가 실행 입력(zip이 부모), 도구 모두 빌려주기 |
 | `tests/test_sandbox_run.py` | 받은 파일 실행: 받은 파일만·정확한 명령 표시·바뀐 파일 거부, 실행은 세 입력만(Win+R은 `POL-0.1.1`부터 Agent에게도 허용), Enter 직전 파일·도우미 변조 시 Enter 안 보냄, 영수증 대조, 자기 결과만 승인 없이 반출, MCP 전 구간(승인 창 없음·감사·도우미 삭제), 옵션 |
 | `tests/test_inbox_download.py` | 내려받기: 공개 https만·사설/메타데이터 주소 거부, 확인한 IP로만 접속(두 번째 DNS 없음), 리다이렉트 검사, 크기·개수 한도, 이름 정리·덮어쓰기 없음·MOTW, zip 안 풂, 실행 금지 시험, MCP 경로(정책·감사·쿼리 제거·받는 폴더 연결·감시 시작/종료), 잘못된 옵션 |
 | `tests/test_signature_check.py` | 서명 판정(스크립트·인터프리터·Microsoft 권장 차단 목록·원격 제어 도구 제외, 무효·폐기·확인 불가·사용자 루트 거부, 시간 초과, 기본은 공인 서명이면 통과·`--trusted-publishers`로 좁힘), 실제 Windows: Microsoft 서명 프로그램 통과, 이름 바꾼 python 거부, 서명 뒤·표 안 덧붙임 거부, `--signed-downloads`로 신뢰된 것만 다운로드 폴더에 |
