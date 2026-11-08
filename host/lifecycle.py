@@ -316,6 +316,14 @@ class SandboxLauncher:
     async def _recover(self, kind: str, why: str) -> None:
         if await self._window_prevents_recovery():
             return
+        if getattr(self.manager, "fixed_vm_binding", False):
+            # A lost connection is not proof the Guest or its programs stopped.
+            # Retain identity, generation, credentials and the action ledger so
+            # the same Runner may resync. Input remains blocked by session health.
+            # Explicit termination and security failures still use normal cleanup.
+            log.error("SANDBOX %s %s; fixed VM preserved, awaiting authenticated reconnect",
+                      self.session.identity[0], why)
+            return
         if not self.auto_recover:
             log.error("SANDBOX %s %s; automatic restart is off, ending the session", self.session.identity[0], why)
             await self.session._end(f"RUNTIME_LOST: {why}")

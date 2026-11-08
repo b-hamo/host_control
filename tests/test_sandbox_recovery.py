@@ -238,6 +238,45 @@ def test_with_restarts_off_a_lost_runtime_ends_the_session(tmp_path):
     assert ("stop", "RUNTIME_ERROR", True) in fake.calls
 
 
+def test_fixed_vm_survives_grace_expiry_and_resyncs_without_replaying_input(tmp_path):
+    fake = RecoveringManager(tmp_path / "sbx")
+    fake.fixed_vm_binding = True
+
+    async def body():
+        host = RecoveringHost(tmp_path, fake)
+        r, _, serving = await start_ready(host, fake, tmp_path)
+        await host.call("computer_observe")
+        typed = await host.call("computer_type", {"text": "once"})
+        assert typed["ok"]
+        executed = list(r.executed)
+        identity = host.backend.launcher.session.identity
+        r.drop()
+        await serving
+        deadline = time.monotonic() + 10
+        while True:
+            recovery = host.backend.launcher._recovery
+            if recovery is not None and recovery.done():
+                break
+            assert time.monotonic() < deadline, "health recovery hook did not finish"
+            await asyncio.sleep(.05)
+        assert not host.backend.launcher.session.terminated
+        assert not {"stop", "cleanup", "restart_runner", "reset_sandbox"}.intersection(fake.names())
+        blocked = await host.call("computer_type", {"text": "must not run"})
+        assert not blocked["ok"]
+        await r.connect(r.reconnect_token)
+        serving = asyncio.create_task(r.serve())
+        await host.wait_state("READY")
+        assert (await host.call("computer_observe"))["ok"]
+        assert host.backend.launcher.session.identity == identity
+        assert r.executed == executed
+        assert (await host.call("session_stop", {"reason": "USER_STOP"}))["ok"]
+        await serving
+        await asyncio.to_thread(host.backend.shutdown)
+
+    run(body())
+    assert ("stop", "USER_STOP", False) in fake.calls
+
+
 def test_a_new_generation_keeps_ids_and_marks_unfinished_actions_unknown():
     old = RuntimeSession(("SES-1", "RT-1", 1))
     old._task_seq, old._action_seq = 1, 7

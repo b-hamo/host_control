@@ -234,6 +234,16 @@ class SandboxRunner:
         self._launching: Run | None = None
         self._poll = asyncio.Lock()
 
+    def bind_guest_input(self, guest_input_root: str | None) -> None:
+        """Bind the trusted adapter's selected path before any execution exists."""
+        path = PureWindowsPath(guest_input_root) if guest_input_root else GUEST_INPUT
+        if not path.is_absolute() or ".." in path.parts:
+            raise ValueError("Guest input root must be an absolute Windows path")
+        if self.runs and path != self.guest_input:
+            raise RuntimeError("cannot move existing runs to another Guest path")
+        self.guest_input = path
+        self.wait_for_transport = guest_input_root is not None
+
     # -- what inbox_download fetched ---------------------------------------
     def register(self, download: dict) -> None:
         """Called by the Broker after a successful inbox_download or inbox_import (the Host's own record)."""

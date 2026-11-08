@@ -298,6 +298,13 @@ class HostBackend(threading.Thread):
 
                 def publish(address: str, bootstrap_path: Path, ident: tuple[str, str, int]) -> str:
                     """The Host part of a launch or recovery: certificate for this address, token, bootstrap."""
+                    # Automatic allocation becomes fixed in manager.start(), after
+                    # the Router was constructed but before any Guest can be READY.
+                    guest_root = getattr(manager, "guest_input_root", None)
+                    if self.runner is not None:
+                        self.runner.bind_guest_input(guest_root)
+                    if downloader is not None and guest_root:
+                        downloader.guest_input_root = guest_root
                     cert, key = tls.ensure_dev_cert(a.cert_dir, addresses=[address])
                     for ctx in ssl_contexts:
                         ctx.load_cert_chain(cert, key)     # new connections get the new certificate
@@ -532,9 +539,17 @@ def _real_sandbox_manager(root: Path | None, audit=None, *, options=None):
         from sandbox_manager.micro_vm import MicroVmManager
         if not root or not options.micro_vm_root or not options.micro_vm_relay:
             raise RuntimeError("micro_VM requires explicit --sandbox-root, --micro-vm-root and --micro-vm-relay")
-        manager = MicroVmManager(root, package=options.micro_vm_package, vm_root=options.micro_vm_root,
-                                 relay=options.micro_vm_relay, log=on_event)
+        manager_type = MicroVmManager
+        extra = {}
+        if getattr(options, "auto_vm_app_window", False):
+            from sandbox_manager.automatic import AutomaticVmManager
+            manager_type = AutomaticVmManager
+            extra["allow_app_window"] = True
+        manager = manager_type(root, package=options.micro_vm_package, vm_root=options.micro_vm_root,
+                               relay=options.micro_vm_relay, log=on_event, **extra)
     else:
+        if getattr(options, "auto_vm_app_window", False):
+            raise RuntimeError("--auto-vm-app-window requires micro_VM package/root/relay")
         manager = SandboxManager(root, log=on_event)
     import inspect
     log.info("loaded Manager class=%s path=%s", type(manager).__name__, inspect.getfile(type(manager)))
@@ -620,6 +635,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="explicit micro_VM app-window backend package (no automatic VM migration)")
     ap.add_argument("--micro-vm-root", type=Path, default=None, help="micro_VM broker state root")
     ap.add_argument("--micro-vm-relay", type=Path, default=None, help="built ScrpRelay.exe")
+    ap.add_argument("--auto-vm-app-window", action="store_true",
+                    help="choose WSB if free, otherwise a fixed micro_VM; explicitly accepts app-window limits")
     ap.add_argument("--port", type=int, default=17443, help="wss port for the Runner (0 = any free port)")
     ap.add_argument("--upload-port", type=int, default=17444, help="https port for screenshot uploads (0 = any)")
     ap.add_argument("--session", default=None, help="session id (default: SES-<date>-<time>)")

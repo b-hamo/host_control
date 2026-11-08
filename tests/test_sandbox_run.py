@@ -26,6 +26,19 @@ from artifact_runner import ArtifactRunner
 from host.broker import ToolResult
 from host.mcp_server import HostBackend, load_tool_list
 from host.sandbox_run import EMPTY_SHA256, RunError, SandboxRunner, screen_change
+
+
+def test_selected_guest_path_is_bound_before_execution(tmp_path):
+    runner = SandboxRunner(tmp_path)
+    runner.bind_guest_input(r"C:\RunnerInput")
+    assert str(runner.guest_input) == r"C:\RunnerInput"
+    assert runner.wait_for_transport
+    runner.runs["RUN-existing"] = object()
+    runner.bind_guest_input(r"C:\RunnerInput")
+    with pytest.raises(RuntimeError, match="cannot move"):
+        runner.bind_guest_input(None)
+    with pytest.raises(ValueError, match="absolute"):
+        runner.bind_guest_input(r"relative\input")
 from test_inbox_download import BODY, InboxManager, Watcher, downloader, server  # noqa: F401
 from test_sandbox_launch import args as launch_args, paths, run
 

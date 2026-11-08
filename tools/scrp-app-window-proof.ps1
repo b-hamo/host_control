@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][ValidateSet('B','C')][string]$Slot,
+﻿param([Parameter(Mandatory=$true)][ValidateSet('A','B','C')][string]$Slot,
       [Parameter(Mandatory=$true)][ValidatePattern('^SES-[a-f0-9]{32}$')][string]$Session)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms
