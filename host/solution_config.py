@@ -10,12 +10,17 @@ from pathlib import Path
 import re
 import tempfile
 import tomllib
+import sys
 
 
 def read_profile(path: Path, *, verify_runner: bool = True) -> dict:
     profile = json.loads(path.read_text(encoding='utf-8-sig'))
     if profile.get('schema_version') != 1 or profile.get('mode') not in ('Dev', 'Deploy'):
         raise ValueError('unsupported solution profile')
+    if profile.get('manager_source', 'installed') not in ('installed', 'checkout'):
+        raise ValueError('unsupported Manager source')
+    if profile.get('manager_source') == 'checkout' and profile['mode'] != 'Dev':
+        raise ValueError('Manager checkout is only supported by an explicit Dev profile')
     for name in ('host_repo', 'manager_repo', 'runner_repo', 'python', 'runner_exe', 'work', 'state'):
         value = profile.get(name)
         if not isinstance(value, str) or not Path(value).is_absolute():
@@ -29,6 +34,22 @@ def read_profile(path: Path, *, verify_runner: bool = True) -> dict:
     if micro is not None:
         validate_micro_vm(micro)
     return profile
+
+
+def activate_manager_source(profile: dict) -> None:
+    """An explicit Dev source, selected before any Manager import. Deploy uses wheels."""
+    if profile.get('manager_source', 'installed') == 'installed':
+        return
+    if profile.get('mode') != 'Dev' or profile.get('manager_source') != 'checkout':
+        raise ValueError('invalid Manager source selection')
+    root = Path(profile['manager_repo']).resolve()
+    package = root / 'sandbox_manager'
+    if not (package / '__init__.py').is_file() or not (package / 'app_preparation.py').is_file():
+        raise ValueError('selected Manager checkout does not provide application preparation')
+    loaded = sys.modules.get('sandbox_manager')
+    if loaded is not None and Path(loaded.__file__).resolve().parent != package:
+        raise ValueError('a different Manager has already been imported; source not switched')
+    sys.path.insert(0, str(root))
 
 
 def validate_micro_vm(micro: dict) -> None:

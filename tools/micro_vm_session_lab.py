@@ -31,7 +31,7 @@ if not SLOTS or len(set(SLOTS)) != len(SLOTS) or any(s not in ("A", "B", "C") fo
     raise ValueError("SCRP_LAB_SLOTS must contain unique A/B/C slots")
 ALLOWED = {"task_submit", "runtime_get_state", "computer_observe", "computer_click", "computer_type",
            "computer_keypress", "computer_hotkey", "artifact_list", "artifact_export", "inbox_import",
-           "sandbox_run", "sandbox_run_status", "router_capture", "router_execute", "router_result", "session_stop"}
+           "sandbox_run", "sandbox_run_status", "router_capture", "router_execute", "router_result", "session_stop", "app_prepare"}
 
 
 def save(path, data):
@@ -63,7 +63,7 @@ class Slot:
                    "--output-root", str(work / "output"),
                    "--log-file", str(self.root / "host.log"), "--inbox", str(work / "inbox"),
                    "--artifact-export", "--artifact-scanner", "defender-service", "--artifact-max-bytes", "8388608",
-                   "--sandbox-run", "--router-capture", "--approval", "dialog"]
+                   "--sandbox-run", "--router-capture", "--share-programs", "--approval", "dialog"]
         if os.environ.get("SCRP_LAB_AUTO_RESTART") != "1":
             command += ["--no-auto-restart"]
         if slot != "A" or os.environ.get("SCRP_LAB_AUTO") == "1":

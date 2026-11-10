@@ -30,7 +30,7 @@ def host_arguments(runner: Path, work: Path, state: Path, *, micro_vm=None, clie
         "--signed-downloads", "--agent-guard", "--artifact-export",
         "--artifact-max-bytes", "52428800",
         "--artifact-scanner", "defender-service", "--approval", "dialog",
-        "--sandbox-run", "--router-capture",
+        "--sandbox-run", "--router-capture", "--share-programs",
         "--artifact-dir", str(state / "artifacts"), "--export-dir", str(export_root),
         "--cert-dir", str(state / "certs"), "--audit-dir", str(state / "audit"),
         "--log-file", str(state / "host.log"), "--startup-timeout", "1200" if micro_vm is not None else "180",
@@ -112,11 +112,12 @@ def main(argv=None):
     try:
         profile = None
         if a.config:
-            from host.solution_config import read_profile
+            from host.solution_config import read_profile, activate_manager_source
             a.config = a.config.resolve()
             profile = read_profile(a.config)
             if Path(profile['host_repo']).resolve() != REPO:
                 raise ValueError('profile belongs to a different Host checkout')
+            activate_manager_source(profile)
             a.runner_exe = Path(profile['runner_exe'])
             a.work, a.state = Path(profile['work']), Path(profile['state'])
         validate_paths(a.runner_exe, a.work, a.state)

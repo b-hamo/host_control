@@ -50,6 +50,23 @@ No new Sandbox or session termination without the user's instruction.
 
 ## Input and execution
 
+- Plan the task before launching an application. For a plain TXT result, use the existing
+  PowerShell/Router to write the file; an editor is needed only when the task needs its UI.
+- Once the same session is READY, call `app_prepare` with the app names the task actually needs
+  (for example powershell, notepad, python, node) and a new `request_id`. Do not guess that a
+  Windows image contains the app. Poll PREPARING with the same request id and app list.
+- Launch only after prepared=true, using the returned Guest exe and setup/environment. Preparation
+  checks files; confirm the actual window and inputs, or the Router execution receipt, afterwards.
+- In app-window mode, the idle launcher panel is not an editable command field. Open the dedicated
+  field with Win+R, observe it, then type. Keep every input within the observation freshness limit.
+- NEEDS_INSTALL or UNSUPPORTED is a preparation result before any workload launch: find the requested
+  official installer, import/download through the inbox and install in this same Guest. Do not ask
+  the user to install it on the Host. Verify the resulting Guest app before proceeding. This is not
+  an alternative execution path after a failed workload. FAILED, UNKNOWN, policy denial or uncertain
+  execution still stops automatic execution/replay. Do not create another VM to supply an app.
+- If `app_prepare` is missing, report that this Host needs the updated Manager and program-sharing
+  configuration; do not attempt an absent application first or run it on the Host.
+
 - If the user names a package, inspect Downloads first. Import the matching copy
   by name; do not silently substitute a package or version. If absent, use the
   vendor's official URL with inbox_download. Never execute it on the Host.

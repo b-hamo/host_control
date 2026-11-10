@@ -1,5 +1,10 @@
 # host/ — Host 쪽 코드 안내
 
+작업 전 앱 준비는 `broker.py`의 `app_prepare`와 `lifecycle.py`의 Manager 연결에서 처리한다.
+Agent가 필요한 앱 목록을 고르고, 준비 중에는 입력/Router 실행을 거부한다. 같은 요청 ID 조회는
+기존 준비 작업을 기다리며 세대 변경·응답 소실 시 재실행하지 않는다. `test_app_preparation.py`는
+동시 조회·요청 충돌·세대 변경·입력 차단과 도구 스키마를 검증한다. 통합 실행은 `--share-programs`를 켠다.
+
 micro_VM 앱 창 연결은 `mcp_server.py`의 Manager 선택, `lifecycle.py`의 Guest 경로,
 `inbox_download.py`의 입력 위치, `sandbox_run.py`의 전송 대기·결과 판정에서 처리한다.
 [구성과 검증 절차](../docs/micro-vm-app-window.md)를 따른다.
@@ -57,7 +62,7 @@ Sandbox 안 Runner
 |---|---|---|
 | `mcp_server.py` | Codex가 자식 프로세스로 켜는 MCP Server. `tools/list`에 도구 목록을 주고, `tools/call`을 Broker에 넘겨 결과를 돌려준다. 켜질 때 ④층(wss 서버, 세션 등록, bootstrap 파일)도 함께 시작한다 | 5.7 |
 | `tool_availability.py` | 이 세션에서 보여줄 도구를 정하는 규칙. Codex는 약 0.5초 안에 도구 목록을 못 받으면 서버를 빼버리므로, 무거운 라이브러리 없이 쓸 수 있게 따로 뺐다 | 5.7 |
-| `tool_catalog.py` | `schema/mcp-tools/`의 도구 22개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
+| `tool_catalog.py` | `schema/mcp-tools/`의 도구 23개를 읽고, 입력값을 규격(타입·필수·범위·모르는 필드)으로 검사한 뒤 생략된 값을 기본값으로 채운다 | 5.6 |
 | `mcp_runtime.py` | 오래 연결된 stdio MCP 뒤에서 실제 실행 Host를 필요할 때 켜고 바꾼다. 끝난 세션은 새 작업 요청으로만 대신하고, 조회·GUI 호출은 작업을 다시 돌리거나 다른 프로세스의 포트를 가져오지 않는다 (#54) | 5.7 |
 | `single_host.py` | 이전 통합용 무동작 호환 API. 다른 채팅의 Host 종료와 Sandbox 회수를 하지 않는다. 포트 충돌은 시작 실패로 보고한다 (#113) | 5.7 |
 
