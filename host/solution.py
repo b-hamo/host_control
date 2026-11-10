@@ -30,7 +30,7 @@ def host_arguments(runner: Path, work: Path, state: Path, *, micro_vm=None, clie
         "--signed-downloads", "--agent-guard", "--artifact-export",
         "--artifact-max-bytes", "52428800",
         "--artifact-scanner", "defender-service", "--approval", "dialog",
-        "--sandbox-run", "--router-capture",
+        "--sandbox-run", "--router-capture", "--share-programs",
         "--artifact-dir", str(state / "artifacts"), "--export-dir", str(export_root),
         "--cert-dir", str(state / "certs"), "--audit-dir", str(state / "audit"),
         "--log-file", str(state / "host.log"), "--startup-timeout", "1200" if micro_vm is not None else "180",
@@ -112,19 +112,30 @@ def main(argv=None):
     try:
         profile = None
         if a.config:
-            from host.solution_config import read_profile
+            from host.solution_config import read_profile, activate_manager_source
             a.config = a.config.resolve()
             profile = read_profile(a.config)
             if Path(profile['host_repo']).resolve() != REPO:
                 raise ValueError('profile belongs to a different Host checkout')
+            activate_manager_source(profile)
             a.runner_exe = Path(profile['runner_exe'])
             a.work, a.state = Path(profile['work']), Path(profile['state'])
         validate_paths(a.runner_exe, a.work, a.state)
         if a.validate_paths:
             return
+        micro = profile.get('micro_vm') if profile else None
+        client = str(uuid.uuid4()) if micro else None
+        arguments = host_arguments(a.runner_exe, a.work, a.state, micro_vm=micro, client_id=client)
         from sandbox_manager.inbox import check_inbox_root
         from host.inbox_download import check_no_execute
-        for path in (a.work / "inbox", a.work / "output"):
+        # Check exactly the mappings this Host will use. The legacy root inbox
+        # may be mapped by an older chat; probing it requires a rename which
+        # Windows Sandbox denies while that mapping is live.
+        for flag in ('--inbox', '--output-root'):
+            path = Path(arguments[arguments.index(flag) + 1])
+            if client:
+                # Inherit the installer's deny-execute ACL, then verify it.
+                path.mkdir(parents=True)
             check_inbox_root(path)
             ok, why = check_no_execute(path)
             if not ok:
@@ -154,19 +165,6 @@ def main(argv=None):
     except Exception as e:
         p.exit(1, f"SOLUTION_NOT_READY: {e}\n")
     from host.mcp_server import main as run_host
-    micro = profile.get('micro_vm') if profile else None
-    client = str(uuid.uuid4()) if micro else None
-    arguments = host_arguments(a.runner_exe, a.work, a.state, micro_vm=micro, client_id=client)
-    if client:
-        # Descendants inherit the installer's deny-execute ACL. Verify it before
-        # exposing a per-client inbox; never share another chat's mutable inbox.
-        for flag in ('--inbox', '--output-root'):
-            path = Path(arguments[arguments.index(flag) + 1])
-            path.mkdir(parents=True)
-            check_inbox_root(path)
-            ok, why = check_no_execute(path)
-            if not ok:
-                p.exit(1, f'SOLUTION_NOT_READY: {path}: {why}\n')
     run_host(arguments)
 
 

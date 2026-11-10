@@ -200,3 +200,19 @@ Codex 설정도 같은 생성 내용으로 교체했으며, 기존 연결의 자
 - Defender platform 4.18.26100.4-0 / engine 1.1.26100.4 / signature 1.463.47.0.
   EICAR는 설치 검증에서 차단을 확인했고 Shared 악성 파일의 전체 UI 경로는 별도로
   실행하지 않았다. 무해한 파일의 실제 반출과 자동 테스트의 차단 경로를 구분한다.
+# 작업 전 앱 준비의 개발 배포
+
+`app_prepare`는 `--share-programs`를 사용하는 Host와 `prepare_apps`를 구현한 Manager가 함께 필요하다.
+solution 기본 인자는 이 기능을 켠다. Dev 프로필에서 수정 checkout을 시험하려면
+`manager_source: "checkout"`을 명시한다. Host는 Manager를 import하기 전에 `manager_repo`를 선택하며,
+다른 Manager가 이미 import됐거나 앱 준비 모듈이 없으면 거부한다. Deploy 프로필은 이 옵션을 허용하지 않고
+설치된 Manager 패키지를 사용한다. Runner도 `runner_exe`와 `runner_sha256`을 함께 갱신해야 한다.
+
+설정 변경은 새 Host 연결부터 적용된다. 기존 채팅의 Host와 VM은 교체하지 않는다.
+`python -m host.solution --config <프로필> --check`로 검사 서비스·경로·바이너리 고정을 확인한 뒤,
+새 연결의 `tools/list`에서 app_prepare 노출을 확인한다. 실제 작업은 같은 READY 세션에서
+app_prepare → PREPARED → router_execute → sandbox_run_status의 실행 영수증 → artifact_export 순서로 확인한다.
+현재 코드의 실행 결과 조회 이름은 sandbox_run_status이며 router_result 도구는 노출하지 않는다.
+
+2026-11-10 Dev checkout과 지정 Runner로 실제 micro_VM Python 실행·한글 TXT 검사 반출을 확인했다.
+이 앱 준비 변경을 포함한 새 Manager wheel의 Deploy 설치는 별도 미검증이다.

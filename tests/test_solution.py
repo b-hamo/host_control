@@ -100,3 +100,50 @@ def test_successful_preflight_publishes_config_and_launches_profile(tmp_path, mo
     solution.main(args)
     assert launched == [solution.host_arguments(runner, work, state)]
     assert checked == [work / 'inbox', work / 'output', state] * 2
+
+
+@pytest.mark.parametrize('failure', [None, 'inbox', 'output', 'service'])
+def test_auto_chat_preflight_uses_own_mappings_before_host_start(tmp_path, monkeypatch, failure):
+    """An occupied legacy mapping must not prevent a second chat's handshake."""
+    from host import inbox_download, mcp_server, solution_config
+    from sandbox_manager import inbox
+    runner, work, state = tmp_path / 'runner.exe', tmp_path / 'work', tmp_path / 'state'
+    runner.touch()
+    profile = dict(host_repo=str(solution.REPO), runner_exe=str(runner),
+                   work=str(work), state=str(state), micro_vm=dict(mode='AutoAppWindow',
+                   package=str(tmp_path / 'package'), root=str(tmp_path / 'vm-root'),
+                   relay=str(tmp_path / 'relay.exe')))
+    monkeypatch.setattr(solution_config, 'read_profile', lambda _: profile)
+    monkeypatch.setattr(solution_config, 'validate_micro_vm', lambda _: None)
+    checked, launched, services = [], [], []
+    monkeypatch.setattr(inbox, 'check_inbox_root', lambda p: p)
+    def check(path):
+        assert path.parent.parent == work / 'clients', 'touched another chat mapping'
+        assert path.is_dir()
+        checked.append(path)
+        return path.name != failure, 'deny-execute missing'
+    async def service(path):
+        services.append(path)
+        if failure == 'service':
+            raise RuntimeError('scanner unavailable')
+    monkeypatch.setattr(inbox_download, 'check_no_execute', check)
+    monkeypatch.setattr(solution, 'check_service', service)
+    monkeypatch.setattr(mcp_server, 'main', launched.append)
+    args = ['--config', str(tmp_path / 'solution.json')]
+    if failure:
+        with pytest.raises(SystemExit) as error:
+            solution.main(args)
+        assert error.value.code == 1
+        assert not launched
+        assert len(checked) == (1 if failure == 'inbox' else 2)
+        assert services == ([state] if failure == 'service' else [])
+    else:
+        solution.main(args)
+        solution.main(args)
+        mappings = [[Path(argv[argv.index(flag) + 1]) for flag in ('--inbox', '--output-root')]
+                    for argv in launched]
+        assert checked == mappings[0] + mappings[1]
+        assert len(set(checked)) == 4
+        assert services == [state, state]  # Scanner keeps its installed export root.
+    assert not (work / 'inbox').exists()
+    assert not (work / 'output').exists()

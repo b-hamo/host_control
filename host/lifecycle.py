@@ -226,6 +226,12 @@ class SandboxLauncher:
             raise SandboxManagerError("RUNTIME_UNAVAILABLE", "no running Sandbox to share a program into")
         return await self._call(self.manager.share_program, self.sandbox, name)
 
+    async def prepare_apps(self, apps: list[str]) -> dict:
+        if self.sandbox is None or not callable(getattr(self.manager, "prepare_apps", None)):
+            from sandbox_manager import SandboxManagerError
+            raise SandboxManagerError("RUNTIME_UNAVAILABLE", "no compatible running Manager for app preparation")
+        return await self._call(self.manager.prepare_apps, self.sandbox, apps)
+
     async def _call(self, fn, *args):
         self._alive()
         return await asyncio.to_thread(fn, *args)

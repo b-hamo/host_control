@@ -33,6 +33,7 @@ REQUIRED_CAPABILITY = {
     "router_execute": "host.router",
     # Host feature (--share-programs): an installed compiler shared read-only into the running Sandbox.
     "program_share": "host.programs",
+    "app_prepare": "host.programs",
 }
 # Tools whose backend is not built yet. Hidden rather than failing late (B-11).
 NOT_YET_AVAILABLE: dict[str, str] = {}

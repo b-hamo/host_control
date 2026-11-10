@@ -56,7 +56,7 @@ OPERATIONS = {
     "computer_click_element": "ui.click_element",
 }
 COORDINATE_TOOLS = {"computer_move", "computer_click", "computer_scroll"}
-RUNTIME_TOOLS = {"computer_observe", "artifact_export", "sandbox_run", "router_execute", "program_share",
+RUNTIME_TOOLS = {"computer_observe", "artifact_export", "sandbox_run", "router_execute", "program_share", "app_prepare",
                  *OPERATIONS}   # need a READY runtime
 
 # Rate limits per session (protocol doc §7: input 5/s, observe 2/s)
@@ -193,6 +193,7 @@ class Broker:
         self._pending_image: bytes | None = None
         self._waited_s = 0.0
         self.notice: str | None = None               # told to the Agent once, with the next result
+        self._app_requests: dict = {}
 
     def switch_session(self, session: RuntimeSession, notice: str) -> None:
         """Continue with the next generation of the same session (host/lifecycle.py recovery)."""
@@ -292,6 +293,10 @@ class Broker:
             hint = self.launcher.hint() if self.launcher is not None else None
             raise BrokerError("RUNTIME_UNAVAILABLE",
                               f"runtime is {s.runtime_state}, not READY" + (f"; {hint}" if hint else ""))
+        if (tool in OPERATIONS or tool in ("sandbox_run", "router_execute")) and any(
+                not job.done() for _, _, job in self._app_requests.values()):
+            raise BrokerError("RUNTIME_UNAVAILABLE", "application preparation is still running; no input sent",
+                              next_step="app_prepare")
 
     def _artifact_decision(self, args: dict, decision: Decision) -> tuple[Decision, dict]:
         """Before any approval prompt: does the artifact exist, and does this call start a new
@@ -336,10 +341,51 @@ class Broker:
                                                "lend programs (--share-programs)")
         from sandbox_manager import SandboxManagerError
         try:
-            shared = await self.launcher.share_program(run.program)
+            if callable(getattr(self.launcher, "prepare_apps", None)):
+                prepared = await self.launcher.prepare_apps([run.program])
+                if not prepared.get("prepared"):
+                    raise BrokerError("RUNTIME_UNAVAILABLE", f"required app is not prepared: {prepared['apps']}",
+                                      next_step="app_prepare")
+                shared = prepared["apps"][0]
+            else:
+                shared = await self.launcher.share_program(run.program)
         except SandboxManagerError as e:
             raise BrokerError(e.code, e.message) from None
         self.runner.with_interpreter(run, shared)
+
+    async def _prepare_apps(self, args):
+        identity = self.session.identity
+        key, apps = args["request_id"], tuple(args["apps"])
+        if key in self._app_requests:
+            original, expected, job = self._app_requests[key]
+            if expected != apps:
+                raise BrokerError("IDEMPOTENCY_CONFLICT", "app preparation request_id has different applications")
+            if original != identity:
+                return {"request_id": key, "status": "UNKNOWN", "prepared": False,
+                        "message": "session generation changed; preparation is not replayed"}
+        else:
+            if len(self._app_requests) >= 128:
+                raise BrokerError("INVALID_ARGUMENT", "app preparation request limit reached")
+            prepare = getattr(self.launcher, "prepare_apps", None)
+            if not callable(prepare):
+                raise BrokerError("RUNTIME_UNAVAILABLE", "installed Manager does not support application preparation")
+            job = asyncio.create_task(prepare(list(apps)))
+            self._app_requests[key] = identity, apps, job
+        # Client cancellation/timeouts must not cancel a Guest preparation or
+        # make the next poll create a second operation.
+        done, _ = await asyncio.wait({job}, timeout=args["wait_ms"] / 1000)
+        if not done:
+            return {"request_id": key, "status": "PREPARING", "prepared": False,
+                    "message": "poll app_prepare with the same request_id and apps; do not launch yet"}
+        if self.session.identity != identity or self.session.terminated:
+            return {"request_id": key, "status": "UNKNOWN", "prepared": False,
+                    "message": "session changed during preparation; no workload launched"}
+        try:
+            result = job.result()
+        except Exception as exc:
+            return {"request_id": key, "status": "UNKNOWN", "prepared": False,
+                    "message": str(exc), "next_step": "inspect_preparation_no_replay"}
+        return dict(result, request_id=key, status="PREPARED" if result.get("prepared") else "NOT_PREPARED")
 
     async def _prepare_project(self, run) -> None:
         """(2) a project zip: lend the tools its recipe needs (program_share), then write its Guest script
@@ -352,8 +398,15 @@ class Broker:
         from sandbox_manager import SandboxManagerError
         shared = {}
         try:
-            for name in run.project.programs:
-                shared[name] = await self.launcher.share_program(name)
+            if callable(getattr(self.launcher, "prepare_apps", None)):
+                prepared = await self.launcher.prepare_apps(list(run.project.programs))
+                if not prepared.get("prepared"):
+                    raise BrokerError("RUNTIME_UNAVAILABLE", f"project apps are not prepared: {prepared['apps']}",
+                                      next_step="app_prepare")
+                shared = {row["app"]: row for row in prepared["apps"]}
+            else:
+                for name in run.project.programs:
+                    shared[name] = await self.launcher.share_program(name)
         except SandboxManagerError as e:
             raise BrokerError(e.code, e.message) from None
         self.runner.with_project(run, shared)
@@ -450,6 +503,9 @@ class Broker:
             log.info("TASK %s submitted (Translator classification is WBS 7.x)", self.task_id)
             reply = {"task_id": self.task_id, "accepted": True, "runtime_id": s.identity[1],
                      "runtime_state": s.runtime_state}
+            if self.programs:
+                reply["app_preparation"] = {"tool": "app_prepare", "before_workload": True,
+                    "message": "Choose only the apps this task needs; prepare them in this session once READY, then execute."}
             if self.launcher is not None:
                 self.launcher.begin()                # returns at once; the Sandbox boots meanwhile
                 reply["sandbox"] = self.launcher.status()
@@ -540,6 +596,10 @@ class Broker:
                 return await asyncio.to_thread(self.inbox.finish, args["keep"])
             except DownloadError as e:
                 raise BrokerError(e.code, e.message) from None
+        if tool == "app_prepare":
+            if not self.programs:
+                raise BrokerError("POLICY_DENIED", "app preparation is not enabled (--share-programs)")
+            return await self._prepare_apps(args)
         if tool == "program_share":
             if not self.programs:
                 raise BrokerError("POLICY_DENIED", "program_share is not enabled on this Host (--share-programs)")
