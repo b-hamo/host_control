@@ -485,13 +485,37 @@ class HostBackend(threading.Thread):
         """Codex closed stdin: end the session and stop the Sandbox before the process exits."""
         if hasattr(self, "_shutdown_requested"):
             self._shutdown_requested.set()
-        if not self.is_alive():
+        try:
+            if not self.is_alive():
+                return
+            if self.loop is not None and self._stop is not None and self.loop.is_running():
+                self.loop.call_soon_threadsafe(self._stop.set)
+            self.join(timeout)
+            if self.is_alive():
+                raise TimeoutError("Host shutdown unconfirmed")
+        finally:
+            if getattr(self, "_dashboard", None) is not None:
+                self._dashboard.close()
+
+    def _dashboard_record(self, tool: str, arguments: dict, ok: bool, image: bytes | None = None) -> None:
+        """--dashboard-dir: leave what this Host is doing where the local dashboard reads it."""
+        directory = getattr(self.args, "dashboard_dir", None)
+        if directory is None or self.session is None:
             return
-        if self.loop is not None and self._stop is not None and self.loop.is_running():
-            self.loop.call_soon_threadsafe(self._stop.set)
-        self.join(timeout)
-        if self.is_alive():
-            raise TimeoutError("Host shutdown unconfirmed")
+        try:
+            if getattr(self, "_dashboard", None) is None:
+                from host.dashboard_status import DashboardStatus
+
+                def window_state():
+                    return self.launcher.status().get("window_state") if self.launcher is not None else None
+                self._dashboard = DashboardStatus(directory, self.session.identity[0],
+                                                  sandbox_root=getattr(self.args, "sandbox_root", None),
+                                                  vm_max=(getattr(self.args, "micro_vm_max_active", None)
+                                                          if getattr(self.args, "micro_vm_package", None) else None),
+                                                  window_state=window_state)
+            self._dashboard.record(tool, arguments, ok, image)
+        except Exception:  # noqa: BLE001 - the dashboard never fails a tool call
+            log.exception("dashboard status not written")
 
     def call(self, tool: str, arguments: dict) -> dict:
         """Run one tool call on the Host loop and return an MCP CallToolResult."""
@@ -523,12 +547,15 @@ class HostBackend(threading.Thread):
             result = fut.result(timeout)
         except TimeoutError:
             fut.cancel()
+            self._dashboard_record(tool, arguments, False)
             return _error_result("ACTION_TIMEOUT", f"{tool} did not finish in {timeout:.0f}s",
                                  False, "runtime_get_state")
         except Exception:  # noqa: BLE001 - one failed call must not end the MCP server (and orphan the Sandbox)
             log.exception("tool %s failed unexpectedly", tool)
+            self._dashboard_record(tool, arguments, False)
             return _error_result("INTERNAL", f"{tool} failed on the Host; see the Host log",
                                  False, "runtime_get_state")
+        self._dashboard_record(tool, arguments, result.ok, result.image if result.ok else None)
         if result.ok:
             body = {"ok": True, **result.data}
             if result.action_id and "action_id" not in body:
@@ -744,6 +771,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--cert-dir", type=Path, default=HOST_DIR / ".certs")
     ap.add_argument("--audit-dir", type=Path, default=HOST_DIR / ".audit")
     ap.add_argument("--log-file", type=Path, default=HOST_DIR / ".logs" / "mcp_server.log")
+    ap.add_argument("--dashboard-dir", type=Path, default=None,
+                    help="write what this Host is doing (task, last tool, window state, last screen) for the "
+                         "local dashboard (dashboard/; usually %%LOCALAPPDATA%%/SecureCUA/dashboard)")
     args = ap.parse_args(argv)
     if args.shared is not None or args.unified_export:
         ap.error("Shared export was removed. Re-run the solution installer and use --output-root instead.")

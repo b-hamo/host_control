@@ -413,6 +413,13 @@ Host는 HTTPS로 수신한 사본을 실행 금지 `Work/output/<세션>`에 두
 - 명령 문자열을 검사하므로 난독화한 명령은 지나갈 수 있다. inbox 실행 금지 ACL과 함께 쓰는 **한 겹**이다.
 - 명령마다 Python을 한 번 띄운다. 백신 두 개가 도는 개발 PC에서 약 1초, 보통 PC에서는 Python 시작 시간만큼 더 걸린다.
 
+### 로컬 대시보드 (`dashboard/`)
+
+Sandbox와 micro VM에서 무엇이 돌고 있는지 보여 주는 이 PC 전용, 읽기 전용 서버다. Host는 `--dashboard-dir`로
+세션마다 상태 파일을 남기고(통합 설치가 켬), `python -m dashboard`가 그것과 Sandbox Manager 기록을 모아
+`http://127.0.0.1:17480`에 API(`/api/dashboard/overview`, `/api/runtimes/{id}/screenshot`)와 페이지를 준다.
+API 계약과 요청서와 다른 점: [dashboard/README.md](dashboard/README.md).
+
 ## 파일 반출 (artifact-export-v1)
 
 아래는 `--output-root` 없는 레거시 반출 모드의 **사람의 승인 → 수신 → 검사 → 공개** 절차다.
