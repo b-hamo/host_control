@@ -35,6 +35,8 @@ def host_arguments(runner: Path, work: Path, state: Path, *, micro_vm=None, clie
         "--cert-dir", str(state / "certs"), "--audit-dir", str(state / "audit"),
         "--log-file", str(state / "host.log"), "--startup-timeout", "1200" if micro_vm is not None else "180",
     ]
+    from host.dashboard_status import default_dir
+    args += ["--dashboard-dir", str(default_dir())]          # read by the local dashboard (dashboard/)
     if micro_vm is not None:
         from host.solution_config import validate_micro_vm
         validate_micro_vm(micro_vm)

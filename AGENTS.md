@@ -25,6 +25,7 @@ Codex ─MCP─▶ host/mcp_server.py ─▶ host/broker.py ─▶ host/runtime_
 | Host ↔ Runner 메시지 규격, 담당, 동결 | `schema/README.md` |
 | 파일 반출 Runner 계약 | `schema/profiles/artifact-export-v1/README.md` |
 | 검사 서비스 구조·판정 기준·실제 검증 결과 | `scanner_service/README.md` |
+| 로컬 대시보드 API(프론트 계약), Host 상태 파일 | `dashboard/README.md` |
 | Router 통합 설계 | `docs/unified-router-design.md` |
 | 통합 설치, Output 단일 반출 | `docs/solution-install.md`, `docs/output-only-export.md` |
 | Codex가 SCRP 도구를 쓰는 방법 (팀 공용 스킬) | `codex/skills/secure-sandbox-run/SKILL.md` |

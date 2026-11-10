@@ -36,6 +36,8 @@ BOUNDARIES = {
              "scrp/ is the protocol library every other package shares"),
     "scanner_service": ({"host", "router"}, {"host.artifact_scan"},
                         "the scanner is its own Windows service and PyInstaller bundles whatever it imports"),
+    "dashboard": ({"host", "router", "scanner_service", "scrp"}, set(),
+                  "dashboard/ is its own read-only process: it reads the files Hosts and the Manager write"),
 }
 # Layer ④ of host/README.md, and the layers above it.
 TRANSPORT = ["bootstrap", "connection", "observation_store", "session_registry", "tls", "upload_server"]
@@ -183,7 +185,7 @@ def test_tool_counts_in_docs_match_the_schema(doc):
     assert not wrong, f"schema/mcp-tools/ has {len(TOOLS)} tools; update the count: {wrong}"
 
 
-@pytest.mark.parametrize("package", ["host", "scanner_service"])
+@pytest.mark.parametrize("package", ["host", "scanner_service", "dashboard"])
 def test_every_module_has_a_row_in_its_readme(package):
     readme = (ROOT / package / "README.md").read_text(encoding="utf-8")
     missing = sorted(p.name for p in (ROOT / package).glob("*.py") if p.name != "__init__.py" and p.name not in readme)
