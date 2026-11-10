@@ -13,6 +13,9 @@ Manager 선택 후 `sandbox_run.py`에 실제 Guest 입력 경로를 연결하�
 `output_export.py`/`artifacts.py`의 재연결 reset과 수신 중 취소는 `test_output_export.py`/`test_artifact_export.py`에서,
 선택적 설치 backend·바이너리 pin·세션 경로는 `test_solution_config.py`에서 검증한다.
 관리 서비스 바이너리·설정 pin 및 배포 복구 설정도 같은 테스트에서 검사한다.
+`solution.py`는 다중 VM 프로필의 채팅 전용 매핑을 먼저 만든 뒤 그 경로에서 실행 차단을 검사한다.
+기존 WSB가 매핑한 공용 inbox에는 probe를 쓰지 않는다. `test_solution.py`에서 실제 Host 인자와
+검사 경로 일치, 두 클라이언트 격리, inbox·output·검사 서비스 실패 시 시작 거부를 검증한다.
 일반 권한 Host의 실제 B·C 화면·입력·반출 결과는 [관리 서비스 검증](../docs/management-service-validation-20261109.md)에 있다.
 
 Agent(Codex)의 요청을 받아 검사하고, 격리된 Sandbox 안의 Runner로 전달하는 Host 프로그램이다.
@@ -207,6 +210,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_mcp_runtime.py` | MCP 수명주기, 종료와 창 닫기 후 반출 결과 보존·조회, 조회 시 VM 재시작 없음 |
 | `tests/test_shared_folder.py`, `tests/test_window_close.py` | Shared 옵션 거부, Output 승인 창, 창 닫힘 시 확보 → 종료 → 반출 순서와 확보 실패 시 VM 유지 |
 | `tests/test_unified_verification.py`, `tests/test_solution_session.py` | 실제 Output 바로가기 기반 검증 명령, 반출 해시·MOTW·중복 확인, 통합 실행 진입점 |
+| `tests/test_solution.py`, `tests/test_solution_config.py` | 설치 프로필·바이너리 pin, 실제 사용 매핑의 사전검사, 기존 WSB와 새 채팅 경로 격리 및 실패 시 시작 거부 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |
 | `tests/mini_runner.py` | 테스트용 최소 Runner (테스트가 아니라 도구) |
 

@@ -122,9 +122,19 @@ def main(argv=None):
         validate_paths(a.runner_exe, a.work, a.state)
         if a.validate_paths:
             return
+        micro = profile.get('micro_vm') if profile else None
+        client = str(uuid.uuid4()) if micro else None
+        arguments = host_arguments(a.runner_exe, a.work, a.state, micro_vm=micro, client_id=client)
         from sandbox_manager.inbox import check_inbox_root
         from host.inbox_download import check_no_execute
-        for path in (a.work / "inbox", a.work / "output"):
+        # Check exactly the mappings this Host will use. The legacy root inbox
+        # may be mapped by an older chat; probing it requires a rename which
+        # Windows Sandbox denies while that mapping is live.
+        for flag in ('--inbox', '--output-root'):
+            path = Path(arguments[arguments.index(flag) + 1])
+            if client:
+                # Inherit the installer's deny-execute ACL, then verify it.
+                path.mkdir(parents=True)
             check_inbox_root(path)
             ok, why = check_no_execute(path)
             if not ok:
@@ -154,19 +164,6 @@ def main(argv=None):
     except Exception as e:
         p.exit(1, f"SOLUTION_NOT_READY: {e}\n")
     from host.mcp_server import main as run_host
-    micro = profile.get('micro_vm') if profile else None
-    client = str(uuid.uuid4()) if micro else None
-    arguments = host_arguments(a.runner_exe, a.work, a.state, micro_vm=micro, client_id=client)
-    if client:
-        # Descendants inherit the installer's deny-execute ACL. Verify it before
-        # exposing a per-client inbox; never share another chat's mutable inbox.
-        for flag in ('--inbox', '--output-root'):
-            path = Path(arguments[arguments.index(flag) + 1])
-            path.mkdir(parents=True)
-            check_inbox_root(path)
-            ok, why = check_no_execute(path)
-            if not ok:
-                p.exit(1, f'SOLUTION_NOT_READY: {path}: {why}\n')
     run_host(arguments)
 
 
