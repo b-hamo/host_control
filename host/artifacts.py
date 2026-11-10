@@ -105,6 +105,7 @@ class Grant:
     file_name: str = ""                   # candidate's reported path (scanner service: format policy only)
     scanner_job_id: str | None = None     # defender-service: the job that holds the received bytes
     scanner_verdict: Verdict | None = None   # defender-service: refused when the upload completed
+    receiving: bool = False                  # the receiver owns reservation cleanup until it returns
 
 
 class ArtifactGrants:
@@ -172,6 +173,15 @@ class ArtifactGrants:
         return grant
 
     async def receive(self, grant: Grant, reader: asyncio.StreamReader, length: int) -> None:
+        grant.receiving = True
+        try:
+            await self._receive(grant, reader, length)
+        finally:
+            grant.receiving = False
+            if grant.state == G_CANCELLED:
+                self.discard(grant)
+
+    async def _receive(self, grant: Grant, reader: asyncio.StreamReader, length: int) -> None:
         """Stream the body into a new private file; fix size and SHA-256. Raises UploadError."""
         if self.service is not None:
             return await self._receive_into_service(grant, reader, length)
@@ -282,6 +292,10 @@ class ArtifactGrants:
         self.discard(grant)
 
     def discard(self, grant: Grant) -> None:
+        if grant.receiving:
+            # Cancellation may race with scanner.write(). The receiver aborts
+            # its own job and releases the reservation exactly once on unwind.
+            return
         if grant.path is not None:
             self._discard_path(grant.path)
             self.bytes_held -= grant.size or 0
@@ -397,6 +411,16 @@ class ArtifactBroker:
 
     def current_channel(self, identity: Identity, channel_id: str) -> bool:
         return self._telemetry_connections.get(identity) == channel_id
+
+    async def begin_reset_control(self, identity: Identity, connection_id: str) -> None:
+        previous = self._control_connections.get(identity)
+        self.begin_control(identity, connection_id)
+        if (previous and previous != connection_id and identity not in self._retired and
+                self.unified is not None and getattr(self.unified, "output_only", False) and
+                await self.unified.reconnect_reset(identity)):
+            # A concurrent newer HELLO or retirement cannot revive this transport.
+            if self._control_connections.get(identity) == connection_id and identity not in self._retired:
+                self._resumable.add(identity)
 
     def channel_up(self, identity: Identity, channel_id=None, control_connection_id=None) -> bool:
         if channel_id is not None:

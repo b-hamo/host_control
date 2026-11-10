@@ -7,6 +7,9 @@ param(
     [ValidateSet('Dev','Deploy')][string]$Mode = 'Dev',
     [string]$ManagerRepo = '', [string]$RunnerRepo = '', [string]$UcrtRoot = '',
     [string]$PythonExe = '', [string]$Work = '', [string]$State = '',
+    [ValidateSet('WindowsSandbox','AutoAppWindow','AppWindow')][string]$VmMode = 'WindowsSandbox',
+    [string]$MicroVmPackage = '', [string]$MicroVmRoot = '', [string]$MicroVmRelay = '',
+    [ValidateRange(1,64)][int]$MicroVmMaxActive = 8,
     [switch]$RegisterCodex, [string]$CodexConfig = '', [switch]$Start,
     [switch]$CheckOnly
 )
@@ -20,6 +23,7 @@ if (-not $RunnerRepo) { $RunnerRepo = Join-Path $parent 'sandbox_runner' }
 $ManagerRepo = Resolve-SolutionRepo $ManagerRepo 'pyproject.toml'
 [void](Resolve-SolutionRepo $ManagerRepo 'tools/install_firewall.ps1')
 $RunnerRepo = Resolve-SolutionRepo $RunnerRepo 'scripts/build.ps1'
+$micro = New-SolutionMicroVmProfile $VmMode $MicroVmPackage $MicroVmRoot $MicroVmRelay $MicroVmMaxActive
 $State = Get-SolutionStatePath $State
 if (-not $Work) { $Work = Join-Path $env:USERPROFILE 'SecureCUA/solution' }
 $Work = [IO.Path]::GetFullPath($Work)
@@ -58,6 +62,7 @@ try {
         python=$python; runner_exe=$runner.executable; runner_sha256=$runner.sha256; ucrt_root=$runner.ucrt_root;
         work=$Work; state=$State; installed_at=[DateTime]::UtcNow.ToString('o');
         sources=@{host=(Get-SolutionSource $repo); manager=(Get-SolutionSource $ManagerRepo); runner=(Get-SolutionSource $RunnerRepo)}}
+    if ($micro) { $profile.micro_vm = $micro }
     Save-SolutionProfile $profile $State
     Invoke-SolutionCommand $python @((Join-Path $repo 'host/solution.py'),'--config',(Join-Path $State 'solution.json'),'--write-config',(Join-Path $State 'mcp.toml'))
     if ($RegisterCodex) { & (Join-Path $PSScriptRoot 'register_codex.ps1') -State $State -ConfigPath $CodexConfig }

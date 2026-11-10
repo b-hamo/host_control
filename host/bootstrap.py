@@ -23,7 +23,8 @@ ARTIFACT_UPLOAD_PATH = "/scrp/v1/artifacts/"
 
 def write_bootstrap(path: Path, rec: SessionRecord, cert_pem: str, port: int,
                     host: str | None = None, upload_port: int | None = None, *,
-                    control_contract: str | None = None, artifact_upload_port: int | None = None) -> None:
+                    control_contract: str | None = None, artifact_upload_port: int | None = None,
+                    output_storage_generation: int | None = None) -> None:
     data = {
         "bootstrap_version": BOOTSTRAP_VERSION,
         "session_id": rec.session_id,
@@ -42,6 +43,10 @@ def write_bootstrap(path: Path, rec: SessionRecord, cert_pem: str, port: int,
         # Screenshot uploads (protocol doc §8): PUT https://<host>:<upload_port><path><upload_id>,
         # same host rule and same pinned certificate as the control channel.
         data["observation_upload"] = {"port": upload_port, "path": OBSERVATION_UPLOAD_PATH}
+    if output_storage_generation is not None:
+        if type(output_storage_generation) is not int or not 1 <= output_storage_generation <= rec.generation:
+            raise ValueError("invalid Output storage generation")
+        data["output_storage_generation"] = output_storage_generation
     if control_contract is not None:
         # artifact-export-v1 (Runner contract §4): both fields or neither; the Runner refuses half of it.
         if artifact_upload_port is None:

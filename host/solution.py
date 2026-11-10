@@ -11,24 +11,40 @@ import json
 import os
 from pathlib import Path
 import sys
+import uuid
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 
-def host_arguments(runner: Path, work: Path, state: Path) -> list[str]:
-    return [
+def host_arguments(runner: Path, work: Path, state: Path, *, micro_vm=None, client_id=None) -> list[str]:
+    export_root = state / 'exports'
+    if client_id is not None:
+        if str(uuid.UUID(client_id)) != client_id:
+            raise ValueError('client_id must be a full UUID')
+        work, state = work / 'clients' / client_id, state / 'clients' / client_id
+    args = [
         "--runner-exe", str(runner), "--sandbox-root", str(state / "sandbox"),
         "--inbox", str(work / "inbox"), "--output-root", str(work / "output"),
         "--signed-downloads", "--agent-guard", "--artifact-export",
         "--artifact-max-bytes", "52428800",
         "--artifact-scanner", "defender-service", "--approval", "dialog",
         "--sandbox-run", "--router-capture",
-        "--artifact-dir", str(state / "artifacts"), "--export-dir", str(state / "exports"),
+        "--artifact-dir", str(state / "artifacts"), "--export-dir", str(export_root),
         "--cert-dir", str(state / "certs"), "--audit-dir", str(state / "audit"),
-        "--log-file", str(state / "host.log"), "--startup-timeout", "180",
+        "--log-file", str(state / "host.log"), "--startup-timeout", "1200" if micro_vm is not None else "180",
     ]
+    if micro_vm is not None:
+        from host.solution_config import validate_micro_vm
+        validate_micro_vm(micro_vm)
+        args += ['--micro-vm-package', micro_vm['package'], '--micro-vm-root', micro_vm['root'],
+                 '--micro-vm-relay', micro_vm['relay'], '--micro-vm-max-active', str(micro_vm.get('max_active', 8))]
+        if micro_vm['mode'] == 'AutoAppWindow':
+            args += ['--auto-vm-app-window']
+        else:
+            args += ['--host', '127.0.0.1', '--port', '0', '--upload-port', '0']
+    return args
 
 
 def validate_paths(runner: Path, work: Path, state: Path) -> None:
@@ -136,7 +152,20 @@ def main(argv=None):
     except Exception as e:
         p.exit(1, f"SOLUTION_NOT_READY: {e}\n")
     from host.mcp_server import main as run_host
-    run_host(host_arguments(a.runner_exe, a.work, a.state))
+    micro = profile.get('micro_vm') if profile else None
+    client = str(uuid.uuid4()) if micro else None
+    arguments = host_arguments(a.runner_exe, a.work, a.state, micro_vm=micro, client_id=client)
+    if client:
+        # Descendants inherit the installer's deny-execute ACL. Verify it before
+        # exposing a per-client inbox; never share another chat's mutable inbox.
+        for flag in ('--inbox', '--output-root'):
+            path = Path(arguments[arguments.index(flag) + 1])
+            path.mkdir(parents=True)
+            check_inbox_root(path)
+            ok, why = check_no_execute(path)
+            if not ok:
+                p.exit(1, f'SOLUTION_NOT_READY: {path}: {why}\n')
+    run_host(arguments)
 
 
 if __name__ == "__main__":

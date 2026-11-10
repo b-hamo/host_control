@@ -107,6 +107,39 @@ Codex 등록만 다시 하려면 `installer/register_codex.ps1`을 사용한다.
 
 ## 실패 처리와 재실행
 
+### micro_VM 관리 서비스와 일반 권한 Host
+
+수정된 micro_VM 묶음의 `install-management-service.ps1`은 동일 계정의 관리자 승인으로
+`MinoVmManagement`를 최초 설치한다. 자세한 설치·권한·제거 제한은 해당 묶음의
+`management-service.md`를 따른다. 현재는 UAC 분리 토큰이 있는 관리자 그룹 계정에서
+**Host·중계를 일반 권한(Medium)으로 실행하는 구성**이다. 연결된 High 토큰이 없는
+표준 계정 지원과 혼동하지 않는다.
+
+`install_solution.ps1 -Mode Deploy -VmMode AutoAppWindow`에 다음 값을 추가한다.
+
+```powershell
+-MicroVmPackage 'C:\Program Files\MinoBox-Management' `
+-MicroVmRoot 'C:\ProgramData\MinoBox-Management\runtime' `
+-MicroVmRelay 'C:\reviewed\minoBox-package\ScrpRelay.exe' `
+-MicroVmMaxActive 8
+```
+
+root와 max_active는 설치된 `management.json`과 일치해야 한다. 프로필은 dbictl·relay·Runner와
+함께 `MinoVmService.exe` 및 `management.json`의 SHA-256을 고정한다. 내용이 바뀌거나 고정값이
+없으면 시작을 거부한다. 최초 이미지 준비를 위해 micro_VM 경로의 시작 대기는 1,200초이며,
+세션 고정·기존 Runner 종료 확인을 전제로 한 복구를 일반 배포에서도 사용한다.
+설치·업데이트의 기존 활성 세션 보호 조건은 유지한다. 사용 중인 서비스를 덮어쓰지 않는다.
+
+기본 requirements의 Manager 고정 커밋은 `e20fc2bdf0bd1994a5aa5b9048d8428b2e19f683`이다.
+별도 `ManagerRepo`로 wheel을 만드는 설치에서는 같은 변경이 포함된 checkout을 지정한다.
+Host·Manager·Runner·micro_VM의 대응 PR을 함께 검토해 배포한다.
+
+2026-11-09 실제 PC에서는 설치된 관리 서비스와 별도 venv에 설치한 Manager wheel을 사용해
+Medium Host의 B·C READY, 화면·한글 입력, Router 완료 영수증, Defender 반출을 검증했다.
+WSB A와 기존 세션은 유지했다. Host 소스는 작업 checkout이며, 모든 의존성·서비스를 처음부터
+설치하는 `install_solution.ps1` 전체 실행, 표준 계정 및 재부팅 후 검증은 별도 범위다.
+근거는 `docs/management-service-validation-20261109.md`를 참조한다.
+
 서비스·Defender·scan-only 기능·ExportRoot·Output ACL·Runner 해시 검사에 실패하면 VM을 시작하지 않는다.
 검사기를 우회하거나 자동 대체하지 않는다. 설치 후 서비스가 사라져도 다음 시작이 차단된다.
 서비스 검증이 실패하면 새 프로필과 Codex 등록을 공개하지 않는다. Codex 등록 단계만 실패하면

@@ -10,11 +10,13 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import subprocess
 import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 HOST = Path(__file__).resolve().parents[1]
 MANAGER = Path(os.environ["SCRP_LAB_MANAGER"])
@@ -54,20 +56,23 @@ class Slot:
         (work / "output").mkdir(exist_ok=True)
         command = [sys.executable, "-m", "host.mcp_server", "--host", "0.0.0.0" if slot == "A" else "127.0.0.1",
                    "--port", "17443" if slot == "A" else "0", "--upload-port", "17444" if slot == "A" else "0",
-                   "--session", self.session, "--startup-timeout", "240",
+                   "--session", self.session, "--startup-timeout", os.environ.get("SCRP_LAB_STARTUP_TIMEOUT", "240"),
                    "--runner-exe", str(RUNNER), "--sandbox-root", str(self.root / "manager"),
                    "--cert-dir", str(self.root / "certs"), "--audit-dir", str(self.root / "audit"),
                    "--artifact-dir", str(self.root / "artifacts"), "--export-dir", str(EXPORT),
                    "--output-root", str(work / "output"),
                    "--log-file", str(self.root / "host.log"), "--inbox", str(work / "inbox"),
                    "--artifact-export", "--artifact-scanner", "defender-service", "--artifact-max-bytes", "8388608",
-                   "--sandbox-run", "--router-capture", "--approval", "dialog", "--no-auto-restart"]
-        if slot != "A":
+                   "--sandbox-run", "--router-capture", "--approval", "dialog"]
+        if os.environ.get("SCRP_LAB_AUTO_RESTART") != "1":
+            command += ["--no-auto-restart"]
+        if slot != "A" or os.environ.get("SCRP_LAB_AUTO") == "1":
             command += ["--micro-vm-package", str(PACKAGE), "--micro-vm-root", str(VM_ROOT),
-                        "--micro-vm-relay", str(RELAY)]
+                        "--micro-vm-relay", str(RELAY), "--micro-vm-max-active", os.environ.get("SCRP_LAB_MAX_ACTIVE", "8")]
             if os.environ.get("SCRP_LAB_AUTO") == "1":
                 command += ["--auto-vm-app-window"]
-        environment = os.environ | {"PYTHONPATH": str(HOST) + os.pathsep + str(MANAGER),
+        installed = os.environ.get("SCRP_LAB_INSTALLED_MANAGER") == "1"
+        environment = os.environ | {"PYTHONPATH": str(HOST) if installed else str(HOST) + os.pathsep + str(MANAGER),
                                     "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}
         self.stderr = (self.root / "stderr.log").open("w", encoding="utf-8")
         self.process = subprocess.Popen(command, cwd=HOST, env=environment, stdin=subprocess.PIPE,
@@ -102,7 +107,8 @@ def main():
     if (ROOT / "ready.json").exists():
         raise RuntimeError("Use a new evidence root; never replace existing session clients")
     ROOT.mkdir(parents=True, exist_ok=True)
-    sys.path.insert(0, str(MANAGER))
+    if os.environ.get("SCRP_LAB_INSTALLED_MANAGER") != "1":
+        sys.path.insert(0, str(MANAGER))
     import sandbox_manager
     import tomllib
     def source_version(repo):
@@ -110,11 +116,15 @@ def main():
         hashes = {}
         for name in tracked.decode("utf-8").split("\0"):
             path = repo / name
-            if name and path.is_file() and (path.suffix in {".py", ".cpp", ".h", ".hpp", ".ps1", ".toml"} or path.name == "CMakeLists.txt"):
+            if name and path.is_file() and (path.suffix in {".py", ".cpp", ".h", ".hpp", ".ps1", ".toml", ".json"}
+                                            or path.name in {"CMakeLists.txt", "requirements.txt", "requirements-base.txt"}):
                 hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
         return {"commit": subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip(),
                 "source_sha256": hashes}
+    loaded_manager = Path(sandbox_manager.__file__).resolve().parent
     versions = {"manager_path": sandbox_manager.__file__, "python": sys.executable,
+        "manager_loaded_file_sha256": {str(path.relative_to(loaded_manager)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                       for path in sorted(loaded_manager.rglob("*.py"))},
         "manager_version": tomllib.loads((MANAGER / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"],
         "manager_source": source_version(MANAGER), "host_source": source_version(HOST),
         "host_commit": subprocess.check_output(["git", "-C", str(HOST), "rev-parse", "HEAD"], text=True).strip(),
@@ -122,29 +132,64 @@ def main():
         "relay": str(RELAY), "relay_sha256": hashlib.sha256(RELAY.read_bytes()).hexdigest(),
         "micro_vm_package": str(PACKAGE), "micro_vm_sha256": hashlib.sha256((PACKAGE / "dbictl.exe").read_bytes()).hexdigest(),
         "working_tree_changes": True}
+    # Record the actual launcher token, not an inference from how it was started.
+    groups = subprocess.check_output([str(Path(os.environ["SystemRoot"]) / "System32/whoami.exe"),
+                                      "/groups", "/fo", "csv", "/nh"])
+    versions["host_integrity_sids"] = [s.decode("ascii") for s in re.findall(rb"S-1-16-[0-9]+", groups)]
+    service = PACKAGE / "MinoVmService.exe"
+    if service.is_file() and (PACKAGE / "management.json").is_file():
+        versions["management_service_sha256"] = hashlib.sha256(service.read_bytes()).hexdigest()
+        versions["management_configuration"] = json.loads((PACKAGE / "management.json").read_text(encoding="utf-8-sig"))
     save(ROOT / "versions.json", versions)
     slots = {name: Slot(name) for name in SLOTS}
     save(ROOT / "ready.json", {"pid": os.getpid(), "status": "MCP_CLIENTS_READY_NOT_VM_READY"})
     requests = ROOT / "requests"
     requests.mkdir(exist_ok=True)
+    executor = ThreadPoolExecutor(max_workers=len(slots), thread_name_prefix="scrp-slot")
+
+    def execute(path, request, barrier=None):
+        started = None
+        try:
+            if request["slot"] not in slots or request["tool"] not in ALLOWED:
+                raise ValueError("unapproved slot or tool")
+            if barrier is not None:
+                barrier.wait(timeout=10)
+            started = time.time_ns()
+            response = slots[request["slot"]].rpc("tools/call", {"name": request["tool"], "arguments": request.get("arguments", {})})
+            for index, item in enumerate(response.get("result", {}).get("content", [])):
+                if item.get("type") == "image":
+                    image = ROOT / (path.stem + f"-{index}.png")
+                    image.write_bytes(base64.b64decode(item.pop("data")))
+                    item["evidence_path"] = str(image)
+        except Exception as error:
+            response = {"error": repr(error), "input_not_retried": True}
+        response["lab_timing"] = {"started_ns": started, "finished_ns": time.time_ns()}
+        save(ROOT / (path.stem + ".result.json"), response)
+
     while True:
         for path in sorted(requests.glob("*.json")):
             claimed = path.with_suffix(".claimed")
             path.replace(claimed)
-            response = {"error": "request not executed"}
             try:
                 request = json.loads(claimed.read_text(encoding="utf-8-sig"))
-                if request["slot"] not in slots or request["tool"] not in ALLOWED:
-                    raise ValueError("unapproved slot or tool")
-                response = slots[request["slot"]].rpc("tools/call", {"name": request["tool"], "arguments": request.get("arguments", {})})
-                for index, item in enumerate(response.get("result", {}).get("content", [])):
-                    if item.get("type") == "image":
-                        image = ROOT / (path.stem + f"-{index}.png")
-                        image.write_bytes(base64.b64decode(item.pop("data")))
-                        item["evidence_path"] = str(image)
+                if "batch" in request:
+                    batch = request["batch"]
+                    names = [item["slot"] for item in batch]
+                    if not batch or len(set(names)) != len(batch) or any(name not in slots for name in names):
+                        raise ValueError("a concurrent batch requires distinct configured slots")
+                    if any(item["tool"] not in ALLOWED for item in batch):
+                        raise ValueError("unapproved batch tool")
+                    barrier = threading.Barrier(len(batch))
+                    futures = [executor.submit(execute, ROOT / (path.stem + "-" + item["slot"] + ".json"), item, barrier)
+                               for item in batch]
+                    # Each batch is consumed once and finishes before another is admitted.
+                    for future in futures:
+                        future.result()
+                    save(ROOT / (path.stem + ".result.json"), {"batch_complete": True, "slots": names})
+                else:
+                    execute(path, request)
             except Exception as error:
-                response = {"error": repr(error), "input_not_retried": True}
-            save(ROOT / (path.stem + ".result.json"), response)
+                save(ROOT / (path.stem + ".result.json"), {"error": repr(error), "input_not_retried": True})
         time.sleep(.2)
 
 

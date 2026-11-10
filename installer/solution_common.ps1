@@ -1,4 +1,4 @@
-# Shared by the solution commands. Dot-sourcing performs no installation.
+﻿# Shared by the solution commands. Dot-sourcing performs no installation.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -80,6 +80,34 @@ function Build-SolutionRunner {
     if ($info.schema_version -ne 1 -or $info.executable -ne $expected -or
         (Get-FileHash -LiteralPath $expected -Algorithm SHA256).Hash -ne $info.sha256) { throw 'Runner build receipt mismatch.' }
     $info
+}
+function New-SolutionMicroVmProfile {
+    param([string]$Mode, [string]$Package, [string]$Root, [string]$Relay, [ValidateRange(1,64)][int]$MaxActive = 8)
+    if ($Mode -eq 'WindowsSandbox') {
+        if ($Package -or $Root -or $Relay) { throw 'micro_VM paths require AutoAppWindow or AppWindow mode.' }
+        return $null
+    }
+    if ($Mode -notin @('AutoAppWindow','AppWindow')) { throw 'Unsupported VM mode.' }
+    foreach ($path in @($Package,$Root,$Relay)) {
+        if (-not $path -or -not [IO.Path]::IsPathRooted($path)) { throw 'micro_VM requires all three absolute paths.' }
+    }
+    $exe = Join-Path $Package 'dbictl.exe'
+    foreach ($file in @($exe,$Relay)) {
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing micro_VM binary: $file" }
+    }
+    $profile = @{mode=$Mode; max_active=$MaxActive; package=[IO.Path]::GetFullPath($Package); root=[IO.Path]::GetFullPath($Root);
+      relay=[IO.Path]::GetFullPath($Relay); dbictl_sha256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant();
+      relay_sha256=(Get-FileHash -LiteralPath $Relay -Algorithm SHA256).Hash.ToLowerInvariant()}
+    $serviceConfig = Join-Path $Package 'management.json'
+    if (Test-Path -LiteralPath $serviceConfig -PathType Leaf) {
+        $installed = Get-Content -LiteralPath $serviceConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($installed.schema_version -ne 1 -or [IO.Path]::GetFullPath($installed.root) -ne $profile.root -or $installed.max_active -ne $MaxActive) {
+            throw 'micro_VM root and capacity must match the installed management service.'
+        }
+        $profile.management_service_sha256 = (Get-FileHash -LiteralPath (Join-Path $Package 'MinoVmService.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+        $profile.management_config_sha256 = (Get-FileHash -LiteralPath $serviceConfig -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    $profile
 }
 function Install-SolutionPrivileged {
     param([string]$HostRepo, [string]$Python, [string]$Work, [string]$State, [string]$RunnerExe, [string]$ScannerSourceDir, [string]$ManagerRepo)

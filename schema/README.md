@@ -4,6 +4,13 @@
 Host는 `scrp/validate.py`로, Runner(C++)는 자체 검증기로 **같은 JSON 파일**을 읽어 검증한다.
 문서(노션·PDF)와 이 파일이 다르면 **이 파일이 기준**이다.
 
+읽기 전용 bootstrap의 선택 필드 `output_storage_generation`은 1 이상 현재 `generation` 이하인 정수다.
+생략하면 현재 generation이며, 같은 VM의 Runner 프로세스를 교체할 때만 최초 Output 저장 경로를 유지하는 데 쓴다.
+인증·실행 generation과 token은 새 값으로 바뀐다. 이 필드가 과거 action이나 인증을 재사용하도록 허용하지 않는다.
+Host의 Router 경로 검사와 Runner의 실제 Output 고정이 같은 값을 사용해야 한다.
+필드를 엄격 검증하는 수정 Host/Runner를 함께 배포하며, 기존 Runner에는 보내지 않는다.
+이는 bootstrap 계약 확장이며 SCRP 메시지 envelope 변경은 아니다.
+
 ```
 envelope.schema.json        공통 Envelope (16개 필드 전부 필수, 값이 없으면 null)
 payload/<TYPE>.schema.json  type별 payload 20종 (정의에 없는 필드는 거부)
