@@ -389,6 +389,30 @@ Host는 HTTPS로 수신한 사본을 실행 금지 `Work/output/<세션>`에 두
 기록하지 않고 거부한다. 결과의 `copied_after_mark`가 `true`면 "누른 뒤에 들어온 내용", `null`이면 표시 없이 읽은 것.
 그 사이 다른 프로그램이 클립보드를 쓰지 않았다는 증명은 아니다.
 
+### 실행 전 검사 hook (`host/exec_guard.py`)
+
+"밖에서 온 코드는 Sandbox에서" 규칙은 팀 Skill(프롬프트)에만 있었다. 그래서 웹 페이지나 파일에 속은 Agent가 이 PC에서 실행해도
+막을 장치가 없었다. Codex·Claude Code의 PreToolUse hook으로 Agent의 셸 명령과 파일 수정을 실행 **직전에** 규칙으로 검사한다.
+모델이 무엇을 지시받았든 같은 결과가 나온다.
+
+| 막는 것 | 예 | 근거 |
+|---|---|---|
+| 밖에서 온 파일 실행·복사·압축 풀기 | 인터넷 표시(Zone.Identifier)가 있거나 다운로드·inbox에 있는 프로그램·스크립트·압축 파일. 서명 검사(`signature_check.py`)를 통과한 exe·msi만 허용. 해시·서명 확인, 목록, 읽기는 허용(읽은 내용을 `iex`로 넘기면 차단) | 팀 출처 기준 규칙 |
+| 받아서 바로 실행 | `iwr … \| iex`, `curl … \| sh`, `-EncodedCommand`, mshta·regsvr32·rundll32·msiexec에 URL | ClickFix(ATT&CK T1204.004), T1218 |
+| 검사 장치 끄기 | hook·`.codex`·`.claude` 설정 수정, Defender 끄기·예외 추가 | 검사를 Agent가 스스로 풀지 못하게 |
+
+설치 (Codex는 새 hook을 신뢰해야 실행한다: CLI `/hooks`, 앱 **Settings > Hooks**):
+
+```powershell
+.venv\Scripts\python.exe host\exec_guard.py install --codex --claude --inbox C:\Users\<나>\SecureCUA\solution\inbox
+```
+
+- 차단하면 Agent에게 이유와 대신 쓸 SCRP 도구(`inbox_import`·`inbox_download` → `sandbox_run`, `router_capture`)를 알려 주고,
+  `%LOCALAPPDATA%\SCRP\exec_guard.jsonl`에 기록한다. 판단하지 못한 호출은 막는다.
+- Agent가 직접 짠 코드와 사용자 프로젝트는 판단하지 않는다(출처 기준).
+- 명령 문자열을 검사하므로 난독화한 명령은 지나갈 수 있다. inbox 실행 금지 ACL과 함께 쓰는 **한 겹**이다.
+- 명령마다 Python을 한 번 띄운다. 백신 두 개가 도는 개발 PC에서 약 1초, 보통 PC에서는 Python 시작 시간만큼 더 걸린다.
+
 ## 파일 반출 (artifact-export-v1)
 
 아래는 `--output-root` 없는 레거시 반출 모드의 **사람의 승인 → 수신 → 검사 → 공개** 절차다.
