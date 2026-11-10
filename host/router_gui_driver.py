@@ -53,7 +53,8 @@ class GuiCommandDriver:
         if self.manager.authority.check(request.action) != "ALLOW":
             raise ValueError("command authorization changed")
         self.bundle = CommandBundle(request, broker.session.identity, self.manager.bindings,
-                                    self.directory / request.request_id)
+                                    self.directory / request.request_id,
+                                    output_storage_generation=getattr(broker.launcher, "output_storage_generation", None))
         self.manager.configure_transport(self.bundle.inputs)
         self._broker = broker
         self._set(State.ACCEPTED, "COMMAND_PREPARED")

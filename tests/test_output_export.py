@@ -104,6 +104,84 @@ def test_authenticated_artifact_reconnect_keeps_old_grants_dead(tmp_path, servic
     asyncio.run(run())
 
 
+def test_reset_reconnect_waits_for_acquisition_and_retires_unknown_lease(tmp_path, service):
+    runtime, client = service()
+    async def run():
+        broker, session, _, output = setup(tmp_path, runtime, client)
+        identity = session.identity
+        broker.begin_control(identity, "old")
+        assert broker.channel_up(identity, "old-telemetry", "old")
+        checked = await receive(broker, output, session, b"checked receipt")
+        retained = output.receipts[checked.artifact_id].folder / 'result.bin'
+        output._lease = (identity, "reply-was-lost")
+        await output._transfer_lock.acquire()
+        started = asyncio.Event()
+        async def reconnect():
+            started.set()
+            await broker.begin_reset_control(identity, "new")
+        task = asyncio.create_task(reconnect())
+        await started.wait()
+        assert not task.done()
+        assert not broker.channel_up(identity, "too-early", "new")
+        output._transfer_lock.release()
+        await task
+        assert broker.channel_up(identity, "new-telemetry", "new")
+        assert output._lease is None and not output.acquisition['complete']
+        assert retained.read_bytes() == b"checked receipt"
+        broker.channel_down(identity, "late old close", "old-telemetry")
+        assert identity not in broker._channel_lost
+        broker.cancel_identity(identity, "SECURITY_VIOLATION")
+        await broker.begin_reset_control(identity, "after-retirement")
+        assert not broker.channel_up(identity, "forged", "after-retirement")
+    asyncio.run(run())
+
+
+def test_cancel_during_scanner_write_releases_storage_reservation_once(tmp_path):
+    from host.observation_store import UploadError
+    async def run():
+        writing, resume = asyncio.Event(), asyncio.Event()
+        aborted = []
+        class Stream:
+            async def begin(self, *_): return 'owned-job'
+            async def write(self, _):
+                writing.set()
+                await resume.wait()
+            async def complete(self, _): pytest.fail('cancelled bytes must not complete')
+            async def close(self): pass
+        service = SimpleNamespace(upload=lambda _: Stream(), abort_soon=lambda *a: aborted.append(a))
+        grants = ArtifactGrants(tmp_path / 'partial', service=service)
+        grant, token = grants.issue(('SES-output', 'RT-1', 1), 'ART-1', str(uuid.uuid4()), 100)
+        grants.claim(grant.upload_id, token, 8)
+        reader = asyncio.StreamReader()
+        reader.feed_data(b'partial!')
+        task = asyncio.create_task(grants.receive(grant, reader, 8))
+        await writing.wait()
+        grants.cancel(grant)
+        assert grants.bytes_held == 8
+        resume.set()
+        with pytest.raises(UploadError): await task
+        assert grants.bytes_held == 0 and len(aborted) == 1
+        grants.cancel(grant)
+        assert grants.bytes_held == 0 and len(aborted) == 1
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('blocked', ['closing', 'generation', 'busy'])
+def test_reset_reconnect_never_discards_unsettled_host_work(tmp_path, service, blocked):
+    runtime, client = service()
+    async def run():
+        broker, session, _, output = setup(tmp_path, runtime, client)
+        output._lease = (session.identity, 'keep')
+        identity = session.identity
+        if blocked == 'closing': output._closing = True
+        if blocked == 'generation': identity = (identity[0], identity[1], identity[2] + 1)
+        if blocked == 'busy': await output._transfer_lock.acquire()
+        assert not await output.reconnect_reset(identity, timeout=.001)
+        assert output._lease == (session.identity, 'keep')
+        if blocked == 'busy': output._transfer_lock.release()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("review,final,stage", [
     ("keep", "keep", "EXPORTED"), ("hold", "keep", "HELD"),
     ("delete", "keep", "DELETED"), ("keep", "hold", "HELD"), ("keep", "delete", "DELETED")])

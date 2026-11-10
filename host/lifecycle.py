@@ -116,6 +116,12 @@ class SandboxLauncher:
         self._finish: asyncio.Task | None = None
         self._window_watch: asyncio.Task | None = None
         self._window_stop_requested = False
+        self._fixed_recovery_generation = None
+
+    @property
+    def output_storage_generation(self):
+        binding = getattr(self.sandbox, "micro_vm", None)
+        return binding.get("output_storage_generation") if isinstance(binding, dict) else None
 
     def status(self) -> dict:
         st = {"state": self.state, "host_address": self.host_address, "error": self.error,
@@ -124,11 +130,12 @@ class SandboxLauncher:
             st["window_state"] = self._window_state()
         if self.output is not None:
             from host.router_command_bundle import output_directory
-            st["output"] = {"guest_folder": (output_directory(self.session.identity)
+            output_path = output_directory(self.session.identity, self.output_storage_generation)
+            st["output"] = {"guest_folder": (output_path
                                              if getattr(self.manager, "guest_input_root", None)
                                              else "Desktop\\Output.lnk"),
                             "session_id": self.session.identity[0],
-                            "guest_path": output_directory(self.session.identity),
+                            "guest_path": output_path,
                             "acquisition": self.output.acquisition, "at_end": self.output_result}
         return st
 
@@ -242,6 +249,7 @@ class SandboxLauncher:
         try:
             await asyncio.to_thread(self.manager.mark_ready, self.sandbox)
             self.state = READY
+            self._fixed_recovery_generation = None
         except Exception as e:  # noqa: BLE001 - the Runner is verified; only the token file lingers
             log.error("SANDBOX %s mark_ready failed: %s", identity[0], _describe(e))
 
@@ -328,8 +336,16 @@ class SandboxLauncher:
             # Retain identity, generation, credentials and the action ledger so
             # the same Runner may resync. Input remains blocked by session health.
             # Explicit termination and security failures still use normal cleanup.
-            log.error("SANDBOX %s %s; fixed VM preserved, awaiting authenticated reconnect",
-                      self.session.identity[0], why)
+            probe = getattr(self.manager, "runner_exited", None)
+            if self.auto_recover and callable(probe):
+                try:
+                    if await self._call(probe, self.sandbox):
+                        await self._recover_fixed_runner(why)
+                        return
+                except Exception as exc:
+                    self.error = _describe(exc)
+                    log.error("SANDBOX original Runner exit could not be confirmed: %s", self.error)
+            log.error("SANDBOX %s %s; fixed VM preserved, awaiting authenticated reconnect", self.session.identity[0], why)
             return
         if not self.auto_recover:
             log.error("SANDBOX %s %s; automatic restart is off, ending the session", self.session.identity[0], why)
@@ -397,6 +413,27 @@ class SandboxLauncher:
             log.error("SANDBOX %s recovery failed: %s", self.session.identity[0], self.error)
             await self.session.fail_startup(f"recovery {self.error}")
 
+    async def _recover_fixed_runner(self, why):
+        old = self.session
+        self.state = RECOVERING
+        try:
+            # Manager rechecks the original process handle before retiring its
+            # bootstrap. No kill, PID reopen, VM reset or alternate assignment.
+            await self._call(self.manager.restart_runner, self.sandbox, old.identity[2] + 1)
+            new = self._next_generation(why)
+            self._fixed_recovery_generation = new.identity[2]
+            await old._end(f"REPLACED: confirmed Runner exit: {why}")
+            new.start_watchdog()
+            await self._publish()
+            self.recoveries.append("restart_runner_same_vm")
+        except _Aborted:
+            return
+        except Exception as exc:
+            self.state, self.error = FAILED, _describe(exc)
+            # Keep surviving applications even if a new launch/READY is unknown.
+            # A later explicit session_stop still performs owned-VM cleanup.
+            log.error("SANDBOX fixed Runner recovery failed; VM preserved: %s", self.error)
+
     async def _restart_runner(self) -> None:
         if not await self._call(self.manager.is_running, self.sandbox):
             raise _Gone()
@@ -411,6 +448,11 @@ class SandboxLauncher:
     def session_ended(self, identity: Identity) -> None:
         """Called whenever a session ends (Sessions on_end). A retired generation does not stop anything."""
         if identity != self.session.identity:
+            return
+        if (identity[2] == self._fixed_recovery_generation and
+                (self.session.end_reason or "").startswith("RUNTIME_START_FAILED")):
+            self.state, self.error = FAILED, self.session.end_reason + "; owned VM preserved"
+            log.error("SANDBOX %s", self.error)
             return
         if self._finish is None:
             self._finish = asyncio.get_running_loop().create_task(self._stop_and_clean())
@@ -473,6 +515,7 @@ class SandboxLauncher:
 
     async def _shutdown(self) -> None:
         s = self.session
+        self._fixed_recovery_generation = None  # explicit Host shutdown owns cleanup
         if not s.terminated:
             if s.ready.is_set():
                 try:

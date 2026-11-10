@@ -11,8 +11,14 @@ Assert-SolutionEnvironmentUnused $p.python
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if ($p.host_repo -ne $repo) { throw 'Use the Host repository recorded in solution.json.' }
 if ($Component -eq 'All') {
+    $vmArgs = @{}
+    if ($p.PSObject.Properties['micro_vm'] -and $p.micro_vm) {
+        $vmArgs = @{VmMode=$p.micro_vm.mode; MicroVmPackage=$p.micro_vm.package;
+                    MicroVmRoot=$p.micro_vm.root; MicroVmRelay=$p.micro_vm.relay}
+        if ($p.micro_vm.PSObject.Properties['max_active']) { $vmArgs.MicroVmMaxActive = $p.micro_vm.max_active }
+    }
     & (Join-Path $PSScriptRoot 'install_solution.ps1') -Mode $p.mode -ManagerRepo $p.manager_repo -RunnerRepo $p.runner_repo `
-        -UcrtRoot $p.ucrt_root -PythonExe $p.python -Work $p.work -State $State
+        -UcrtRoot $p.ucrt_root -PythonExe $p.python -Work $p.work -State $State @vmArgs
     return
 }
 $lock = Enter-SolutionUpdate $State

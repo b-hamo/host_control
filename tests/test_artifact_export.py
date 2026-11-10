@@ -144,13 +144,17 @@ def test_fresh_control_credential_resumes_idle_artifact_channel(tmp_path):
         session = host.backend.session
         session.profile = replace(session.profile,
                                   required_capabilities=(*session.profile.required_capabilities, "artifact.output.v1"))
+        async def reset(identity):
+            return identity == session.identity
         host.backend.artifacts.unified = SimpleNamespace(
             output_only=True, reconnect_idle=lambda identity: identity == session.identity,
+            reconnect_reset=reset,
             candidate=lambda identity, art: None, owns=lambda art: False, requested=set(),
             decorate=lambda art, view: view)
         r, serving = await host.start(capabilities=["gui.observe", "gui.input", "artifact.export.v1",
-                                                    "artifact.output.v1", "artifact.reconnect.v1"])
+                                                    "artifact.output.v1", "artifact.reconnect.v1", "artifact.reconnect.reset.v1"])
         assert "artifact.reconnect.v1" in session.granted_capabilities
+        assert "artifact.reconnect.reset.v1" in session.granted_capabilities
         assert (await r.report("before.txt", b"before"))["status"] == "STORED"
         old_token = r.telemetry_token
         r.drop()

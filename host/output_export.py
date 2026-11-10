@@ -85,6 +85,31 @@ class OutputExport:
         self._persist()
         return True
 
+    async def reconnect_reset(self, identity, *, timeout=5.0):
+        """Fresh authenticated Runner promises old file workers/leases ended.
+
+        Wait for Host acquisition to unwind too. No partial bytes, old grants,
+        snapshot IDs or input actions are resumed. A new capture must rehash all
+        files; verified Host receipts remain available for their normal scan.
+        """
+        if identity != self._identity or self._closing:
+            return False
+        try:
+            await asyncio.wait_for(self._transfer_lock.acquire(), timeout)
+        except asyncio.TimeoutError:
+            return False
+        try:
+            if identity != self._identity or self._closing:
+                return False
+            self._lease = self._captured = None
+            self._last_refresh = 0.0
+            self.acquisition = {"status": "INCOMPLETE", "complete": False, "identity": list(identity),
+                                "detail": "File transport reset; partial attempts cancelled; fresh snapshot required"}
+            self._persist()
+            return True
+        finally:
+            self._transfer_lock.release()
+
     def owns(self, art):
         return art.artifact_id in self.receipts
 

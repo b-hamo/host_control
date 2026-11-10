@@ -220,6 +220,16 @@ class HostBackend(threading.Thread):
         a = self.args
         identity = (a.session or datetime.now().strftime("SES-%Y%m%d-%H%M%S"), a.runtime, a.generation)
         sandboxed = self._sandbox_manager is not None or a.runner_exe is not None
+        manager = None
+        if sandboxed:
+            manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root, options=a)
+        if getattr(a, "auto_vm_app_window", False):
+            # WSB requires the switch-reachable, firewall-approved pair; micro_VM
+            # uses per-Host ephemeral loopback ports. Planning is not allocation:
+            # Manager rechecks occupancy under its machine lock before any start.
+            endpoints = await asyncio.to_thread(manager.listener_binding)
+            a.host, a.port, a.upload_port = endpoints["host"], endpoints["port"], endpoints["upload_port"]
+            log.info("automatic listener plan host=%s control=%s upload=%s", a.host, a.port, a.upload_port)
         advertise = a.advertise_address
         cert_path, key_path = tls.ensure_dev_cert(a.cert_dir, addresses=[advertise] if advertise else ())
         cert_pem = cert_path.read_text(encoding="ascii")
@@ -304,6 +314,7 @@ class HostBackend(threading.Thread):
                     guest_root = getattr(manager, "guest_input_root", None)
                     if self.runner is not None:
                         self.runner.bind_guest_input(guest_root)
+                        self.runner.bind_output_storage(self.launcher.output_storage_generation)
                     if downloader is not None and guest_root:
                         downloader.guest_input_root = guest_root
                     cert, key = tls.ensure_dev_cert(a.cert_dir, addresses=[address])
@@ -312,12 +323,17 @@ class HostBackend(threading.Thread):
                     pem = cert.read_text(encoding="ascii")
                     rec = registry.issue(*ident)           # 5 min from now, for this generation
                     write_bootstrap(bootstrap_path, rec, pem, port, host=address, upload_port=upload_port,
+                                    output_storage_generation=self.launcher.output_storage_generation,
                                     **artifact_fields)
                     log.info("bootstrap for %s generation %d written (token valid until %s)",
                              ident[0], ident[2], rec.expires_utc)
                     return pem
 
-                manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root, audit, options=a)
+                # Connect security events to the audit created for these listeners.
+                if self._sandbox_manager is None:
+                    manager.log = _manager_logger(audit)
+                    if hasattr(manager, "micro"):
+                        manager.micro.log = manager.log
                 downloader = None
                 inbox = getattr(a, "inbox", None)
                 if inbox is not None or getattr(a, "agent_guard", False):
@@ -540,14 +556,7 @@ def _real_sandbox_manager(root: Path | None, audit=None, *, options=None):
         raise RuntimeError("--runner-exe needs the Sandbox Manager package "
                            "(pip install -r requirements.txt)") from e
 
-    def on_event(msg: str) -> None:
-        kind = next((k for k in SECURITY_INBOX_EVENTS if k in msg), None)
-        if kind is None:
-            log.info("sandbox-manager %s", msg)
-            return
-        log.warning("SECURITY inbox: %s", msg)
-        if audit is not None:
-            audit.record(event="SECURITY_EVENT", category=kind, detail=msg[:512])
+    on_event = _manager_logger(audit)
     if getattr(options, "micro_vm_package", None):
         from sandbox_manager.micro_vm import MicroVmManager
         if not root or not options.micro_vm_root or not options.micro_vm_relay:
@@ -559,7 +568,9 @@ def _real_sandbox_manager(root: Path | None, audit=None, *, options=None):
             manager_type = AutomaticVmManager
             extra["allow_app_window"] = True
         manager = manager_type(root, package=options.micro_vm_package, vm_root=options.micro_vm_root,
-                               relay=options.micro_vm_relay, log=on_event, **extra)
+                               relay=options.micro_vm_relay, max_active=getattr(options, "micro_vm_max_active", 8),
+                               startup_timeout_s=getattr(options, "startup_timeout", 180),
+                               log=on_event, **extra)
     else:
         if getattr(options, "auto_vm_app_window", False):
             raise RuntimeError("--auto-vm-app-window requires micro_VM package/root/relay")
@@ -567,6 +578,18 @@ def _real_sandbox_manager(root: Path | None, audit=None, *, options=None):
     import inspect
     log.info("loaded Manager class=%s path=%s", type(manager).__name__, inspect.getfile(type(manager)))
     return manager
+
+
+def _manager_logger(audit):
+    def on_event(msg: str) -> None:
+        kind = next((k for k in SECURITY_INBOX_EVENTS if k in msg), None)
+        if kind is None:
+            log.info("sandbox-manager %s", msg)
+            return
+        log.warning("SECURITY inbox: %s", msg)
+        if audit is not None:
+            audit.record(event="SECURITY_EVENT", category=kind, detail=msg[:512])
+    return on_event
 
 
 def _error_result(code: str, message: str, retryable: bool, next_step: str | None) -> dict:
@@ -648,6 +671,8 @@ def main(argv: list[str] | None = None) -> None:
                     help="explicit micro_VM app-window backend package (no automatic VM migration)")
     ap.add_argument("--micro-vm-root", type=Path, default=None, help="micro_VM broker state root")
     ap.add_argument("--micro-vm-relay", type=Path, default=None, help="built ScrpRelay.exe")
+    ap.add_argument("--micro-vm-max-active", type=int, default=8,
+                    help="cooperating Hosts' active/uncertain VM budget in this broker root (1..64)")
     ap.add_argument("--auto-vm-app-window", action="store_true",
                     help="choose WSB if free, otherwise a fixed micro_VM; explicitly accepts app-window limits")
     ap.add_argument("--port", type=int, default=17443, help="wss port for the Runner (0 = any free port)")

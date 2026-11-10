@@ -1,5 +1,8 @@
 # WSB + micro_VM 다중 세션 작업 상태
 
+최신: [2026-11-09 실제 동시 입력·전송 중 장애·한도 거부 검증](mixed-vm-hardening-20261109.md).
+아래는 초기 점검 이력이며 현재 완료 범위와 구분한다.
+
 관련 이슈: Host #113, sandbox_manager #57, sandbox_runner #37, micro_VM #1.
 
 2026-11-07 기준 **전체 목표는 미완료**다. 실제 WSB + micro_VM B + micro_VM C의

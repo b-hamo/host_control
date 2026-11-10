@@ -259,11 +259,15 @@ async def handle(ws, run_demo: str | None, sessions: Sessions, limits: dict) -> 
     if "artifact.output.v1" in session.profile.required_capabilities:
         allowed.append("artifact.output.v1")
         allowed.append("artifact.reconnect.v1")
+        allowed.append("artifact.reconnect.reset.v1")
     granted = [c for c in hello["payload"]["capabilities"] if c in allowed]
     session.granted_capabilities = set(granted)       # the Broker's tool catalog follows this (B-11)
     if sessions.artifacts is not None and session.contract == ARTIFACT_EXPORT_V1:
-        sessions.artifacts.begin_control(rec.identity(), conn.id,
-                                        resumable="artifact.reconnect.v1" in granted)
+        if "artifact.reconnect.reset.v1" in granted:
+            await sessions.artifacts.begin_reset_control(rec.identity(), conn.id)
+        else:
+            sessions.artifacts.begin_control(rec.identity(), conn.id,
+                                            resumable="artifact.reconnect.v1" in granted)
     await conn.send(conn.me.reply(hello, "HELLO_ACK", {
         "selected_version": "1.0",
         "allowed_capabilities": granted,

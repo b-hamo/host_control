@@ -22,18 +22,22 @@ class TransportInput:
     sha256: str
 
 
-def output_directory(identity):
+def output_directory(identity, storage_generation=None):
     session, runtime, generation = identity
     identifier(session)
     identifier(runtime)
     if type(generation) is not int or generation < 1:
         raise ValueError("invalid runtime generation")
+    if storage_generation is not None:
+        if type(storage_generation) is not int or not 1 <= storage_generation <= generation:
+            raise ValueError("invalid Output storage generation")
+        generation = storage_generation
     return str(PureWindowsPath(r"C:\RunnerWorkspace\Sessions") / ("session-" + session)
                / ("runtime-" + runtime) / ("generation-" + str(generation)) / "output")
 
 
 class CommandBundle:
-    def __init__(self, request: Request, identity, bindings, directory: Path):
+    def __init__(self, request: Request, identity, bindings, directory: Path, *, output_storage_generation=None):
         identifier(request.request_id)
         action = request.action
         command = action.command
@@ -43,7 +47,7 @@ class CommandBundle:
             raise ValueError("absolute Guest working directory required")
         if len(action.outputs) > 1:
             raise ValueError("this driver exports one stdout output per command")
-        output = output_directory(identity)
+        output = output_directory(identity, output_storage_generation)
         if output not in action.scope.writes:
             raise ValueError("Runner output directory is not in the delegated write scope")
         self.request, self.identity = request, identity

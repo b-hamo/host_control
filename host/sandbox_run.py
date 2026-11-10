@@ -233,6 +233,7 @@ class SandboxRunner:
         self.inbox = Path(inbox)
         self.guest_input = PureWindowsPath(guest_input_root) if guest_input_root else GUEST_INPUT
         self.wait_for_transport = guest_input_root is not None
+        self.output_storage_generation = None
         if not self.guest_input.is_absolute() or ".." in self.guest_input.parts:
             raise ValueError("Guest input root must be an absolute Windows path")
         # host/router_capture.py CaptureStore (--router-capture). None: no router_* tools.
@@ -247,6 +248,16 @@ class SandboxRunner:
         self._seq = 0
         self._launching: Run | None = None
         self._poll = asyncio.Lock()
+
+    def bind_output_storage(self, generation):
+        if generation is not None and (type(generation) is not int or generation < 1):
+            raise ValueError("invalid Output storage generation")
+        if self.runs and generation != self.output_storage_generation:
+            raise RuntimeError("cannot move existing runs to another Output storage generation")
+        self.output_storage_generation = generation
+
+    def output_directory(self, identity):
+        return output_directory(identity, self.output_storage_generation)
 
     def bind_guest_input(self, guest_input_root: str | None) -> None:
         """Bind the trusted adapter's selected path before any execution exists."""
@@ -298,7 +309,7 @@ class SandboxRunner:
         self._seq += 1
         run_id = f"RUN-{self._seq:04d}"
         target = str(self.guest_input / path.name)
-        scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
+        scope = Scope(reads=(target,), writes=(self.output_directory(identity),), capabilities=CAPABILITIES)
         action = Action(run_id, "sandbox-run", Operation.EXECUTE, scope, run_id, sources=(src,),
                         command=Command(POWERSHELL, (), str(self.guest_input), src.source_id), outputs=("stdout",))
         run = Run(run_id, action, path.name, uuid4().hex[:16], identity, project=project)
@@ -360,7 +371,7 @@ class SandboxRunner:
                                                "(e.g. unpack a .zip) inside the Sandbox with the computer_* tools")
         self._seq += 1
         run_id = f"RUN-{self._seq:04d}"
-        scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
+        scope = Scope(reads=(target,), writes=(self.output_directory(identity),), capabilities=CAPABILITIES)
         action = Action(run_id, "sandbox-run", Operation.EXECUTE, scope, run_id, sources=(src,),
                         command=Command(exe, argv, str(self.guest_input), src.source_id), outputs=("stdout",))
         run = Run(run_id, action, path.name, uuid4().hex[:16], identity, program=INTERPRETERS.get(suffix),
@@ -396,7 +407,7 @@ class SandboxRunner:
         argv = tuple(target if a == TARGET else a for a in built.argv)
         exe = INTERPRETER_PENDING if built.program else argv[0]
         argv = argv if built.program else argv[1:]
-        scope = Scope(reads=(target,), writes=(output_directory(run.identity),), capabilities=CAPABILITIES)
+        scope = Scope(reads=(target,), writes=(self.output_directory(run.identity),), capabilities=CAPABILITIES)
         run.action = Action(run.run_id, "router-execute", Operation.EXECUTE, scope, run.run_id,
                             sources=(derived, capture), command=Command(exe, argv, str(self.guest_input), derived.source_id),
                             outputs=("stdout",))
@@ -460,7 +471,7 @@ class SandboxRunner:
             self._seq += 1
             run_id = f"RUN-{self._seq:04d}"
             pending = str(self.guest_input / f"{capture.source_id}.pending")
-            scope = Scope(reads=(pending,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
+            scope = Scope(reads=(pending,), writes=(self.output_directory(identity),), capabilities=CAPABILITIES)
             action = Action(run_id, "router-execute", Operation.EXECUTE, scope, run_id, sources=(capture,),
                             command=Command(INTERPRETER_PENDING, (), str(self.guest_input), capture.source_id),
                             outputs=("stdout",))
@@ -492,7 +503,7 @@ class SandboxRunner:
             exe, argv = INTERPRETER_PENDING, (target,)
         self._seq += 1
         run_id = f"RUN-{self._seq:04d}"
-        scope = Scope(reads=(target,), writes=(output_directory(identity),), capabilities=CAPABILITIES)
+        scope = Scope(reads=(target,), writes=(self.output_directory(identity),), capabilities=CAPABILITIES)
         # The script first: the helper waits for sources[0] in Desktop\Input.
         action = Action(run_id, "router-execute", Operation.EXECUTE, scope, run_id, sources=(derived, capture),
                         command=Command(exe, argv, str(self.guest_input), derived.source_id), outputs=("stdout",))
@@ -546,7 +557,7 @@ class SandboxRunner:
         manifest = {"contract": CONTRACT, "run_id": run.run_id, "fingerprint": a.fingerprint, "nonce": run.nonce,
                     "runtime_id": run.identity[1], "generation": run.identity[2], "command_sha256": digest(c),
                     "sources": {s.source_id: s.sha256 for s in a.sources}, "executable": c.executable,
-                    "argument_line": list2cmdline(c.argv), "cwd": c.cwd, "output_dir": output_directory(run.identity),
+                    "argument_line": list2cmdline(c.argv), "cwd": c.cwd, "output_dir": self.output_directory(run.identity),
                     "wait_inputs_s": WAIT_INPUTS_S,
                     "inputs": [{"path": a.scope.reads[0], "sha256": a.sources[0].sha256}]}
         if run.with_stderr:
