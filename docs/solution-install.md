@@ -124,9 +124,13 @@ Codex 등록만 다시 하려면 `installer/register_codex.ps1`을 사용한다.
 -MicroVmMaxActive 8
 ```
 
-root와 max_active는 설치된 `management.json`과 일치해야 한다. 프로필은 dbictl·relay·Runner와
-함께 `MinoVmService.exe` 및 `management.json`의 SHA-256을 고정한다. 내용이 바뀌거나 고정값이
-없으면 시작을 거부한다. 최초 이미지 준비를 위해 micro_VM 경로의 시작 대기는 1,200초이며,
+root와 max_active는 설치된 `management.json`과 일치해야 한다. micro_VM 프로필은 dbictl·relay·
+`MinoVmService.exe`·`management.json`의 설치 해시를 생성하거나 비교하지 않는다. 기존 프로필에
+남아 있는 해시 필드도 무시하므로 새 빌드로 교체할 때 해시를 다시 등록할 필요가 없다.
+실행 파일 존재 여부, 절대 경로, 실행 모드, 관리 서비스의 root·용량은 계속 검사한다.
+Runner 설치 해시 검증과 파일 전송·반출 무결성 검사는 별도다. 해시 검사 제거가 관리 서비스와
+native main 뷰어의 프로토콜 호환성을 보장하지는 않는다.
+최초 이미지 준비를 위해 micro_VM 경로의 시작 대기는 1,200초이며,
 세션 고정·기존 Runner 종료 확인을 전제로 한 복구를 일반 배포에서도 사용한다.
 설치·업데이트의 기존 활성 세션 보호 조건은 유지한다. 사용 중인 서비스를 덮어쓰지 않는다.
 

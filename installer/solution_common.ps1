@@ -96,16 +96,17 @@ function New-SolutionMicroVmProfile {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing micro_VM binary: $file" }
     }
     $profile = @{mode=$Mode; max_active=$MaxActive; package=[IO.Path]::GetFullPath($Package); root=[IO.Path]::GetFullPath($Root);
-      relay=[IO.Path]::GetFullPath($Relay); dbictl_sha256=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant();
-      relay_sha256=(Get-FileHash -LiteralPath $Relay -Algorithm SHA256).Hash.ToLowerInvariant()}
+      relay=[IO.Path]::GetFullPath($Relay)}
     $serviceConfig = Join-Path $Package 'management.json'
-    if (Test-Path -LiteralPath $serviceConfig -PathType Leaf) {
+    $serviceExe = Join-Path $Package 'MinoVmService.exe'
+    if ((Test-Path -LiteralPath $serviceConfig) -or (Test-Path -LiteralPath $serviceExe)) {
+        foreach ($file in @($serviceExe,$serviceConfig)) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing micro_VM management file: $file" }
+        }
         $installed = Get-Content -LiteralPath $serviceConfig -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($installed.schema_version -ne 1 -or [IO.Path]::GetFullPath($installed.root) -ne $profile.root -or $installed.max_active -ne $MaxActive) {
             throw 'micro_VM root and capacity must match the installed management service.'
         }
-        $profile.management_service_sha256 = (Get-FileHash -LiteralPath (Join-Path $Package 'MinoVmService.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-        $profile.management_config_sha256 = (Get-FileHash -LiteralPath $serviceConfig -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     $profile
 }

@@ -28,7 +28,7 @@ def test_profile_accepts_powershell_bom_and_checks_runner_bytes(tmp_path):
         read_profile(path)
 
 
-def test_micro_vm_profile_pins_binaries_and_explicit_surface(tmp_path):
+def test_micro_vm_profile_accepts_rebuilt_binaries_and_explicit_surface(tmp_path):
     from host.solution_config import validate_micro_vm
     from host.solution import host_arguments
     package = tmp_path / 'micro'
@@ -50,13 +50,20 @@ def test_micro_vm_profile_pins_binaries_and_explicit_surface(tmp_path):
         assert args[args.index('--startup-timeout')+1] == '1200'
         assert args[args.index('--export-dir')+1] == str(tmp_path/'state'/'exports')
     relay.write_bytes(b'replaced')
-    with pytest.raises(ValueError, match='changed since installation'):
-        validate_micro_vm(micro)
+    (package / 'dbictl.exe').write_bytes(b'new main build')
+    validate_micro_vm(micro)  # Old installation hashes no longer block replacements.
+    unpinned = {key: value for key, value in micro.items() if not key.endswith('_sha256')}
+    validate_micro_vm(unpinned)
+    p = profile(tmp_path)
+    p['micro_vm'] = micro
+    path = tmp_path / 'solution.json'
+    path.write_text(json.dumps(p), encoding='utf-8-sig')
+    assert read_profile(path)['micro_vm'] == micro
     with pytest.raises(ValueError, match='explicitly accept'):
         validate_micro_vm(dict(micro, mode='Desktop'))
 
 
-def test_installed_management_profile_pins_service_and_configuration(tmp_path):
+def test_installed_management_profile_accepts_rebuild_and_equivalent_config(tmp_path):
     from host.solution_config import validate_micro_vm
     package = tmp_path / 'package'
     package.mkdir()
@@ -75,11 +82,28 @@ def test_installed_management_profile_pins_service_and_configuration(tmp_path):
     with pytest.raises(ValueError, match='root differs'):
         validate_micro_vm(dict(micro, root=str(tmp_path/'other')))
     unpinned = dict(micro)
-    del unpinned['management_service_sha256']
-    with pytest.raises(ValueError, match='changed since installation'):
-        validate_micro_vm(unpinned)
+    for key in tuple(unpinned):
+        if key.endswith('_sha256'):
+            del unpinned[key]
+    validate_micro_vm(unpinned)
+    (package/'MinoVmService.exe').write_bytes(b'new service build')
     config.write_text(config.read_text() + ' ', encoding='utf-8')
-    with pytest.raises(ValueError, match='changed since installation'):
+    validate_micro_vm(micro)
+    validate_micro_vm(unpinned)
+
+
+@pytest.mark.parametrize('missing', ['dbictl.exe', 'ScrpRelay.exe', 'MinoVmService.exe', 'management.json'])
+def test_micro_vm_profile_still_requires_binary_and_management_files(tmp_path, missing):
+    from host.solution_config import validate_micro_vm
+    package = tmp_path / 'micro'
+    package.mkdir()
+    for name in ('dbictl.exe', 'ScrpRelay.exe', 'MinoVmService.exe'):
+        (package/name).write_bytes(b'fixture')
+    micro = dict(mode='AppWindow', package=str(package), root=str(tmp_path/'root'),
+                 relay=str(package/'ScrpRelay.exe'), max_active=8)
+    (package/'management.json').write_text(json.dumps(dict(schema_version=1, root=micro['root'], max_active=8)))
+    (package/missing).unlink()
+    with pytest.raises(ValueError, match='is missing'):
         validate_micro_vm(micro)
 
 
