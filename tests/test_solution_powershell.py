@@ -30,6 +30,31 @@ def test_all_solution_scripts_parse_in_windows_powershell():
         assert result.returncode == 0, (path, result.stdout, result.stderr)
 
 
+@pytest.mark.parametrize('management', [False, True])
+def test_micro_vm_installer_profile_needs_no_hash_registration(tmp_path, management):
+    from host.solution_config import validate_micro_vm
+    package = tmp_path/'package'
+    package.mkdir()
+    relay = package/'ScrpRelay.exe'
+    for name in ('dbictl.exe', 'ScrpRelay.exe'):
+        (package/name).write_bytes(b'first build')
+    root = tmp_path/'runtime'
+    if management:
+        (package/'MinoVmService.exe').write_bytes(b'service')
+        (package/'management.json').write_text(json.dumps(dict(schema_version=1, root=str(root), max_active=8)))
+    result = ps(f'''. {quoted(ROOT/'installer/solution_common.ps1')}
+function Get-FileHash {{ throw 'micro_VM profile must not require installation hashes' }}
+New-SolutionMicroVmProfile -Mode AppWindow -Package {quoted(package)} -Root {quoted(root)} -Relay {quoted(relay)} | ConvertTo-Json -Compress
+''')
+    assert result.returncode == 0, result.stderr
+    micro = json.loads(result.stdout)
+    assert not any(key.endswith('_sha256') for key in micro)
+    validate_micro_vm(micro)
+    (package/'dbictl.exe').write_bytes(b'new main build')
+    relay.write_bytes(b'new relay build')
+    validate_micro_vm(micro)
+
+
 def test_setup_lock_prevents_parallel_updates_and_releases(tmp_path):
     common = quoted(ROOT/'installer/solution_common.ps1')
     state = quoted(tmp_path)

@@ -142,7 +142,7 @@ Sandbox 안 Runner
 | 파일 | 하는 일 | 이슈 |
 |---|---|---|
 | `solution.py` | Host·Manager·Runner를 묶은 진입점. 설치기가 만드는 Codex MCP 설정이 이 파일을 켠다. 검사 서비스가 필수이고 로컬 검사기로 대체하지 않는다. 시작 전에 경로(사용자 폴더·OneDrive와 분리)와 서비스 상태를 확인한다 | #99 |
-| `solution_config.py` | 옮겨 쓸 수 있는 설치 프로필과 Codex MCP 등록. 등록하면서 다른 설정이 하나라도 바뀌면 거부한다 (표준 라이브러리만) | #101 |
+| `solution_config.py` | 설치 프로필과 Codex MCP 등록. micro_VM은 파일 존재·경로·서비스 설정을 검사하며 설치 해시를 비교하지 않는다. Runner 설치 해시와 다른 Codex 설정 보존 검사는 유지한다 (표준 라이브러리만) | #101, #129 |
 | `solution_session.py` | 일반 사용자 권한의 MCP 클라이언트. 단독 시작과 대화형 반출 검증에 쓴다. Sandbox 닫기와 남기기·지우기 선택은 사람이 실제 Host 창에서 한다 | #101 |
 | `unified_verification.py` | 실제 MCP·Manager·Runner·검사 서비스와 사람의 확인 창으로 하는 대화형 검증. 다른 시험용 Sandbox를 닫고 돌린다. 창에 대신 답하거나 VM을 끄지 않는다 | #103 |
 | `output_verification.py` | 한 검증 세션을 유지하는 일반 사용자 MCP 진단 클라이언트. 요청 결과와 화면을 증거 폴더에 기록하며, 승인 창을 우회하거나 입력 종료만으로 VM을 끄지 않는다 | #105 |
@@ -176,6 +176,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | 보안 규칙 추가 (차단할 요청) | `policy.py` |
 | 호출 빈도 제한 변경 | `broker.py`의 `RATE_LIMITS` |
 | 다른 채팅의 Host·VM 보존 | `mcp_server.py`, `mcp_runtime.py`, `single_host.py`(무동작 호환 API), Manager의 배정 잠금 |
+| micro_VM 설치 프로필·파일 교체 시 시작 검사 | `solution_config.py`, `installer/solution_common.ps1`, `tests/test_solution_config.py`, `tests/test_solution_powershell.py` |
 | 오류별로 Agent에게 안내할 다음 행동 | `broker.py`의 `ERROR_HINTS` |
 | READY 전에 확인할 항목 | `startup.py`의 `StartupProfile`, `check_hello()`, `verify_runtime()` |
 | Heartbeat 간격, 이상 판정 기준 | `runtime_session.py` 위쪽 상수 |
@@ -215,7 +216,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_mcp_runtime.py` | MCP 수명주기, 종료와 창 닫기 후 반출 결과 보존·조회, 조회 시 VM 재시작 없음 |
 | `tests/test_shared_folder.py`, `tests/test_window_close.py` | Shared 옵션 거부, Output 승인 창, 창 닫힘 시 확보 → 종료 → 반출 순서와 확보 실패 시 VM 유지 |
 | `tests/test_unified_verification.py`, `tests/test_solution_session.py` | 실제 Output 바로가기 기반 검증 명령, 반출 해시·MOTW·중복 확인, 통합 실행 진입점 |
-| `tests/test_solution.py`, `tests/test_solution_config.py` | 설치 프로필·바이너리 pin, 실제 사용 매핑의 사전검사, 기존 WSB와 새 채팅 경로 격리 및 실패 시 시작 거부 |
+| `tests/test_solution.py`, `tests/test_solution_config.py` | Runner 설치 해시, micro_VM 파일 교체·기존 해시 필드 호환·필수 파일·서비스 설정, 실제 사용 매핑의 사전검사, 기존 WSB와 새 채팅 경로 격리 및 실패 시 시작 거부 |
 | `tests/artifact_runner.py` | 테스트용 artifact-export-v1 Runner (MiniRunner 확장, 테스트가 아니라 도구) |
 | `tests/mini_runner.py` | 테스트용 최소 Runner (테스트가 아니라 도구) |
 

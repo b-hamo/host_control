@@ -53,7 +53,7 @@ def activate_manager_source(profile: dict) -> None:
 
 
 def validate_micro_vm(micro: dict) -> None:
-    """An opt-in backend is pinned like the Runner, not discovered from PATH."""
+    """Validate explicit paths and service configuration, without installation hash pins."""
     if not isinstance(micro, dict) or micro.get('mode') not in ('AutoAppWindow', 'AppWindow'):
         raise ValueError('micro_VM mode must explicitly accept app-window capabilities')
     limit = micro.get('max_active', 8)
@@ -63,20 +63,16 @@ def validate_micro_vm(micro: dict) -> None:
         value = micro.get(key)
         if not isinstance(value, str) or not Path(value).is_absolute() or Path(value).resolve() != Path(value):
             raise ValueError(f'micro_VM requires an absolute, non-linked {key}')
-    for key, path in (('dbictl_sha256', Path(micro['package']) / 'dbictl.exe'),
-                      ('relay_sha256', Path(micro['relay']))):
-        with path.open('rb') as stream:
-            actual = hashlib.file_digest(stream, 'sha256').hexdigest()
-        if actual != micro.get(key):
-            raise ValueError(f'micro_VM {key} changed since installation')
-    service_config = Path(micro['package']) / 'management.json'
-    service_pins = ('management_service_sha256', 'management_config_sha256')
-    if service_config.exists() or any(key in micro for key in service_pins):
-        for key, path in zip(service_pins, (Path(micro['package']) / 'MinoVmService.exe', service_config)):
-            with path.open('rb') as stream:
-                actual = hashlib.file_digest(stream, 'sha256').hexdigest()
-            if actual != micro.get(key):
-                raise ValueError(f'micro_VM {key} changed since installation')
+    package = Path(micro['package'])
+    for path in (package / 'dbictl.exe', Path(micro['relay'])):
+        if not path.is_file():
+            raise ValueError(f'micro_VM binary is missing: {path}')
+    service_config = package / 'management.json'
+    service_exe = package / 'MinoVmService.exe'
+    if service_config.exists() or service_exe.exists():
+        for path in (service_exe, service_config):
+            if not path.is_file():
+                raise ValueError(f'micro_VM management file is missing: {path}')
         installed = json.loads(service_config.read_text(encoding='utf-8-sig'))
         if installed.get('schema_version') != 1 or Path(installed.get('root', '')).resolve() != Path(micro['root']):
             raise ValueError('micro_VM management root differs from installed service')
