@@ -10,6 +10,8 @@ micro_VM 앱 창 연결은 `mcp_server.py`의 Manager 선택, `lifecycle.py`의 
 [구성과 검증 절차](../docs/micro-vm-app-window.md)를 따른다.
 `tests/test_micro_vm_transport.py`는 전송 해시·명령 제한과 중복 결과의 검사/충돌 처리를 검증한다.
 `--auto-vm-app-window`는 앱 창 제한에 동의한 구성에서만 자동 배정을 사용한다.
+고정 listener의 EADDRINUSE는 VM 생성 전에만 micro_VM 동적 포트로 전환한다.
+기존 Host를 종료하지 않으며 부분 listener는 정리한다. [다른 PC 적용과 검증](../docs/automatic-listener-conflict.md)을 따른다.
 Manager 선택 후 `sandbox_run.py`에 실제 Guest 입력 경로를 연결하며,
 `lifecycle.py`는 고정 VM의 통신 장애를 자동 종료·재생성으로 처리하지 않는다.
 실제 혼합 실행과 미완료 복구 항목은 [후속 검증 보고서](../docs/mixed-vm-followup-20261108.md)에 구분했다.
@@ -195,6 +197,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_broker.py` | 검사별 거부, 정책, 빈도 제한, 감사 로그 마스킹, 도구 규격 ↔ 프로토콜 교차 검사 |
 | `tests/test_mcp_server.py` | 실제 자식 프로세스로 기동, 도구 목록 속도, Codex → Runner 전 구간, 스크린샷이 MCP image로 전달 |
 | `tests/test_single_host.py` | 이전 HostBackend 진입점도 다른 Host·부모 프로세스·VM을 종료하거나 회수하지 않음 |
+| `tests/test_listener_pair.py` | 실제 TCP 점유 시 기존 연결 보존·micro_VM 동적 포트·부분 listener 정리, 권한 오류/시작 뒤 오류 재시도 금지 |
 | `tests/test_observation_upload.py` | upload_id(1회용·만료), PNG 검사, HTTPS 수신 거부 코드, 해시·크기 대조, 조작된 업로드 차단, 세션 종료 시 삭제 |
 | `tests/test_sandbox_recovery.py` | Runner만 다시 켜기, 창 닫힘은 다시 안 켬, 먹통이면 Sandbox 새로 켜기, 실패 시 넘어가기·종료, 옛 세대 token 거부, 실제 Sandbox Manager로 재시작 확인 |
 | `tests/test_sandbox_launch.py` | task_submit에 Sandbox 켜기(바로 PREPARING), READY 대기, 켜기 실패·시간 초과·Codex 종료 시 끄고 정리, Lifecycle의 실제 Sandbox Manager로 파일 전달 확인 |
