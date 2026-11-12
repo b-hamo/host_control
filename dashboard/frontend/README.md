@@ -35,6 +35,9 @@ npm run build    # ../static/ 을 지우고 새로 만든다
 - dev에서도 실제 API를 쓰려면 `.env`에 `VITE_USE_MOCK=false`를 두고, 서버 토큰을 주소에 붙여 연다
   (`vite.config.ts`가 `/api`를 `127.0.0.1:17480`으로 넘긴다).
 
+- 파일 반출 로그는 overview의 `exports`(`types.ts`의 `ExportEntry`)를 쓴다. **백엔드 미구현** —
+  지금은 목업에만 있고, 실제 API에서는 `exports`가 없어 "반출 기록을 아직 받지 않아요"로 보인다.
+
 ## 구조
 
 ```
@@ -48,6 +51,7 @@ src/
   components/
     ResourceSessionTab  → RuntimePanel · ResourcePanel · SessionsTable
     LiveViewTab         → ScreenCapture · DetailPanel (목록 · 모니터 · 상세)
+                          + ExportLog (아래로 스크롤하면 파일 반출 로그)
     Header · Tabs · BullIcon · MeterBar
   styles.css            색은 CSS 변수. .app(다크) / .app.light(라이트)
 ```

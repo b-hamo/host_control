@@ -29,6 +29,15 @@ export function formatElapsed(startedAt: string, endedAt?: string | null, now: n
   return `${m}m ${String(s).padStart(2, '0')}s`
 }
 
+/** ISO 시각 → HH:MM:SS (로컬) */
+export function formatClock(iso: string | null | undefined): string {
+  if (!iso) return DASH
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return DASH
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
 export function clampPct(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)))
 }

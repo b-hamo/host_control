@@ -11,6 +11,7 @@ export interface DetailFields {
   mem: string
   isolation: string
   lastActivity?: string
+  exports?: { text: string; danger: boolean } // 이 세션의 반출 요약 (반출 목록이 있을 때만)
 }
 
 function Field({ label, value, className }: { label: string; value: string; className?: string }) {
@@ -43,6 +44,12 @@ export function DetailPanel({ d }: { d: DetailFields }) {
           <div className="d-label">격리</div>
           <div className="d-value">{d.isolation}</div>
         </div>
+        {d.exports && (
+          <div style={{ gridColumn: '1 / -1' }}>
+            <div className="d-label">반출</div>
+            <div className={`d-value${d.exports.danger ? ' s-danger' : ''}`} style={{ fontSize: 14 }}>{d.exports.text}</div>
+          </div>
+        )}
         {d.lastActivity && (
           <div style={{ gridColumn: '1 / -1' }}>
             <div className="d-label">마지막 활동</div>

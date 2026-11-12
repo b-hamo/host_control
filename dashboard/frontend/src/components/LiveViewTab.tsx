@@ -1,4 +1,6 @@
+import { useMemo, useRef } from 'react'
 import type { Overview, Session } from '../types'
+import { ExportLog, exportRows, countByTone, type ExportRow } from './ExportLog'
 import { isEnded, statusOf } from '../types'
 import { formatMem, formatPct, formatElapsed } from '../utils'
 import { screenshotUrl } from '../api/client'
@@ -54,10 +56,30 @@ export function LiveViewTab({
   const selected =
     live.find((s) => s.id === selectedId) ?? live.find((s) => s.display_state === 'RUNNING') ?? live[0]
 
+  const panelRef = useRef<HTMLDivElement>(null)
+  // exports가 없으면(백엔드 미구현) null → 로그에 "아직 받지 않음" 표시
+  const rows = useMemo(() => (data.exports ? exportRows(data.exports, data.sessions) : null), [data.exports, data.sessions])
+  const allCount = rows ? countByTone(rows) : null
+  const liveIds = useMemo(() => new Set(live.map((s) => s.id)), [live])
+  const toExports = () => panelRef.current?.scrollTo({ top: panelRef.current.scrollHeight, behavior: 'smooth' })
+
+  const exportLog = (
+    <div className="live-bottom">
+      <div className="xp-spacer" />
+      <ExportLog rows={rows} selected={selected} onSelect={onSelect} liveIds={liveIds} />
+    </div>
+  )
+
   if (live.length === 0) {
-    return <div className="panel live-empty">실행 중인 격리 세션이 없어요. 작업이 시작되면 여기에 나타납니다.</div>
+    return (
+      <div className="panel live-panel" ref={panelRef}>
+        <div className="live-top live-empty">실행 중인 격리 세션이 없어요. 작업이 시작되면 여기에 나타납니다.</div>
+        {exportLog}
+      </div>
+    )
   }
 
+  const mine = rows?.filter((r) => r.session_id === selected?.id)
   const detail: DetailFields | null = selected
     ? {
         typeLabel: TYPE_LABEL[selected.runtime],
@@ -70,11 +92,13 @@ export function LiveViewTab({
         mem: formatMem(selected.mem_bytes),
         isolation: isolationText(selected),
         lastActivity: lastActivityText(selected),
+        exports: mine ? exportSummary(mine) : undefined,
       }
     : null
 
   return (
-    <div className="panel live-panel">
+    <div className="panel live-panel" ref={panelRef}>
+     <div className="live-top">
       <div className="live-side">
         <div className="sec sec-wide">sandbox</div>
         {sandbox.map((s) => (
@@ -109,7 +133,33 @@ export function LiveViewTab({
 
       <div className="detail-col">
         {detail && <DetailPanel d={detail} />}
+        {/* 아래로 스크롤하면 반출 목록이 있다는 안내. 누르면 내려간다. */}
+        <button type="button" className="xp-cue" onClick={toExports}>
+          <span>파일 반출 {rows ? `${rows.length}건` : ''}</span>
+          <span className="n">
+            {allCount && (
+              <>
+                <span className="s-ok">{allCount.ok}</span>
+                <span className="s-danger">{allCount.danger}</span>
+                <span className="s-warn">{allCount.warn}</span>
+              </>
+            )}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </span>
+        </button>
       </div>
+     </div>
+
+     {exportLog}
     </div>
   )
+}
+
+function exportSummary(rows: ExportRow[]): { text: string; danger: boolean } {
+  const c = countByTone(rows)
+  const parts = [`${c.ok}건 반출`, `${c.danger}건 차단`]
+  if (c.warn) parts.push(`${c.warn}건 검사 중`)
+  return { text: parts.join(' · '), danger: c.danger > 0 }
 }
