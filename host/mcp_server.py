@@ -32,6 +32,8 @@ Register with Codex (see README):
 from __future__ import annotations
 
 import argparse
+from contextlib import asynccontextmanager, AsyncExitStack
+import errno
 import json
 import logging
 import sys
@@ -135,6 +137,30 @@ def load_tool_list(extra_capabilities: set[str] = frozenset()) -> list[dict]:
         if unavailable_reason(d["name"], START_CAPABILITIES | set(extra_capabilities)) is None:
             tools.append({k: d[k] for k in ("name", "description", "inputSchema", "annotations")})
     return tools
+
+
+@asynccontextmanager
+async def _listener_pair(upload_factory, control_factory, *, on_address_in_use=None):
+    """Release a partial listener pair before an explicit pre-VM replan.
+
+    Only address-in-use errors may select another plan. Errors from the body
+    (after listeners are established) are never retried.
+    """
+    async with AsyncExitStack() as stack:
+        for attempt in range(2):
+            try:
+                upload = await upload_factory()
+                await stack.enter_async_context(upload)
+                control = await stack.enter_async_context(control_factory())
+            except OSError as exc:
+                await stack.aclose()
+                busy = exc.errno in (errno.EADDRINUSE, 10048) or getattr(exc, "winerror", None) == 10048
+                if attempt or on_address_in_use is None or not busy:
+                    raise
+                await on_address_in_use()
+            else:
+                break
+        yield upload, control
 
 
 class HostBackend(threading.Thread):
@@ -293,11 +319,21 @@ class HostBackend(threading.Thread):
         sessions.artifacts = self.artifacts        # serves /scrp/v1/telemetry
         if artifact_mode and getattr(self.artifacts.scanner, "service_mode", False):
             await self._check_scanner_service(identity[0], Path(a.export_dir))
-        upload_server = await start_upload_server(uploads, ssl_contexts[1], a.host, a.upload_port, grants=grants)
         self._stop = asyncio.Event()
-        async with upload_server, start_server(registry, cert_path, key_path, run_demo=None, host=a.host,
-                                               port=a.port, sessions=sessions,
-                                               ssl_context=ssl_contexts[0]) as server:
+        async def busy_wsb_listeners():
+            endpoints = await asyncio.to_thread(manager.listener_binding, wsb_listeners_busy=True)
+            a.host, a.port, a.upload_port = endpoints["host"], endpoints["port"], endpoints["upload_port"]
+            log.info("automatic listener ports occupied; selecting micro_VM before VM start "
+                     "host=%s control=%s upload=%s; existing Host preserved", a.host, a.port, a.upload_port)
+
+        can_replan = (getattr(a, "auto_vm_app_window", False) and a.host == "0.0.0.0" and
+                      a.port == 17443 and a.upload_port == 17444)
+        async with _listener_pair(
+            lambda: start_upload_server(uploads, ssl_contexts[1], a.host, a.upload_port, grants=grants),
+            lambda: start_server(registry, cert_path, key_path, run_demo=None, host=a.host,
+                                 port=a.port, sessions=sessions, ssl_context=ssl_contexts[0]),
+            on_address_in_use=busy_wsb_listeners if can_replan else None,
+        ) as (upload_server, server):
             port = server.sockets[0].getsockname()[1]
             upload_port = upload_server.sockets[0].getsockname()[1]
             audit = AuditLog(a.audit_dir / f"{identity[0]}.jsonl")
