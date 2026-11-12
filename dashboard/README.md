@@ -144,7 +144,10 @@ Host가 끝나면 화면 파일을 지운다(사용자 화면을 남기지 않�
 | `__main__.py` | `python -m dashboard` |
 | `sample-overview.json` | 프론트 개발용 예시 응답 |
 | `example-wiring.js` | 프론트 페이지(`minobox-dashboard.html`)를 이 API에 붙이는 예시. 페이지 끝에 넣으면 두 탭을 2초마다 채운다. 제품 코드가 아니라 연동 참고용 (API에서 온 글자는 escape한다) |
+| `frontend/` | 프론트 소스 (React + Vite + TypeScript). `npm run build`가 결과물을 `static/`에 바로 쓴다. 자세한 건 `frontend/README.md` |
+| `static/` | 프론트 빌드 결과물. 직접 고치지 말고 `frontend/`에서 다시 빌드한다 |
 
 프론트 페이지는 `dashboard/static/index.html`에 두면 `python -m dashboard`가 같이 준다(다른 폴더는 `--static`).
+화면을 고쳤으면 `cd dashboard/frontend; npm ci; npm run build`로 `static/`을 다시 만들고 같이 커밋한다.
 
 시험: `tests/test_dashboard.py` (overview 계약, CPU 계산, 관리자 아님, 토큰·Host 헤더·경로 탈출, 실제 MCP Host가 상태와 화면을 남기고 끝나면 지움).
