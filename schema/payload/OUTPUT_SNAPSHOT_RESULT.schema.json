@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Output snapshot result (artifact.output.v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["snapshot_id", "operation", "complete", "problem", "files"],
+  "properties": {
+    "snapshot_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "operation": {"enum": ["CAPTURE", "VERIFY", "RELEASE"]},
+    "complete": {"type": "boolean"},
+    "problem": {"type": ["string", "null"], "minLength": 1, "maxLength": 64},
+    "files": {
+      "type": "array", "maxItems": 4096,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["candidate_event_id", "relative_path", "size_bytes", "sha256"],
+        "properties": {
+          "candidate_event_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+          "relative_path": {"type": "string", "minLength": 1, "maxLength": 32767},
+          "size_bytes": {"type": "integer", "minimum": 0, "maximum": 52428800},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"complete": {"const": true}}},
+     "then": {"properties": {"problem": {"type": "null"}}},
+     "else": {"properties": {"problem": {"type": "string"}, "files": {"maxItems": 0}}}},
+    {"if": {"properties": {"operation": {"enum": ["VERIFY", "RELEASE"]}}},
+     "then": {"properties": {"files": {"maxItems": 0}}}}
+  ]
+}

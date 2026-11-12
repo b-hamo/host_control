@@ -1,0 +1,19 @@
+{
+  "name": "computer_type",
+  "description": "Type a UTF-8 string into whatever currently has keyboard focus in the runtime. Click the target field first; this tool does not choose where the text lands. Text is injected as Unicode, so it does not depend on the guest keyboard layout or IME state. Credentials are never accepted here: the audit log masks the text, and policy may block the action outright.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["text"],
+    "properties": {
+      "text": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Up to 4096 characters. The byte length is re-checked against the 4 KiB protocol limit."}
+    }
+  },
+  "annotations": {
+    "title": "Type text",
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

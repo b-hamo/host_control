@@ -1,0 +1,26 @@
+{
+  "name": "computer_click_element",
+  "description": "Click a UI element found by its accessible name and control type instead of by coordinates, for example the button labelled 확인. Use this when the element is hard to hit by pixel. The name must match exactly: no wildcards or patterns. The click happens only when exactly one element matches; zero or several matches fail without clicking anything, so narrow the window or fall back to computer_click.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["name", "control_type"],
+    "properties": {
+      "name": {"type": "string", "minLength": 1, "maxLength": 256, "description": "Exact accessible name of the element."},
+      "control_type": {
+        "type": "string",
+        "description": "UI Automation control type of the element.",
+        "enum": ["Button", "Edit", "CheckBox", "RadioButton", "ComboBox", "ListItem", "MenuItem", "TabItem", "Hyperlink", "Text", "TreeItem"]
+      },
+      "window_id": {"type": ["string", "null"], "maxLength": 64, "default": null, "description": "Restrict the search to one window; null searches the foreground window."},
+      "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left"}
+    }
+  },
+  "annotations": {
+    "title": "Click element",
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

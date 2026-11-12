@@ -1,0 +1,39 @@
+{
+  "name": "artifact_export",
+  "description": "Export an Output candidate through SecureArtifactScanner without Host review or result dialogs. Only verified CLEAN bytes are saved to Downloads/SandboxOutput; malware, unavailable scanner and errors are not published. Waits up to wait_ms; completed=false means still processing, so call artifact_list with wait_ms. EXPORTED includes export_path; BLOCKED/FAILED includes result. Repeated requests do not duplicate transfer/publication. Legacy non-Output mode retains its configured approval policy.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "artifact_id"
+    ],
+    "properties": {
+      "artifact_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "From artifact_list, e.g. ART-000001."
+      },
+      "reason": {
+        "type": "string",
+        "maxLength": 256,
+        "description": "Purpose of this export, recorded in the audit log.",
+        "default": ""
+      },
+      "wait_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 30000,
+        "default": 30000,
+        "description": "Wait up to this many milliseconds for ongoing Output exports; timeout does not cancel them."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Export artifact",
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

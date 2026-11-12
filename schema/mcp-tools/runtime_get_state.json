@@ -1,0 +1,18 @@
+{
+  "name": "runtime_get_state",
+  "description": "Report the state of the runtime running this session, and optionally of one earlier action. Use this after a tool call times out instead of repeating the call: repeating a click may click twice, while this tells you whether the first one ran.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "action_id": {"type": ["string", "null"], "maxLength": 64, "default": null, "description": "An action_id from an earlier tool result, to ask what became of it."}
+    }
+  },
+  "annotations": {
+    "title": "Get runtime state",
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+host/.certs/
+host/.bootstrap/
+host/.audit/
+host/.logs/
+host/.artifacts/
+host/.exports/
+
+# Local micro_VM image-preparation diagnostic log
+/dbi-nucleus
+/build/
+/dist/

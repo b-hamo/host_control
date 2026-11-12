@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/ACTION_RESULT.schema.json",
+  "title": "ACTION_RESULT payload",
+  "description": "Runtime -> Host. Envelope status is SUCCESS / PARTIAL_SUCCESS / FAILED / UNKNOWN / BLOCKED. Input delivery success is not user-goal success.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["execution_time_ms", "result"],
+  "properties": {
+    "execution_time_ms": { "type": "integer", "minimum": 0 },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input_delivered": { "type": "boolean" },
+        "chars_sent": { "type": "integer", "minimum": 0 },
+        "matched_count": { "type": "integer", "minimum": 0, "description": "ui.click_element only; action executed only when 1" },
+        "detail": { "type": "string", "maxLength": 1024 }
+      }
+    }
+  }
+}

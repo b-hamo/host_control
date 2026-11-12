@@ -1,0 +1,10 @@
+{
+  "goal": "minesweeper.online에서 초급 게임을 시작하고 셀을 열어 웹 작업을 검증한다.",
+  "urls": [
+    "https://minesweeper.online",
+    "https://seo5.minesweeper.online",
+    "https://tok2.minesweeper.online",
+    "https://nsb1.minesweeper.online",
+    "https://hong5.minesweeper.online"
+  ]
+}

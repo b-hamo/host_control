@@ -1,0 +1,32 @@
+{
+  "name": "sandbox_run_status",
+  "description": "State of a sandbox_run: ACCEPTED (being started), RUNNING (started; a GUI program stays here while open), SUCCEEDED or FAILED (ended; exit_code and stdout from the Sandbox's checked receipt), DENIED (not started), HELD (its result could not pass the Host's checks) or UNKNOWN (it may have run; never run it again to find out). Calling it again is safe. A command-line run (code, a project) usually takes 20 seconds to a few minutes (installing libraries and building take longer): keep calling with wait_ms 30000 until it is SUCCEEDED or FAILED; do not report a result while it is ACCEPTED or RUNNING.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "run_id"
+    ],
+    "properties": {
+      "run_id": {
+        "type": "string",
+        "pattern": "^RUN-[0-9]{4}$",
+        "description": "run_id returned by sandbox_run."
+      },
+      "wait_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 30000,
+        "default": 0,
+        "description": "Wait up to this long for the run to end before answering (a code run usually takes 20-60 s; use 30000 and call again while it is still ACCEPTED or RUNNING)."
+      }
+    }
+  },
+  "annotations": {
+    "title": "State of a Sandbox run",
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

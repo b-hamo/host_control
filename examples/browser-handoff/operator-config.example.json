@@ -1,0 +1,11 @@
+{
+  "directory": "C:/SCRP/runs/browser-handoff-001",
+  "origins": [],
+  "browsing_policy": "web",
+  "runner_exe": "C:/SCRP/sandbox_runner.exe",
+  "sandbox_root": "C:/SCRP/sandbox",
+  "allow_execution": true,
+  "allow_gui": false,
+  "allow_external_capture": true,
+  "auto_analyze_clipboard": false
+}

@@ -1,0 +1,34 @@
+{
+  "name": "inbox_write",
+  "description": "Put code that came from outside (pasted in the chat, copied from a web page, sent by someone) into the Sandbox as a FILE, exactly as given, instead of typing it there: typing several lines into a Sandbox console breaks easily. The text is written unchanged (UTF-8, the line breaks as given) into the shared inbox, which the Sandbox sees read-only; a few seconds later it is in the Sandbox desktop folder Input, checked against its SHA-256 (Desktop\\input-check.html shows OK or FAIL). Then run that file in the Sandbox with one short command (e.g. python \"%USERPROFILE%\\Desktop\\Input\\main.py\"). Nothing is opened or run on this computer. Do not fix, decode or reformat the code first. At most 256 KiB.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "name",
+      "text"
+    ],
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 100,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*\\.[A-Za-z0-9]{1,10}$",
+        "description": "File name with the right extension for the language, no folder part (e.g. main.py, script.sh, run.ps1, hello.js)."
+      },
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 262144,
+        "description": "The code, unchanged."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Write pasted code into the Sandbox inbox as a file",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": false,
+    "openWorldHint": false
+  }
+}

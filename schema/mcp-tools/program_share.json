@@ -1,0 +1,36 @@
+{
+  "name": "program_share",
+  "description": "Make a compiler or interpreter usable inside the running Sandbox: this computer's installed copy is shared READ-ONLY at C:\\Tools\\<program> (no restart). Nothing is downloaded: if the program is not installed here, the result says so; ask the user to install it (its official installer) and try again, never install it yourself. For git the result's `shell` runs .sh files. zig also compiles C and C++ (`zig cc`, `zig c++`); dotnet runs C# (`dotnet run file.cs`); php needs the Microsoft VC++ runtime installed in the Sandbox first. Use it when code must run in the Sandbox and the clean Sandbox lacks the program (python, git, gcc, node, go, java, zig, dotnet, ruby, php). Never run the code on this computer instead. The result gives the Guest exe path and cmd_setup_all: one cmd line that puts every shared program on PATH and points caches at the Sandbox's own %TEMP% (the shared folder cannot be written). Type it into a Sandbox cmd window before running the program. Install packages inside the Sandbox (e.g. pip install --target into a Sandbox folder), never into C:\\Tools. Programs that need an installer or a licence (Office, Adobe, Visual Studio) cannot be shared. Tell the user which programs you shared.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "program"
+    ],
+    "properties": {
+      "program": {
+        "type": "string",
+        "enum": [
+          "python",
+          "git",
+          "gcc",
+          "node",
+          "go",
+          "java",
+          "zig",
+          "dotnet",
+          "ruby",
+          "php"
+        ],
+        "description": "Which installed program to share."
+      }
+    }
+  },
+  "annotations": {
+    "title": "Share an installed compiler or interpreter into the Sandbox (read-only)",
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

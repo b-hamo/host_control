@@ -1,0 +1,54 @@
+{
+  "name": "artifact_list",
+  "description": "List Output files and per-file export results, including after Sandbox termination. completed=true is terminal, not necessarily successful: only EXPORTED with export_path means saved. STAGED is received but unscanned. wait_ms waits for ongoing explicit exports without starting a new one. Remaining current Output files are scanned and automatically saved only on CLEAN at normal Sandbox termination; failures remain unpublished.",
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "status": {
+        "type": "string",
+        "enum": [
+          "ANY",
+          "PENDING",
+          "SCANNING",
+          "SAFE",
+          "BLOCKED",
+          "QUARANTINED",
+          "EXPORTED"
+        ],
+        "default": "ANY",
+        "description": "Filter by status."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 50,
+        "description": "How many artifacts to return in one page."
+      },
+      "cursor": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "maxLength": 128,
+        "default": null,
+        "description": "next_cursor from a previous call, to get the following page."
+      },
+      "wait_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 30000,
+        "default": 0,
+        "description": "Wait up to this many milliseconds for ongoing Output exports; timeout does not cancel them."
+      }
+    }
+  },
+  "annotations": {
+    "title": "List artifacts",
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scrp.local/schema/payload/TERMINATE_RESULT.schema.json",
+  "title": "TERMINATE_RESULT payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["worker_stopped", "pending_actions_dropped"],
+  "properties": {
+    "worker_stopped": { "type": "boolean" },
+    "pending_actions_dropped": { "type": "integer", "minimum": 0, "maximum": 32 }
+  }
+}

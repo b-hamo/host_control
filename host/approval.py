@@ -1,0 +1,298 @@
+"""User approval for sensitive tool calls (spec B-8): a dialog on the Host's own screen.
+
+The Broker asks before artifact_export (Policy REQUIRE_APPROVAL). The question
+goes to the person at the Host, never to the Agent: the Agent cannot answer it,
+and a missing answer is a "no".
+
+    approver = DialogApprover()            # 45 s, inside the 60 s MCP call limit
+    Broker(..., approver=approver)
+
+The dialog shows what the Guest reported (the file's path inside the Sandbox)
+and what the Agent wrote as its reason; both are untrusted and labelled as
+such. One dialog at a time. Windows only; elsewhere every request is denied.
+
+The wait is shorter than the MCP tool call limit (mcp_server.CALL_TIMEOUT_S,
+60 s; Codex's own tool timeout is 60 s too), so the answer always reaches the
+call that asked. If that call is cancelled anyway (timeout, Host exit), the
+open dialog is answered "No" and closed; a late "Yes" can never count.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+import threading
+import time
+
+log = logging.getLogger("host-approval")
+
+APPROVAL_TIMEOUT_S = 45.0          # < mcp_server.CALL_TIMEOUT_S (60 s)
+TITLE = "SCRP 파일 반출 승인"
+RUN_TITLE = "SCRP Sandbox 실행 승인"
+KEEP_TITLE = "SCRP 파일 남기기 확인"
+STOP_TITLE = "SCRP Sandbox 종료 확인"
+DUPLICATE_TITLE = "SCRP 내려받기 확인"
+SHARED_TITLE = "SCRP 공유 폴더 남기기"
+OUTPUT_TITLE = "SCRP Output 최종 보관 승인"
+REVIEW_TITLE = "SCRP 반출 목록 확인"
+MAX_COMMAND_SHOWN = 1500           # the whole command or no approval at all (never cut short)
+MB_YESNO, MB_ICONWARNING, MB_DEFBUTTON2 = 0x4, 0x30, 0x100
+MB_YESNOCANCEL, MB_DEFBUTTON3 = 0x3, 0x200
+MB_SYSTEMMODAL, MB_SETFOREGROUND, MB_TOPMOST = 0x1000, 0x10000, 0x40000
+IDYES, IDNO, IDCANCEL = 6, 7, 2
+WM_COMMAND = 0x0111
+MAX_SHOWN = 200
+
+
+def _clean(text: str, limit: int = MAX_SHOWN) -> str:
+    """Untrusted text in a dialog: one line, printable, bounded."""
+    text = "".join(ch if ch.isprintable() else " " for ch in str(text)).strip()
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def describe_run(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str | None:
+    """sandbox_run: the exact command, in full. None when it cannot be shown in full."""
+    command = "".join(ch if ch.isprintable() else " " for ch in str(summary.get("command", "")))
+    if not command or len(command) > MAX_COMMAND_SHOWN:
+        return None
+    reason = _clean((summary.get("arguments") or {}).get("reason") or "") or "(없음)"
+    return "\n".join([
+        "AI(Codex)가 인터넷에서 받은 파일을 Sandbox 안에서 실행하려고 합니다.",
+        "이 컴퓨터에서는 실행되지 않습니다.", "",
+        f"파일: {_clean(summary.get('file', ''))}",
+        f"받은 주소: {_clean(summary.get('source', ''))}",
+        f"SHA-256: {_clean(summary.get('sha256', ''))}",
+        f"Sandbox 안에서 실행할 명령: {command}",
+        f"AI가 적은 이유 (확인되지 않은 내용): {reason}", "",
+        "허용하면 이 명령 하나만, 이번 한 번 실행합니다.",
+        f"허용할까요? ({timeout_s:.0f}초 안에 답하지 않으면 거부됩니다)"])
+
+
+def describe_keep(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
+    """inbox_finish: files from the Sandbox inbox would stay on this computer (Downloads)."""
+    keep = (summary.get("arguments") or {}).get("keep") or []
+    lines = ["AI(Codex)가 Sandbox에 넣었던 파일을 이 컴퓨터의 다운로드 폴더에 남기려고 합니다.", ""]
+    lines += [f"  {_clean(k)}" for k in keep[:20]]
+    lines += ["", "남긴 파일은 인터넷에서 받은 파일로 표시되어, 실행할 때 Windows가 한 번 더 묻습니다.",
+              "남기지 않은 파일과 받는 폴더의 나머지는 지워집니다.",
+              f"남길까요? (아니요: 아무것도 남기거나 지우지 않음. {timeout_s:.0f}초 안에 답하지 않으면 아니요)"]
+    return "\n".join(lines)
+
+
+def describe_stop(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
+    """session_stop with --agent-guard: the Agent wants to end the Sandbox."""
+    return "\n".join([
+        "AI(Codex)가 Sandbox를 끝내려고 합니다.",
+        f"AI가 고른 이유: {_clean(summary.get('stop_reason', ''))}", "",
+        "끝내면 Sandbox 안의 모든 것이 사라집니다.",
+        f"끝낼까요? (아니요: Sandbox를 계속 열어 둠. {timeout_s:.0f}초 안에 답하지 않으면 아니요)"])
+
+
+def describe_duplicate(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
+    """inbox_download with --agent-guard while a similar file is already in Downloads."""
+    lines = ["AI(Codex)가 인터넷에서 새 파일을 받으려고 합니다.", "",
+             f"받을 주소: {_clean(summary.get('url', ''))}", "",
+             "그런데 다운로드 폴더에 비슷한 파일이 이미 있습니다:"]
+    lines += [f"  {_clean(n)}" for n in (summary.get("similar") or [])[:5]]
+    lines += ["", f"그래도 인터넷에서 새로 받을까요? (아니요: 받지 않음. {timeout_s:.0f}초 안에 답하지 않으면 아니요)"]
+    return "\n".join(lines)
+
+
+def describe_shared(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
+    """--shared at session end: what the Sandbox saved in its shared folder passed the scan; keep it?"""
+    files = summary.get("files") or []
+    total = sum(f.get("size", 0) for f in files)
+    if summary.get("unified_export"):
+        first = "선택한 반출 파일이 SecureArtifactScanner 검사를 통과했습니다. 최종 보관을 승인해 주세요."
+    elif summary.get("before_scan"):
+        first = "Sandbox가 공유 폴더(바탕화면 Shared)에 저장한 파일이 있습니다. Sandbox를 끄는 대로 백신 검사를 합니다."
+    else:
+        first = "Sandbox가 공유 폴더(바탕화면 Shared)에 저장한 파일이 있습니다. 백신 검사는 통과했습니다."
+    lines = [first, ""]
+    if summary.get("planned_destination"):
+        lines += [f"저장 위치: {_clean(summary['planned_destination'], 2000)}", ""]
+    lines += [f"  {_clean(f.get('name', ''))}  ({f.get('size', 0):,} bytes)" for f in files[:15]]
+    if len(files) > 15:
+        lines.append(f"  ... 외 {len(files) - 15}개")
+    lines += [f"  합계 {len(files)}개, {total:,} bytes", "",
+              "이 컴퓨터에 남길까요?",
+              "  예: 다운로드\\SandboxOutput 폴더로 복사 (인터넷에서 받은 파일로 표시, 실행할 때 Windows가 한 번 더 물음)"
+              + (" — 검사를 통과한 경우에만" if summary.get("before_scan") else ""),
+              ("  아니요: 반출하지 않음 (Sandbox의 원본 유지)" if summary.get("preserve_source") else "  아니요: 지움"),
+              f"  취소 또는 {timeout_s:.0f}초 무응답: 지우지 않고 반출 대기 경로에 실행 금지 상태로 보관",
+              f"  ({_clean(summary.get('share', ''))})"]
+    return "\n".join(lines)
+
+
+def describe(summary: dict, timeout_s: float = APPROVAL_TIMEOUT_S) -> str:
+    lines = ["AI(Codex)가 Sandbox 안의 파일을 이 컴퓨터로 반출하려고 합니다.", ""]
+    if summary.get("path"):
+        lines.append(f"파일 (Sandbox가 보고한 경로): {_clean(summary['path'])}")
+    lines.append(f"세션: {_clean(summary.get('session_id', ''))}")
+    reason = _clean((summary.get("arguments") or {}).get("reason") or "") or "(없음)"
+    lines += [f"AI가 적은 이유 (확인되지 않은 내용): {reason}", "",
+              "허용하면 파일을 받아 형식·백신 검사를 하고, 통과한 경우에만 결과 폴더에 저장합니다.",
+              f"허용할까요? ({timeout_s:.0f}초 안에 답하지 않으면 거부됩니다)"]
+    return "\n".join(lines)
+
+
+class DialogApprover:
+    def __init__(self, timeout_s: float = APPROVAL_TIMEOUT_S):
+        self.timeout_s = timeout_s
+        self._lock = asyncio.Lock()
+        self._seq = 0
+
+    async def __call__(self, summary: dict) -> bool:
+        async with self._lock:                      # one question at a time
+            self._seq += 1
+            base, text = self._question(summary)
+            title = f"{base} #{self._seq}"         # unique, so this exact dialog can be closed
+            if text is None:
+                log.warning("APPROVAL %s denied: the command is too long to show in full", summary.get("tool"))
+                return False
+            try:
+                approved = await asyncio.to_thread(self._ask, text, title)
+            except asyncio.CancelledError:
+                log.info("APPROVAL %s cancelled; closing its dialog as \"No\"", title)
+                self._dismiss(title)
+                raise
+        log.info("APPROVAL %s %s: %s", summary.get("tool"), summary.get("session_id"),
+                 "approved" if approved else "denied")
+        return approved
+
+    async def notify_shared(self, result: dict) -> None:
+        """The person said keep before the scan, but the scan did not pass: say it was not kept."""
+        text = "\n".join([
+            "공유 폴더 파일을 남기지 않았습니다. 백신 검사를 통과하지 못했습니다.", "",
+            f"검사 결과: {_clean(str(result.get('scan') or ''))}",
+            f"파일은 이 컴퓨터에서 실행할 수 없는 상태로 남아 있습니다: {_clean(result.get('share') or '')}"])
+        async with self._lock:
+            self._seq += 1
+            await asyncio.to_thread(self._ask_code, text, f"{SHARED_TITLE} #{self._seq}", 0x0)   # MB_OK
+
+    async def notify_output(self, result: dict) -> None:
+        messages = {
+            "EXPORTED": "승인한 Output 파일을 다운로드 폴더에 보관했습니다.",
+            "DELETED": "선택한 Output 수신 임시 사본을 삭제했습니다.",
+            "HELD": "Output 파일의 반출을 보류했습니다. 임시 사본은 실행 금지 경로에 남습니다.",
+            "BLOCKED": "Output 파일의 반출을 차단했습니다. 다운로드 폴더에 공개하지 않았습니다.",
+            "QUARANTINED": "Output 검사를 완료하지 못해 반출을 보류했습니다.",
+            "INCOMPLETE": "종료 전 Output 확보를 완료하지 못했습니다. 확보하지 못한 파일이 있을 수 있습니다.",
+        }
+        if result.get("status") not in messages:
+            return
+        text = "\n".join([messages[result["status"]], "",
+                          f"경로: {_clean(result.get('dest') or result.get('share') or '', 2000)}",
+                          f"결과: {_clean(result.get('scan') or result.get('status'), 1000)}"])
+        async with self._lock:
+            self._seq += 1
+            title = f"SCRP Output 반출 결과 #{self._seq}"
+            try:
+                await asyncio.to_thread(self._ask_code, text, title, 0x0)
+            except asyncio.CancelledError:
+                self._dismiss(title, 1)
+                raise
+
+    async def review_export(self, summary: dict) -> str:
+        """Confirm every selected name before any scan. This is not final approval.
+
+        Lists are paged, never silently shortened. Closing any page holds the
+        entire request. The same cancellable dialog lock is used at both gates.
+        """
+        files = summary.get("files") or []
+        if not files:
+            return "hold"
+        pages = [files[i:i + 10] for i in range(0, len(files), 10)]
+        for number, page in enumerate(pages, 1):
+            lines = ["반출할 파일 목록을 확인해 주세요. 아직 검사하거나 반출하지 않았습니다.",
+                     f"목록 {number}/{len(pages)} — 전체 {len(files)}개", ""]
+            for item in page:
+                name = str(item.get("name", ""))
+                if len(name) > 2000:
+                    return "hold"  # cannot show the selected name in full
+                size = item.get("size")
+                lines.append(f"  {_clean(name, 2000)} ({size:,} bytes)" if isinstance(size, int)
+                             else f"  {_clean(name, 2000)} (크기는 수신 후 확인)")
+            lines += ["", "예: 목록 확인 후 검사 진행. 검사 통과 후 반출 승인을 다시 묻습니다.",
+                      ("아니요: 반출하지 않음 (Sandbox 원본 유지)" if summary.get("preserve_source")
+                       else "아니요: 이 반출 목록의 임시 파일 삭제"),
+                      "취소 또는 무응답: 반출하지 않고 보류"]
+            async with self._lock:
+                self._seq += 1
+                title = f"{REVIEW_TITLE} #{self._seq}"
+                try:
+                    answer = await asyncio.to_thread(self._ask_code, "\n".join(lines), title,
+                                                     MB_YESNOCANCEL | MB_DEFBUTTON3)
+                except asyncio.CancelledError:
+                    self._dismiss(title, IDCANCEL)
+                    raise
+            if answer != IDYES:
+                return "delete" if answer == IDNO else "hold"
+        return "keep"
+
+    async def choose_shared(self, summary: dict) -> str:
+        """Final disposition after scanning; the internal name supports scanner callers."""
+        async with self._lock:
+            self._seq += 1
+            title = f"{OUTPUT_TITLE if summary.get('output_only') else SHARED_TITLE} #{self._seq}"
+            try:
+                answer = await asyncio.to_thread(self._ask_code, describe_shared(summary, self.timeout_s), title,
+                                                 MB_YESNOCANCEL | MB_DEFBUTTON3)
+            except asyncio.CancelledError:
+                self._dismiss(title, IDCANCEL)
+                raise
+        choice = {IDYES: "keep", IDNO: "delete"}.get(answer, "hold")
+        log.info("APPROVAL shared folder %s: %s", summary.get("share"), choice)
+        return choice
+
+    def _question(self, summary: dict) -> tuple[str, str | None]:
+        """(dialog title, text) for this tool; text None = cannot be shown in full, so no."""
+        tool = summary.get("tool")
+        if tool == "sandbox_run":
+            return RUN_TITLE, describe_run(summary, self.timeout_s)
+        if tool == "inbox_finish":
+            return KEEP_TITLE, describe_keep(summary, self.timeout_s)
+        if tool == "session_stop":
+            return STOP_TITLE, describe_stop(summary, self.timeout_s)
+        if tool == "inbox_download":
+            return DUPLICATE_TITLE, describe_duplicate(summary, self.timeout_s)
+        return TITLE, describe(summary, self.timeout_s)
+
+    def _dismiss(self, title: str, button: int = None) -> None:
+        """Press "No" (or button) on the dialog with this title (in the background; it may still be opening)."""
+        button = IDNO if button is None else button
+        if sys.platform != "win32":
+            return
+
+        def press_no() -> None:
+            import ctypes
+            user32 = ctypes.WinDLL("user32")
+            for _ in range(40):                     # up to 2 s for the window to exist
+                hwnd = user32.FindWindowW(None, ctypes.c_wchar_p(title))
+                if hwnd:
+                    user32.PostMessageW(hwnd, WM_COMMAND, button, 0)
+                    return
+                time.sleep(0.05)
+        threading.Thread(target=press_no, name="approval-dismiss", daemon=True).start()
+
+    def _ask(self, text: str, title: str = TITLE) -> bool:
+        return self._ask_code(text, title, MB_YESNO | MB_DEFBUTTON2) == IDYES
+
+    def _ask_code(self, text: str, title: str, buttons: int) -> int:
+        """The button pressed (IDYES, IDNO, IDCANCEL), or 0 without Windows, 32000 on timeout."""
+        if sys.platform != "win32":
+            log.warning("approval dialog needs Windows; no answer")
+            return 0
+        import ctypes
+        user32 = ctypes.WinDLL("user32")
+        flags = buttons | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
+        # MessageBoxTimeoutW: exported by user32 since Windows XP; returns 32000 on timeout.
+        return user32.MessageBoxTimeoutW(None, ctypes.c_wchar_p(text), ctypes.c_wchar_p(title),
+                                         flags, 0, int(self.timeout_s * 1000))
+
+
+async def deny_all(summary: dict) -> bool:
+    """--approval deny: nothing is approved."""
+    log.info("APPROVAL %s denied (approval is set to deny)", summary.get("tool"))
+    return False

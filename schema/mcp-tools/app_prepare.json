@@ -1,0 +1,16 @@
+{
+  "name": "app_prepare",
+  "description": "Before executing a task, decide which applications it actually needs and prepare them in this SAME running session. For plain TXT creation use the existing PowerShell/Router, not an unnecessary editor. Pass app names, not commands or Host paths. Checks known Guest locations first, otherwise finds a registered Host install and copies only that application's files into the session's read-only package, verifies them in the Guest and returns the Guest exe/path/env. Supports notepad, cmd, powershell and the program_share language tools. This does NOT launch the workload. Poll PREPARING with the SAME request_id and apps; launch only when prepared=true, using the returned Guest path and setup. PREPARED proves Guest files, not GUI usability or job success: observe the actual app or obtain the Router receipt. NEEDS_INSTALL/UNSUPPORTED means prepare the requested app using an official installer through inbox_download/inbox_import and the existing Guest installation flow; never install or execute it on the Host. FAILED/UNKNOWN is not permission to retry input or bypass policy. Existing sessions are preserved.",
+  "inputSchema": {
+    "type": "object", "additionalProperties": false,
+    "required": ["request_id", "apps"],
+    "properties": {
+      "request_id": {"type": "string", "minLength": 8, "maxLength": 80, "pattern": "^[A-Za-z0-9_-]+$"},
+      "apps": {"type": "array", "uniqueItems": true, "maxItems": 16,
+        "items": {"type": "string", "minLength": 1, "maxLength": 64}},
+      "wait_ms": {"type": "integer", "minimum": 0, "maximum": 10000, "default": 1000}
+    }
+  },
+  "annotations": {"title": "Prepare task applications in this session", "readOnlyHint": false,
+    "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+}
