@@ -49,7 +49,8 @@ GET만 받는다(그 밖은 405). 시각은 모두 ISO-8601 UTC(`...Z`).
   },
   "host_resources": {"cpu_percent": 64.0, "mem_percent": 72},
   "metrics": {"per_session": "unavailable", "reason": "needs administrator (HCS_E_ACCESS_DENIED)"},
-  "sessions": [ /* 아래 표 */ ]
+  "sessions": [ /* 아래 표 */ ],
+  "exports": [ /* 파일 반출 로그, 아래 표 */ ]
 }
 ```
 
@@ -95,6 +96,31 @@ GET만 받는다(그 밖은 405). 시각은 모두 ISO-8601 UTC(`...Z`).
 | `받은 파일 열기 (이름)` | 그 밖의 받은 파일 |
 | `웹페이지 명령` · `파일 받기` · `결과 반출` · `화면 작업` · `일반 작업` | 받은 파일이 없을 때 마지막 도구로 |
 
+`exports[]` — 파일 반출 로그 (최신이 먼저, 최대 200건, 결과가 정해진 지 24시간이 지난 것은 빠짐):
+
+| 필드 | 예 | 설명 |
+|---|---|---|
+| `artifact_id` | `ART-000017` | 반출 한 건의 ID (Host가 붙임) |
+| `session_id`, `session_label` | `SES-…`, `GUI-01` / `null` | 어느 세션의 파일인지. 세션이 목록에서 빠졌으면 `session_label`은 `null` |
+| `name` | `사진.7z` | 파일 이름 (Guest가 알린 경로의 마지막 부분, 표시용) |
+| `stage` | 아래 표 | 지금 단계 |
+| `code` | `EXPORTED` `BLOCKED` `QUARANTINED` `OUTPUT_FAILED` … / `null` | 결과 코드 (`result.code`) |
+| `scan_code` | `MALWARE_DETECTED` `SCAN_ERROR` `FILE_TOO_LARGE` `CONTENT_CHANGED` … / `null` | 검사기가 막은 이유. 반출된 것은 `null` |
+| `observed_at` | ISO 시각 | Guest가 파일을 알린 시각 |
+| `finished_at` | ISO 시각 / `null` | 결과가 정해진 시각 (Host가 2초 간격으로 기록하므로 최대 2초 늦음). 진행 중이면 `null` |
+| `export_path` | `SandboxOutput\SES-…\ART-000017\사진.7z` / `null` | 반출된 경우만. 다운로드 폴더 기준 상대 경로 |
+
+| `stage` | 뜻 |
+|---|---|
+| `CANDIDATE` `AUTHORIZED` `RECEIVING` `RECEIVED` `STAGED` `SCANNING` | 진행 중 (받는 중, 검사 중) |
+| `EXPORTED` | 검사 통과, 다운로드 폴더에 저장됨 |
+| `BLOCKED` `QUARANTINED` `FAILED` | 막힘 또는 실패 (`code`, `scan_code`로 이유) |
+| `HELD` | 보류 (받은 사본은 남아 있음) |
+| `SUPERSEDED` `CANCELLED` `DELETED` | 같은 파일의 새 사본으로 바뀌었거나, 세션이 끝나 취소되었거나, 지워짐 (화면에서 숨겨도 됨) |
+
+반출 상태는 Host 메모리(`ArtifactBroker`)에만 있으므로, Host가 상태 파일(`hosts/<세션>.json`의 `exports`)에 2초마다 옮겨 적고
+대시보드가 모든 Host의 것을 합친다. Host가 끝난 뒤에도 마지막 목록은 파일에 남는다.
+
 ### `GET /api/runtimes/{id}/screenshot`
 
 `{id}`는 `id`(`SES-…`)나 `label`(`GUI-01`). `image/png`와 `X-Captured-At` 헤더를 돌려준다.
@@ -126,7 +152,7 @@ Host가 끝나면 화면 파일을 지운다(사용자 화면을 남기지 않�
 | 세션별 CPU·메모리 | 관리자 권한으로 실행할 때만 숫자, 아니면 `null` | Windows가 Hyper-V 통계(HCS)를 관리자에게만 준다. 대시보드를 관리자로 띄우는 것은 권하지 않는다 |
 | 스크린샷: Runner 캡처 / `minobox screenshot` | Host가 저장한 마지막 관찰 화면 (두 런타임 같음) | 대시보드가 Runner·VM에 직접 붙으면 Host를 거치지 않는 두 번째 제어 경로가 생긴다 |
 | 라이브 썸네일 1~3초 | `captured_at`이 바뀔 때만 | 위와 같음 |
-| 추가 | `label`, `display_state`, `task`, `last_activity`, `ended_at`, `host_alive`, `screenshot`, `metrics` | |
+| 추가 | `label`, `display_state`, `task`, `last_activity`, `ended_at`, `host_alive`, `screenshot`, `metrics`, `exports`(반출 로그, 프론트 `ExportEntry` 형식) | |
 
 ## 보안
 
