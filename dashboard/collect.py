@@ -27,6 +27,10 @@ UP = ("STARTED", "RUNNING", "RESTARTING")
 WSB, MICRO = "WINDOWS_SANDBOX", "MICRO_VM_APP_WINDOW"
 KEEP_ENDED_S = 600          # an ended session stays on the board this long
 VM_MAX = 8                  # sandbox_manager MicroVmManager max_active default
+EXPORT_KEEP_S = 24 * 3600   # a decided export stays in the log this long
+EXPORTS_MAX = 200
+EXPORT_FIELDS = ("artifact_id", "session_id", "name", "stage", "code", "scan_code", "observed_at", "finished_at",
+                 "export_path")
 
 EXECUTABLE = {".exe", ".msi", ".msix", ".appx", ".com", ".scr"}
 SCRIPT = {".ps1", ".bat", ".cmd", ".vbs", ".js", ".jse", ".wsf", ".hta", ".py", ".rb", ".sh", ".pl", ".php"}
@@ -352,7 +356,24 @@ class Collector:
             "metrics": {"per_session": "hcs" if self.vm_meter.reason is None else "unavailable",
                         "reason": self.vm_meter.reason},
             "sessions": sessions,
+            "exports": self._exports(hosts, {s["id"]: s["label"] for s in sessions}, now),
         }
+
+    def _exports(self, hosts: dict[str, dict], labels: dict[str, str], now: float) -> list[dict]:
+        """File exports every Host reported, newest first; decided ones older than EXPORT_KEEP_S drop off."""
+        rows = []
+        for h in hosts.values():
+            for e in h.get("exports") or []:
+                if not isinstance(e, dict) or not isinstance(e.get("artifact_id"), str):
+                    continue
+                when = _ts(e.get("finished_at")) or _ts(e.get("observed_at"))
+                if e.get("finished_at") and when is not None and now - when > EXPORT_KEEP_S:
+                    continue
+                row = {k: e.get(k) for k in EXPORT_FIELDS}
+                row["session_label"] = labels.get(row["session_id"])
+                rows.append((when or 0.0, row))
+        rows.sort(key=lambda r: (r[0], r[1]["artifact_id"]), reverse=True)
+        return [r for _, r in rows[:EXPORTS_MAX]]
 
     def screenshot(self, session_id: str) -> Path | None:
         """The last screen the Agent saw in that session, if its Host left one."""

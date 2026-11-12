@@ -91,7 +91,7 @@ def board(tmp_path):
 def test_the_overview_follows_the_frontend_contract(board):
     c, _ = board
     o = c.overview()
-    assert set(o) == {"updated_at", "runtimes", "host_resources", "metrics", "sessions"}
+    assert set(o) == {"updated_at", "runtimes", "host_resources", "metrics", "sessions", "exports"}
     assert o["runtimes"]["windows_sandbox"] == {"running": 1, "state": "RUNNING", "window_state": "OPEN"}
     assert o["runtimes"]["micro_vm"] == {"running": 2, "max": 6, "starting": 1, "failed": 0, "free_slots": 3}
     assert o["host_resources"] == {"cpu_percent": 64.0, "mem_percent": 72}
@@ -273,6 +273,7 @@ def test_a_real_host_writes_its_status_for_the_dashboard(tmp_path):
     sid, during, image_during = asyncio.run(asyncio.wait_for(body(), 90))
     assert during["task"] == "화면 보기" and during["last_tool"] == "computer_observe" and during["last_ok"] is True
     assert image_during and during["screen_captured_at"]
+    assert during["exports"] == []                     # no --artifact-export: nothing listed, nothing breaks
     after = json.loads((dash / "hosts" / f"{sid}.json").read_text(encoding="utf-8"))
     assert after["ended_at"] and not (dash / "hosts" / f"{sid}.png").exists()
 
@@ -282,3 +283,108 @@ def test_the_solution_turns_the_dashboard_status_on(tmp_path):
     from host.dashboard_status import default_dir
     args = solution.host_arguments(tmp_path / "r.exe", tmp_path / "w", tmp_path / "s")
     assert args[args.index("--dashboard-dir") + 1] == str(default_dir())
+
+
+# --------------------------------------------------------------------- file exports (frontend ExportEntry)
+def artifact(aid, path, stage, result=None, export_path=None, sid="SES-wsb"):
+    from host.artifacts import Artifact
+    return Artifact(aid, (sid, "RT-1", 1), "ev-" + aid, path, at(60), {}, stage=stage, result=result,
+                    export_path=export_path)
+
+
+def test_an_export_row_names_the_file_and_the_scanner_code(tmp_path, monkeypatch):
+    from host.dashboard_status import export_row
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    published = tmp_path / "Downloads" / "SandboxOutput" / "SES-wsb" / "ART-000002" / "사진.7z"
+    ok = export_row(None, artifact("ART-000002", r"Output\photos\사진.7z", "EXPORTED",
+                                   {"code": "EXPORTED", "detail": "no threats", "engine": "defender-service"}, published))
+    assert ok == {"artifact_id": "ART-000002", "session_id": "SES-wsb", "name": "사진.7z", "stage": "EXPORTED",
+                  "code": "EXPORTED", "scan_code": None, "observed_at": at(60),
+                  "export_path": r"SandboxOutput\SES-wsb\ART-000002\사진.7z"}
+    blocked = export_row(None, artifact("ART-000003", "Output/run_me.ps1", "BLOCKED",
+                                        {"code": "BLOCKED", "detail": "MALWARE_DETECTED: Trojan:Win32/X"}))
+    assert (blocked["name"], blocked["code"], blocked["scan_code"], blocked["export_path"]) == \
+        ("run_me.ps1", "BLOCKED", "MALWARE_DETECTED", None)
+    direct = export_row(None, artifact("ART-000004", "big.zip", "BLOCKED", {"code": "FILE_TOO_LARGE", "detail": "x"}))
+    assert direct["scan_code"] == "FILE_TOO_LARGE"
+    failed = export_row(None, artifact("ART-000005", "a.txt", "FAILED", {"code": "UPLOAD_FAILED", "detail": "retry"}))
+    assert failed["scan_code"] is None
+
+
+def test_the_host_stamps_when_an_export_was_decided(tmp_path):
+    rows = [{"artifact_id": "ART-000001", "session_id": "SES-1", "name": "a.txt", "stage": "SCANNING"}]
+    s = DashboardStatus(tmp_path, "SES-1", exports=lambda: rows, refresh_s=0.05)
+    time.sleep(0.2)
+    read = lambda: json.loads((tmp_path / "hosts" / "SES-1.json").read_text(encoding="utf-8"))["exports"]  # noqa: E731
+    assert read()[0]["finished_at"] is None
+    rows[0] = dict(rows[0], stage="EXPORTED")
+    time.sleep(0.2)
+    first = read()[0]["finished_at"]
+    assert first
+    time.sleep(0.2)
+    assert read()[0]["finished_at"] == first                    # stamped once, not on every refresh
+    s.close()
+
+
+def test_the_overview_lists_exports_newest_first_with_labels(board, tmp_path):
+    c, clock = board
+    hosts = tmp_path / "dashboard" / "hosts"
+    status = json.loads((hosts / "SES-wsb.json").read_text(encoding="utf-8"))
+    status["exports"] = [
+        {"artifact_id": "ART-000001", "session_id": "SES-wsb", "name": "old.txt", "stage": "EXPORTED",
+         "code": "EXPORTED", "scan_code": None, "observed_at": at(90000), "finished_at": at(90000), "export_path": "x"},
+        {"artifact_id": "ART-000002", "session_id": "SES-wsb", "name": "사진.7z", "stage": "EXPORTED",
+         "code": "EXPORTED", "scan_code": None, "observed_at": at(40), "finished_at": at(30), "export_path": "y"},
+        {"artifact_id": "ART-000003", "session_id": "SES-wsb", "name": "run_me.ps1", "stage": "BLOCKED",
+         "code": "BLOCKED", "scan_code": "MALWARE_DETECTED", "observed_at": at(20), "finished_at": at(10),
+         "export_path": None},
+        {"artifact_id": "ART-000004", "session_id": "SES-gone", "name": "b.log", "stage": "SCANNING",
+         "code": None, "scan_code": None, "observed_at": at(5), "finished_at": None, "export_path": None},
+    ]
+    (hosts / "SES-wsb.json").write_text(json.dumps(status), encoding="utf-8")
+    ex = c.overview()["exports"]
+    assert [e["artifact_id"] for e in ex] == ["ART-000004", "ART-000003", "ART-000002"]   # day-old one dropped
+    assert ex[1] == {"artifact_id": "ART-000003", "session_id": "SES-wsb", "session_label": "GUI-01",
+                     "name": "run_me.ps1", "stage": "BLOCKED", "code": "BLOCKED", "scan_code": "MALWARE_DETECTED",
+                     "observed_at": at(20), "finished_at": at(10), "export_path": None}
+    assert ex[0]["session_label"] is None                       # session already off the board
+
+
+def test_a_real_host_lists_its_exports_for_the_dashboard(tmp_path):
+    """--dashboard-dir with --artifact-export: a clean file and a detected one, read off the Host's own broker."""
+    from host.artifact_scan import Verdict
+    from test_artifact_export import HANGUL_TXT, TEXT, Approver, Host, Scanner, candidate_id
+
+    class TwoWay(Scanner):
+        def scan(self, data, content_name):
+            self.scanned.append(data)
+            return (Verdict(False, "MALWARE_DETECTED", "fake detection", "fake") if b"EVIL" in data
+                    else Verdict(True, "PASSED", "fake scanner: clean", "fake"))
+
+    dash = tmp_path / "dash"
+
+    async def body():
+        host = Host(tmp_path, approver=Approver(), scanner=TwoWay(), dashboard_dir=dash)
+        r, serving = await host.start()
+        await r.report(HANGUL_TXT, TEXT)
+        await r.report("run_me.txt", b"EVIL")
+        lst = await host.call("artifact_list", {})
+        good, bad = candidate_id(lst, HANGUL_TXT), candidate_id(lst, "run_me.txt")
+        for aid in (good, bad):
+            await host.call("artifact_export", {"artifact_id": aid})
+            await host.wait_artifact(aid)
+        status = dash / "hosts" / "SES-ART-001.json"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:                      # the Host's refresh thread runs every 2 s
+            rows = {e["artifact_id"]: e for e in json.loads(status.read_text(encoding="utf-8"))["exports"]}
+            if all(rows.get(a, {}).get("finished_at") for a in (good, bad)):
+                break
+            await asyncio.sleep(0.3)
+        await host.close(serving)
+        return good, bad, rows
+
+    good, bad, rows = asyncio.run(asyncio.wait_for(body(), 60))
+    assert rows[good]["name"] == "결과.txt" and rows[good]["stage"] == "EXPORTED" and rows[good]["code"] == "EXPORTED"
+    assert rows[good]["session_id"] == "SES-ART-001" and rows[good]["export_path"] and rows[good]["finished_at"]
+    assert rows[bad]["stage"] == "BLOCKED" and rows[bad]["scan_code"] == "MALWARE_DETECTED"
+    assert rows[bad]["export_path"] is None and rows[bad]["finished_at"]
