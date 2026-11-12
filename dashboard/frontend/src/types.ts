@@ -83,6 +83,11 @@ export interface Overview {
 // UI 상태색
 export type Status = 'ok' | 'warn' | 'danger' | 'muted'
 
+// 끝난 세션. 백엔드는 끝난 뒤 10분(KEEP_ENDED_S) 동안 계속 보내 준다.
+export function isEnded(ds: DisplayState): boolean {
+  return ds === 'TERMINATED' || ds === 'FAILED' || ds === 'VIOLATION'
+}
+
 export function statusOf(ds: DisplayState): Status {
   switch (ds) {
     case 'RUNNING':

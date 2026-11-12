@@ -1,5 +1,5 @@
 import type { Overview, Session } from '../types'
-import { statusOf } from '../types'
+import { isEnded, statusOf } from '../types'
 import { formatMem, formatPct, formatElapsed } from '../utils'
 import { screenshotUrl } from '../api/client'
 import { ScreenCapture } from './ScreenCapture'
@@ -29,7 +29,7 @@ function Thumb({ s, selected, onSelect }: { s: Session; selected: boolean; onSel
   return (
     <div className={`thumb${selected ? ' on' : ''}`} onClick={onSelect}>
       {selected && <span className="thumb-badge">보는 중</span>}
-      <ScreenCapture url={screenshotUrl(s.label, s.screenshot)} name={s.label} status={tone} />
+      <ScreenCapture url={screenshotUrl(s.id, s.screenshot)} name={s.label} status={tone} />
       <div className="thumb-foot">
         <span className={selected ? 'sel-id' : undefined}>{s.label}</span>
         <span className={`s-${tone}`}>{s.display_state}</span>
@@ -47,12 +47,15 @@ export function LiveViewTab({
   selectedId: string | null
   onSelect: (id: string) => void
 }) {
-  const sandbox = data.sessions.filter((s) => s.runtime === 'windows_sandbox')
-  const vms = data.sessions.filter((s) => s.runtime === 'micro_vm')
-  const selected = data.sessions.find((s) => s.id === selectedId) ?? data.sessions[0]
+  // 라이브 뷰는 지금 떠 있는 세션만 보여 준다. 끝난 세션은 리소스·세션 탭의 표에만 남는다.
+  const live = data.sessions.filter((s) => !isEnded(s.display_state))
+  const sandbox = live.filter((s) => s.runtime === 'windows_sandbox')
+  const vms = live.filter((s) => s.runtime === 'micro_vm')
+  const selected =
+    live.find((s) => s.id === selectedId) ?? live.find((s) => s.display_state === 'RUNNING') ?? live[0]
 
-  if (data.sessions.length === 0) {
-    return <div className="panel live-empty">격리 세션이 없어요. 작업이 시작되면 여기에 나타납니다.</div>
+  if (live.length === 0) {
+    return <div className="panel live-empty">실행 중인 격리 세션이 없어요. 작업이 시작되면 여기에 나타납니다.</div>
   }
 
   const detail: DetailFields | null = selected
@@ -94,7 +97,7 @@ export function LiveViewTab({
         <div className="monitor-box">
           {selected && (
             <ScreenCapture
-              url={screenshotUrl(selected.label, selected.screenshot)}
+              url={screenshotUrl(selected.id, selected.screenshot)}
               name={selected.label}
               status={statusOf(selected.display_state)}
               big

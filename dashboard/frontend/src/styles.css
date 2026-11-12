@@ -87,7 +87,7 @@ html,body{margin:0;height:100%;}
 .side-divider{height:1px;background:var(--divider);margin:14px 0;}
 .vm-list{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;overflow-y:auto;}
 .live-main{min-width:0;display:flex;flex-direction:column;min-height:0;}
-.monitor-box{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;}
+.monitor-box{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;container-type:size;}
 .detail-col{min-width:0;display:flex;flex-direction:column;min-height:0;}
 .thumb{position:relative;cursor:pointer;border:1.5px solid var(--thumbbd);border-radius:8px;overflow:hidden;background:var(--thumbbg);margin-bottom:8px;opacity:.78;transition:opacity .12s ease, box-shadow .12s ease, border-color .12s ease;}
 .thumb:last-child{margin-bottom:0;}
@@ -100,8 +100,10 @@ html,body{margin:0;height:100%;}
 
 /* 화면 캡처 (두 테마 공통 다크) */
 .scr{position:relative;background:#0d0f12;aspect-ratio:16/9;overflow:hidden;}
-.scr.monitor{height:100%;width:auto;max-width:100%;border-radius:8px;border:1px solid var(--border);}
+/* 큰 모니터: 상자 안에 들어가는 가장 큰 크기, 비율은 실제 캡처(--ar, 없으면 16:9) */
+.scr.monitor{--ar:1.7778;aspect-ratio:var(--ar);width:min(100cqw, calc(100cqh * var(--ar)));height:auto;border-radius:8px;border:1px solid var(--border);}
 .scr-img{width:100%;height:100%;object-fit:cover;display:block;}
+.scr.monitor .scr-img{object-fit:contain;}
 .scr-win{position:absolute;left:16%;top:15%;width:56%;height:54%;background:#2b3038;border:1px solid #3a404a;border-radius:3px;}
 .scr-task{position:absolute;left:0;right:0;bottom:0;height:10%;background:#20242a;}
 .scr-ov{position:absolute;left:10px;top:9px;z-index:2;display:flex;align-items:center;gap:7px;font-size:13px;color:#e8e8e5;font-family:var(--font-mono);}
@@ -124,7 +126,7 @@ html,body{margin:0;height:100%;}
   .app{overflow:auto;height:auto;min-height:100%;}
   .grid-2,.grid-res{grid-template-columns:1fr;}
   .live-panel{grid-template-columns:1fr;}
-  .monitor-box{min-height:200px;}
+  .monitor-box{min-height:200px;container-type:normal;}
   .scr.monitor{height:auto;width:100%;}
   .vm-list{max-height:260px;}
 }
