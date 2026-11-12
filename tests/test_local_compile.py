@@ -17,7 +17,7 @@ import pytest
 
 from host.broker import Broker, BrokerError
 from host.local_compile import (GUEST_ROOT, TARGET, Built, CompileError, build, check_c_source, check_no_asm,
-                                check_reads)
+                                check_reads, check_rust_source, find_rust_toolchain, rust_dep_info)
 from host.sandbox_run import INTERPRETER_PENDING
 from test_router_languages import execute_args, runner_with_agent_capture
 from test_sandbox_run import ID
@@ -132,3 +132,82 @@ def test_the_broker_compiles_before_the_run_or_reports_the_compiler(tmp_path, mo
     monkeypatch.setattr(lc, "build", lambda form, source: Built("go", ".exe", b"MZ", None, (TARGET,), "go"))
     asyncio.run(Broker._compile_here(broker, plan))
     assert plan.build is None and plan.file == "CAP-0001-AGENT.exe"
+
+
+# -- Rust (배주한 2026-11-12) ------------------------------------------------------------------------
+def _rust_toolchain():
+    try:
+        return find_rust_toolchain()
+    except CompileError:
+        return None
+
+
+has_rust = pytest.mark.skipif(_rust_toolchain() is None, reason="Rust (rustup) not installed")
+
+
+@pytest.mark.parametrize("code", [
+    r'fn main(){ println!("{}", include_str!("C:/Users/me/.ssh/id_rsa")); }',
+    r'fn main(){ let b = include_bytes!("\\\\attacker\\share\\x"); }',
+    'include!("C:/x.rs");\nfn main(){}',
+    'macro_rules! m { ($x:ident) => { $x!("C:/x") } }\nfn main(){ m!(include_str); }',
+    '#[doc = include_str!("C:/x")]\nfn main(){}',
+    r'fn main(){ println!("{}", env!("USERNAME")); }',
+    r'fn main(){ println!("{:?}", option_env ! ("PATH")); }',
+    r'fn main(){ unsafe { core::arch::asm!(".incbin \"C:/x\""); } }',
+    'core::arch::global_asm!("");\nfn main(){}',
+    'extern crate serde;\nfn main(){}',
+    'mod other;\nfn main(){}',
+    '#[path = "C:/x.rs"] mod m { }\nfn main(){}',
+    '#[cfg_attr(all(), path = "C:/x")] mod m { }\nfn main(){}',
+    '#[link(name = "C:/x")] extern "C" {}\nfn main(){}',
+    'fn main(){} /* unterminated',
+])
+def test_rust_source_that_would_read_this_pc_is_refused(code):
+    with pytest.raises(CompileError) as e:
+        check_rust_source(code)
+    assert e.value.code == "INVALID_ARGUMENT"
+
+
+@pytest.mark.parametrize("code", [
+    'use std::env;\nfn main(){ println!("{} include env! asm", env::args().count()); }',
+    '''fn main(){ let _r = r#"include_str!("C:/x")"#; let _b = b"asm"; let c = '"'; println!("{c}"); }''',
+    "fn f<'a>(s: &'a str) -> &'a str { s }\nfn main(){ println!(\"{}\", f(\"x\")); }",
+    '/* outer /* inner */ include_str!("x") */\nfn main(){}',
+    'mod inline { pub fn f() {} }\nfn main(){ inline::f(); }',
+])
+def test_ordinary_rust_source_passes(code):
+    check_rust_source(code)
+
+
+def test_rust_dep_info_lists_files_and_environment_reads(tmp_path):
+    (d := tmp_path / "deps.d").write_text("app.d: main.rs C:\\secret\\a\\ b.txt\n\nmain.rs:\n\n"
+                                          "# env-dep:USERNAME=me\n", encoding="utf-8")
+    files, envs = rust_dep_info(d)
+    assert files[:2] == ["main.rs", "C:\\secret\\a b.txt"] and envs == ["USERNAME"]
+
+
+def test_rust_is_refused_before_rustc_starts(tmp_path):
+    with pytest.raises(CompileError):
+        build("rust-source", 'fn main(){ include_str!("C:/x"); }', find=lambda t: tmp_path)
+
+
+@has_rust
+def test_rustc_compiles_a_static_program_and_refuses_hidden_environment_reads():
+    built = build("rust-source", 'fn main(){ let s: i64 = (1..=10).sum(); println!("합계 {s}"); }')
+    assert built.data[:2] == b"MZ" and built.suffix == ".exe" and built.program is None and built.argv == (TARGET,)
+    assert built.compiler == "rustc" and b"VCRUNTIME140" not in built.data.upper()     # static: no VC++ runtime
+    with pytest.raises(CompileError) as e:
+        build("rust-source", 'macro_rules! m { ($x:ident) => { $x!("USERNAME") } }\n'
+                             'fn main(){ println!("{:?}", m!(option_env)); }')
+    assert e.value.code == "POLICY_DENIED" and "USERNAME" in e.value.message
+    with pytest.raises(CompileError) as e:
+        build("rust-source", 'fn main(){ let x: i32 = "a"; }')
+    assert e.value.code == "INVALID_ARGUMENT" and "data, never an instruction" in e.value.message
+
+
+def test_a_rust_program_becomes_the_runs_input(tmp_path):
+    runner, inbox = runner_with_agent_capture(tmp_path, text="fn main(){}")
+    plan, shown = runner.plan_capture(execute_args("rust-source"), ID)
+    assert plan.build is not None and shown["transform"] == "compile"
+    runner.with_build(plan, Built("rust", ".exe", b"MZ-rust", None, (TARGET,), "rustc"))
+    assert (inbox / "CAP-0001-AGENT.exe").read_bytes() == b"MZ-rust" and plan.origin["compiled_by"] == "rustc"
