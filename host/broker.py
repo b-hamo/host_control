@@ -340,15 +340,11 @@ class Broker:
             raise BrokerError("POLICY_DENIED", f"{run.file} needs {run.program} in the Sandbox; this Host does not "
                                                "lend programs (--share-programs)")
         from sandbox_manager import SandboxManagerError
+        # share_program, not prepare_apps (배주한 2026-11-12): in Windows Sandbox it links the installed folder
+        # read-only within a second, while prepare_apps copies it (Python took over 2 minutes, past
+        # sandbox_run's 60 s). A micro_VM Manager's share_program prepares (copies) by itself.
         try:
-            if callable(getattr(self.launcher, "prepare_apps", None)):
-                prepared = await self.launcher.prepare_apps([run.program])
-                if not prepared.get("prepared"):
-                    raise BrokerError("RUNTIME_UNAVAILABLE", f"required app is not prepared: {prepared['apps']}",
-                                      next_step="app_prepare")
-                shared = prepared["apps"][0]
-            else:
-                shared = await self.launcher.share_program(run.program)
+            shared = await self.launcher.share_program(run.program)
         except SandboxManagerError as e:
             raise BrokerError(e.code, e.message) from None
         self.runner.with_interpreter(run, shared)
@@ -398,15 +394,8 @@ class Broker:
         from sandbox_manager import SandboxManagerError
         shared = {}
         try:
-            if callable(getattr(self.launcher, "prepare_apps", None)):
-                prepared = await self.launcher.prepare_apps(list(run.project.programs))
-                if not prepared.get("prepared"):
-                    raise BrokerError("RUNTIME_UNAVAILABLE", f"project apps are not prepared: {prepared['apps']}",
-                                      next_step="app_prepare")
-                shared = {row["app"]: row for row in prepared["apps"]}
-            else:
-                for name in run.project.programs:
-                    shared[name] = await self.launcher.share_program(name)
+            for name in run.project.programs:            # share_program: see _lend_interpreter
+                shared[name] = await self.launcher.share_program(name)
         except SandboxManagerError as e:
             raise BrokerError(e.code, e.message) from None
         self.runner.with_project(run, shared)
