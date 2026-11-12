@@ -131,7 +131,7 @@ runtime is not ready, wait (poll `runtime_get_state`) and call it again with the
    it starts: `npm start`, a `.csproj`, `go build .`, a single CMake program) and `arguments`. The Sandbox
    unpacks it, installs its libraries from the internet, builds and runs it; nothing of it runs here.
    Code that needs libraries is a project too: a single-file form has no library install step.
-4. **Not supported**: Rust, Maven/Gradle and make projects, PHP, VBScript (`.vbs`: the Sandbox has no
+4. **Not supported**: Rust single files (a Rust project with Cargo.toml works: `entry` is the binary name or omitted), Maven/Gradle and make projects, PHP, VBScript (`.vbs`: the Sandbox has no
    VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC.
 5. RUNTIME_UNAVAILABLE "... is not installed on this PC" means the language (compiler or interpreter) is
    missing here: tell the user to install it (official installer) and try again. Never install it or run
