@@ -115,10 +115,10 @@ runtime is not ready, wait (poll `runtime_get_state`) and call it again with the
    `router_execute` with its `source_id`, a new `request_id` and the `form` for the language:
    - `python-script`, `javascript-script` (Node.js), `ruby-script`, `sh-script`, `powershell-script`:
      run unchanged in the Sandbox with the interpreter this PC lends it.
-   - `c-source`, `cpp-source`, `go-source`, `zig-source`, `java-source`, `csharp-source`: this PC only
+   - `c-source`, `cpp-source`, `go-source`, `zig-source`, `java-source`, `csharp-source`, `rust-source`: this PC only
      compiles it (it never runs here) and the program runs in the Sandbox. The Host refuses code that
      would read other files here (absolute or `..` includes, `#embed`, inline assembly, `@cImport`,
-     `#:package`); report that refusal, do not rewrite the code to get around it.
+     `#:package`, Rust `include_str!`/`env!`/`mod x;`/`extern crate`); report that refusal, do not rewrite the code to get around it.
    - A compiler error comes back as INVALID_ARGUMENT with the compiler's message: report it.
 2. **A code file to download, or one in Downloads** (`.py`, `.js`, `.rb`, `.sh`, `.ps1`, `.exe`, `.msi`):
    `inbox_download` (official URL) or `inbox_import` (by name), then `sandbox_run` with `file` exactly as
@@ -127,11 +127,12 @@ runtime is not ready, wait (poll `runtime_get_state`) and call it again with the
    `import requests`, `require('lodash')`, a Go module or a NuGet/gem package): get it as one zip, e.g.
    `inbox_download` of `https://github.com/<owner>/<repo>/archive/refs/heads/<branch>.zip`, then
    `sandbox_run` with that zip as `file`, the file to run as `entry` (relative to the project root, e.g.
-   `app/main.py`, `cli.js`, `src/Main.java`; for Go the package folder; omit it when the project says how
-   it starts: `npm start`, a `.csproj`, `go build .`, a single CMake program) and `arguments`. The Sandbox
+   `app/main.py`, `cli.js`, `src/Main.java`; for Go the package folder; for a Rust project with Cargo.toml
+   the binary name; omit it when the project says how it starts: `npm start`, a `.csproj`, `go build .`,
+   a single CMake program, one Cargo binary) and `arguments`. The Sandbox
    unpacks it, installs its libraries from the internet, builds and runs it; nothing of it runs here.
    Code that needs libraries is a project too: a single-file form has no library install step.
-4. **Not supported**: Rust, Maven/Gradle and make projects, PHP, VBScript (`.vbs`: the Sandbox has no
+4. **Not supported**: Maven/Gradle and make projects, PHP, VBScript (`.vbs`: the Sandbox has no
    VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC.
 5. RUNTIME_UNAVAILABLE "... is not installed on this PC" means the language (compiler or interpreter) is
    missing here: tell the user to install it (official installer) and try again. Never install it or run

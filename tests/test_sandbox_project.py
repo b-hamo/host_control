@@ -36,14 +36,15 @@ def make_zip(tmp_path, files, name="proj-main.zip", top="proj-main/"):
     ({"CMakeLists.txt": "", "src/main.cpp": ""}, None, "cmake", "CMakeLists.txt"),
     ({"Gemfile": "", "bin/main.rb": ""}, "bin/main.rb", "ruby", "Gemfile"),
     ({"requirements.txt": "", "app/main.py": ""}, "app/main.py", "python", "requirements.txt"),
-    ({"src/Main.java": ""}, "src/Main.java", "java", None)])
+    ({"src/Main.java": ""}, "src/Main.java", "java", None),
+    ({"Cargo.toml": "", "build.rs": "", "src/main.rs": ""}, None, "rust", "Cargo.toml")])
 def test_the_recipe_comes_from_the_projects_marker_files(tmp_path, files, entry, kind, marker):
     p = inspect(make_zip(tmp_path, files), entry, [])
     assert (p.kind, p.marker, p.root) == (kind, marker, "proj-main")
 
 
 @pytest.mark.parametrize("files, entry", [
-    ({"Cargo.toml": "", "src/main.rs": ""}, None),            # Rust: not installed
+    ({"Cargo.toml": "", "src/main.rs": ""}, "src/main.rs"),   # Rust: entry is a binary name, not a file
     ({"Makefile": "", "main.c": ""}, None),                   # make: not installed
     ({"README.md": ""}, None),                                # nothing known
     ({"requirements.txt": "", "main.py": ""}, None),          # python needs an entry
@@ -114,3 +115,19 @@ def test_the_broker_lends_every_tool_or_refuses(tmp_path):
     broker = SimpleNamespace(programs=True, runner=runner, launcher=Launcher())
     asyncio.run(Broker._prepare_project(broker, run))
     assert Launcher.asked == ["go"] and run.project is None
+
+
+def test_a_rust_project_fetches_rust_inside_the_sandbox_and_lends_nothing(tmp_path):
+    """배주한 2026-11-12 (가): this PC's Rust (MSVC) cannot be lent, so the Sandbox fetches rustup (GNU)
+    with its .sha256 into its own TEMP, then cargo builds and runs there (build.rs runs only there)."""
+    p = inspect(make_zip(tmp_path, {"Cargo.toml": "", "src/main.rs": ""}), "demo", ["a b"])
+    assert (p.kind, p.programs, p.entry) == ("rust", (), "demo")
+    text = script(p, "proj-main.zip", "ab" * 32, "n1", {})
+    order = ["'download rustup'", "'download rustup checksum'", "'check rustup checksum' '#sha256'",
+             "'install Rust (GNU, minimal)'", "'cargo build --release'", "'run cargo --bin demo'"]
+    at = [text.index(o) for o in order]
+    assert at == sorted(at)
+    assert "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe" in text
+    assert "--default-host x86_64-pc-windows-gnu" in text and "--profile minimal" in text
+    assert "%TEMP%\\rustup" in text and "%TEMP%\\cargo" in text      # never this PC's ~/.rustup
+    assert 'run --release --quiet --bin demo -- "a b"' in text
