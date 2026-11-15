@@ -193,7 +193,8 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 |---|---|
 | `tests/test_auth.py` | TLS, token(없음·틀림·만료·재사용·다른 세션), nonce 재사용, 로그에 token 노출 |
 | `tests/test_heartbeat_reconnect.py` | Health 전이, 재접속 token, 연결 교체, 끊긴 Action 재동기화 |
-| `tests/test_startup.py` | 정상 승격, 고장 Runner 거부, 시간 초과, 시계 오차 |
+| `tests/test_startup.py` | 정상 승격, 창 제목 포함/생략 Runner의 READY 호환성, 고장 Runner 거부, 시간 초과, 시계 오차 |
+| `tests/test_state_result.py` | 실제 Runner 상태 응답의 선택 창 제목·한글·길이 경계·자료형, 미등록 속성 거부 |
 | `tests/test_broker.py` | 검사별 거부, 정책, 빈도 제한, 감사 로그 마스킹, 도구 규격 ↔ 프로토콜 교차 검사 |
 | `tests/test_mcp_server.py` | 실제 자식 프로세스로 기동, 도구 목록 속도, Codex → Runner 전 구간, 스크린샷이 MCP image로 전달 |
 | `tests/test_single_host.py` | 이전 HostBackend 진입점도 다른 Host·부모 프로세스·VM을 종료하거나 회수하지 않음 |
@@ -208,6 +209,8 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 | `tests/test_signature_check.py` | 서명 판정(스크립트·인터프리터·Microsoft 권장 차단 목록·원격 제어 도구 제외, 무효·폐기·확인 불가·사용자 루트 거부, 시간 초과, 기본은 공인 서명이면 통과·`--trusted-publishers`로 좁힘), 실제 Windows: Microsoft 서명 프로그램 통과, 이름 바꾼 python 거부, 서명 뒤·표 안 덧붙임 거부, `--signed-downloads`로 신뢰된 것만 다운로드 폴더에 |
 | `tests/test_exec_guard.py` | 받아서 바로 실행 차단, 다운로드·inbox·인터넷 표시 파일 실행·복사·압축 풀기 차단과 서명 통과 exe 허용, 읽기만 하는 명령 허용, 읽어서 iex로 넘기면 차단, hook·설정·Defender 보호, Codex·Claude Code 입력 형식과 차단 출력, 판단 못 하면 차단, 설치가 기존 hook을 지키고 다시 돌려도 하나만 |
 | `tests/test_dashboard.py` | 대시보드 overview가 프론트 계약대로(세션 상태·VIOLATION·risk_type·Host가 알려 준 root·micro VM 상한), VM CPU 계산과 관리자 아님, 서버 토큰·Host 헤더·읽기 전용·경로 탈출, Host 상태 파일에 글자·URL 쿼리가 안 남음, 실제 MCP Host가 상태와 화면을 남기고 끝나면 지움, 통합 설치가 켬, 반출 로그(파일 이름·검사 코드·결정 시각, 실제 Host 반출 2건) |
+| `tests/test_dashboard_liveness.py` | 오래된 RUNNING 제외, PID 생성 시각 검증, 실제 Sandbox·VM ID 대조, 조회 실패 미확인 처리, 중복 VM 집계 방지, Manager 파일 불변 |
+| `tests/test_export_history.py` | 기존 Host 차단 영수증의 메타데이터 읽기, 세션별 중복 제거, 보존 기간, Windows 225/226과 일반 검사 오류 구분 |
 | `tests/test_scanner_client.py` | `scanner_client.py`를 스크립트형 가짜 파이프 서버로: 다른 요청·다른 Job의 응답, 끊김·무응답, 서비스 없음, 이벤트 루프 비차단, 종료 전 ABORT 완료 |
 | `tests/test_scanner_security.py` | `defender-service`의 공격·장애: 업로드 중단, 파이프 단절, 한도·용량, 승인 없음, 다른 세션·세대, 공개 중 취소·실패, 공개 파일 ACL, 링크, Host 종료 |
 | `tests/test_scanner_integration.py` | 실제 Windows (환경 변수로 켬): MpCmdRun 판정 근거, 설치된 서비스를 일반 사용자로(ACL·패키징·전 구간), 관리자로(중지·강제 종료·재설치). `scanner_service/README.md` §18 |

@@ -60,10 +60,15 @@ def _file_of(tool: str, args: dict) -> str | None:
 def _scan_code(code, detail) -> str | None:
     """The scanner's code: a block code itself, "MALWARE_DETECTED: ..." text, or a dict with a code."""
     if isinstance(detail, dict):
-        found = detail.get("code") or (detail.get("error") or {}).get("code")
+        error = detail.get("error")
+        found = detail.get("code") or (error.get("code") if isinstance(error, dict) else None)
         if isinstance(found, str):
             return found
     elif isinstance(detail, str):
+        # Older Output scanners retain Windows real-time AV denials as SCAN_ERROR.
+        # Keep the original result code; distinguish the OS detection in presentation only.
+        if re.match(r"^SCAN_ERROR: \[WinError (?:225|226)\](?: |$)", detail.strip()):
+            return "WINDOWS_MALWARE_BLOCKED"
         m = _CODE.match(detail.strip())
         if m and m.group(1) in SCAN_CODES:
             return m.group(1)

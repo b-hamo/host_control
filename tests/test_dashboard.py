@@ -83,7 +83,8 @@ def board(tmp_path):
                              "c-1": {"Processor": {"TotalRuntime100ns": 0}, "Memory": {"MemoryUsageCommitBytes": 858_993_459}},
                              "c-3": "denied"}), cpus=4, clock=lambda: clock[0])
     c = Collector([main], dash, wsb=lambda: 1, host_meter=FakeHostMeter(), vm_meter=vm,
-                  clock=lambda: clock[0], pid_alive=lambda pid: pid == 4242)
+                  clock=lambda: clock[0], owner_check=lambda o: o.get('pid') == 4242,
+                  sandbox_inventory=lambda: None, vm_inventory=lambda: None)
     return c, clock
 
 
@@ -93,7 +94,8 @@ def test_the_overview_follows_the_frontend_contract(board):
     o = c.overview()
     assert set(o) == {"updated_at", "runtimes", "host_resources", "metrics", "sessions", "exports"}
     assert o["runtimes"]["windows_sandbox"] == {"running": 1, "state": "RUNNING", "window_state": "OPEN"}
-    assert o["runtimes"]["micro_vm"] == {"running": 2, "max": 6, "starting": 1, "failed": 0, "free_slots": 3}
+    assert o["runtimes"]["micro_vm"] == {"running": 2, "max": 6, "starting": 1, "failed": 0, "free_slots": 3,
+                                         "unknown": 0, "count_source": "host_owner"}
     assert o["host_resources"] == {"cpu_percent": 64.0, "mem_percent": 72}
     by = {s["id"]: s for s in o["sessions"]}
     assert "SES-old" not in by                                   # ended long ago: off the board

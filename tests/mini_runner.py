@@ -69,7 +69,8 @@ class MiniRunner:
                  action_error: dict | None = None, observe_error: dict | None = None,
                  capture_clock_offset_s: float = 0.0,
                  upload_port: int | None = None, upload_tamper: bool = False,
-                 screen: tuple[int, int] = (1280, 720)):
+                 screen: tuple[int, int] = (1280, 720),
+                 foreground_window: str | None = ""):
         self.url = f"wss://127.0.0.1:{port}{CONTROL_PATH}"
         self.cert_pem = cert_pem
         self.identity = identity
@@ -87,6 +88,7 @@ class MiniRunner:
         self.upload_port = upload_port            # None: behave like a Runner that does not upload yet
         self.upload_tamper = upload_tamper        # upload one PNG, report another
         self.screen = screen
+        self.foreground_window = foreground_window  # None models an older Runner without this field.
         self.uploads: list[int] = []              # HTTP status of each upload
         self.requests: list[dict] = []          # every ACTION_REQUEST as received
         self.executed: list[str] = []          # action_ids, in order
@@ -171,10 +173,13 @@ class MiniRunner:
                 elif t == "STATE_REQUEST":
                     target = msg["payload"]["action_id"]
                     self.state_requests.append(target)
-                    await self._send(self.me.reply(msg, "STATE_RESULT", {
+                    state = {
                         "runtime_state": "READY", "worker_alive": self.worker_alive, "queue_depth": 0,
                         "action_state": {"action_id": target, "status": "SUCCESS"}
-                        if target in self.executed else None}))
+                        if target in self.executed else None}
+                    if self.foreground_window is not None:
+                        state["foreground_window"] = self.foreground_window
+                    await self._send(self.me.reply(msg, "STATE_RESULT", state))
                 elif t == "ARTIFACT_REQUEST":
                     await self.on_artifact_request(msg)
                 elif t == "TERMINATE":

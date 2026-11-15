@@ -21,7 +21,7 @@ export function ResourcePanel({
         <MeterBar label="메모리" pct={host.mem_percent} tone={toneForPct(host.mem_percent)} />
         <div className="tile tile-center">
           <div className="sub" style={{ marginBottom: 4 }}>VM 남은 슬롯</div>
-          <div className="mono slot-num">{slots}</div>
+          <div className="mono slot-num">{slots ?? '—'}</div>
           <div className="mono muted" style={{ fontSize: 11, marginTop: 3 }}>{vm.running} / {vm.max} 가동</div>
         </div>
       </div>

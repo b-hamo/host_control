@@ -57,7 +57,7 @@ export function LiveViewTab({
     live.find((s) => s.id === selectedId) ?? live.find((s) => s.display_state === 'RUNNING') ?? live[0]
 
   const panelRef = useRef<HTMLDivElement>(null)
-  // exports가 없으면(백엔드 미구현) null → 로그에 "아직 받지 않음" 표시
+  // 구버전 백엔드에서 exports가 없으면 null → 로그에 "아직 받지 않음" 표시
   const rows = useMemo(() => (data.exports ? exportRows(data.exports, data.sessions) : null), [data.exports, data.sessions])
   const allCount = rows ? countByTone(rows) : null
   const liveIds = useMemo(() => new Set(live.map((s) => s.id)), [live])
