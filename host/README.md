@@ -193,7 +193,8 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 |---|---|
 | `tests/test_auth.py` | TLS, token(없음·틀림·만료·재사용·다른 세션), nonce 재사용, 로그에 token 노출 |
 | `tests/test_heartbeat_reconnect.py` | Health 전이, 재접속 token, 연결 교체, 끊긴 Action 재동기화 |
-| `tests/test_startup.py` | 정상 승격, 고장 Runner 거부, 시간 초과, 시계 오차 |
+| `tests/test_startup.py` | 정상 승격, 창 제목 포함/생략 Runner의 READY 호환성, 고장 Runner 거부, 시간 초과, 시계 오차 |
+| `tests/test_state_result.py` | 실제 Runner 상태 응답의 선택 창 제목·한글·길이 경계·자료형, 미등록 속성 거부 |
 | `tests/test_broker.py` | 검사별 거부, 정책, 빈도 제한, 감사 로그 마스킹, 도구 규격 ↔ 프로토콜 교차 검사 |
 | `tests/test_mcp_server.py` | 실제 자식 프로세스로 기동, 도구 목록 속도, Codex → Runner 전 구간, 스크린샷이 MCP image로 전달 |
 | `tests/test_single_host.py` | 이전 HostBackend 진입점도 다른 Host·부모 프로세스·VM을 종료하거나 회수하지 않음 |

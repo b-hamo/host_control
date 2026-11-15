@@ -19,6 +19,18 @@ payload/<TYPE>.schema.json  type별 payload 20종 (정의에 없는 필드는 �
 검증 순서 (`scrp/validate.py`): 64 KiB 크기 → UTF-8 strict → JSON(중복 key·NaN 거부) →
 중첩 깊이 16 → Envelope 스키마 → type별 payload 스키마.
 
+## STATE_RESULT의 창 제목 호환성
+
+`foreground_window`는 Runner가 보고한 맨 앞 창 제목인 선택 문자열이다. 제목이 없는 경우 빈 문자열을
+허용하며, 필드가 없는 기존 Runner도 수용한다. 나머지 미등록 속성, null 및 문자열 이외 자료형은 거부한다.
+Host JSON Schema의 `maxLength: 256`은 Unicode 문자 수 기준이다. 현재 Runner는 UTF-8 256바이트
+경계에서 제목을 잘라 보내므로 그 출력은 이 상한 안에 들어온다. 두 길이 단위를 같은 것으로 취급하지 않는다.
+이 필드는 관찰 메타데이터이며 입력 허가나 READY 판정 조건을 변경하지 않는다.
+
+Runner main의 창 제목 추가(`sandbox_runner#29/#30`)에 대응한다. 실제 송신 형식을 반영한
+`tests/test_state_result.py`와 `tests/mini_runner.py`, 신·구 응답의 READY 경로를 검사하는
+`tests/test_startup.py`로 검증한다. 실제 Runner와의 양방향 호환성은 별도 통합 시험으로 확인한다.
+
 ## 노션 "기본 요청 8가지" 표와 다른 점
 
 초기 표와 프로토콜 PDF v0.1이 다른 부분은 **PDF를 따른다** (2026-09-22 결정).
