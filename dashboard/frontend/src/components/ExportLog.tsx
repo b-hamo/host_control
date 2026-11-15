@@ -2,11 +2,12 @@ import { forwardRef, useMemo, useState } from 'react'
 import type { ExportEntry, ExportTone, Session } from '../types'
 import { exportToneOf } from '../types'
 import { formatClock } from '../utils'
+import { exportResult, isMalwareBlocked } from '../exportResult'
 
 // 라이브 뷰 아래(스크롤)에 붙는 파일 반출 로그. 높이는 고정, 본문만 스크롤.
-// exports가 undefined면 백엔드가 아직 반출 목록을 보내지 않는 것(계약 미구현).
+// 구버전 백엔드가 exports를 보내지 않으면 연결 전 안내를 표시한다.
 
-type Filter = 'all' | ExportTone
+type Filter = 'all' | 'malware' | ExportTone
 type Scope = 'all' | 'sel'
 
 export interface ExportRow extends ExportEntry {
@@ -35,12 +36,9 @@ export function countByTone(rows: ExportRow[]): Record<ExportTone, number> {
 }
 
 function Result({ r }: { r: ExportRow }) {
-  let text: string
-  if (r.tone === 'ok') text = '반출됨 · CLEAN'
-  else if (r.tone === 'danger') text = `차단 · ${r.scan_code ?? r.code ?? r.stage}`
-  else text = r.stage === 'HELD' ? '보류' : '검사 중'
+  const text = exportResult(r)
   return (
-    <span className={`res ${r.tone}`}>
+    <span className={`res ${r.tone}`} title={r.scan_code === 'WINDOWS_MALWARE_BLOCKED' ? 'Windows 보안이 바이러스 또는 원치 않는 소프트웨어로 차단함 (WinError 225/226)' : r.scan_code ?? r.code ?? r.stage}>
       <span className="dot" />
       {text}
     </span>
@@ -51,6 +49,7 @@ const CHIPS: { key: Filter; label: string }[] = [
   { key: 'all', label: '전체' },
   { key: 'ok', label: '반출' },
   { key: 'danger', label: '차단' },
+  { key: 'malware', label: '악성 감지' },
   { key: 'warn', label: '검사 중' },
 ]
 
@@ -66,7 +65,8 @@ export const ExportLog = forwardRef<
     [rows, scope, selected?.id],
   )
   const count = countByTone(scoped)
-  const shown = scoped.filter((r) => filter === 'all' || r.tone === filter)
+  const malwareCount = scoped.filter(isMalwareBlocked).length
+  const shown = scoped.filter((r) => filter === 'all' || (filter === 'malware' ? isMalwareBlocked(r) : r.tone === filter))
 
   return (
     <section className="xp" ref={ref} aria-label="파일 반출 목록">
@@ -77,11 +77,11 @@ export const ExportLog = forwardRef<
             <button
               key={c.key}
               type="button"
-              className={`chip ${c.key === 'all' ? '' : c.key}${filter === c.key ? ' on' : ''}`}
+              className={`chip ${c.key === 'all' ? '' : c.key === 'malware' ? 'danger' : c.key}${filter === c.key ? ' on' : ''}`}
               onClick={() => setFilter(c.key)}
             >
               {c.label}
-              <b>{c.key === 'all' ? scoped.length : count[c.key]}</b>
+              <b>{c.key === 'all' ? scoped.length : c.key === 'malware' ? malwareCount : count[c.key]}</b>
             </button>
           ))}
         </div>
@@ -114,12 +114,12 @@ export const ExportLog = forwardRef<
             const clickable = liveIds.has(r.session_id)
             return (
               <div
-                key={r.artifact_id}
+                key={`${r.session_id}:${r.artifact_id}`}
                 className={`xp-row xp-line st-${r.tone}${clickable ? ' link' : ''}`}
                 title={r.name}
                 onClick={clickable ? () => onSelect(r.session_id) : undefined}
               >
-                <span className="c-t">{formatClock(r.finished_at ?? r.observed_at)}</span>
+                <span className="c-t" title={r.time_source === 'journal_updated_at' ? '결과 기록 갱신 시각 (정확한 판정 시각 미기록)' : '반출 결과 시각'}>{formatClock(r.finished_at ?? r.observed_at)}</span>
                 <span className={`c-s${r.session_id === selected?.id ? ' cur' : ''}`}>{r.label}</span>
                 <span className="c-f">{r.name}</span>
                 <span className="c-r">
@@ -128,7 +128,7 @@ export const ExportLog = forwardRef<
                 {r.tone === 'ok' && r.export_path ? (
                   <span className="c-p" title={r.export_path}>{r.export_path}</span>
                 ) : (
-                  <span className="c-p none">—</span>
+                  <span className="c-p none">{r.tone === 'danger' ? '반출되지 않음' : '—'}</span>
                 )}
               </div>
             )

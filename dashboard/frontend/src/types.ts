@@ -5,7 +5,7 @@ export type RuntimeType = 'windows_sandbox' | 'micro_vm'
 // 화면 표시용 상태 (display_state)
 export type DisplayState =
   | 'PREPARED' | 'STARTING' | 'STARTED' | 'RUNNING'
-  | 'RESTARTING' | 'TERMINATED' | 'FAILED' | 'VIOLATION'
+  | 'RESTARTING' | 'TERMINATED' | 'FAILED' | 'VIOLATION' | 'UNKNOWN'
 
 export type TerminationReason =
   | 'TASK_COMPLETE' | 'USER_STOP' | 'SECURITY_VIOLATION' | 'TIMEOUT' | 'RUNTIME_ERROR'
@@ -26,7 +26,7 @@ export interface ScreenshotInfo {
 }
 
 export interface SandboxRuntime {
-  running: 0 | 1
+  running: number | null
   state: string // RUNNING | STOPPED | ...
   window_state: WindowState
 }
@@ -36,7 +36,9 @@ export interface MicroVmRuntime {
   max: number
   starting: number
   failed: number
-  free_slots?: number
+  free_slots?: number | null
+  unknown?: number
+  count_source?: 'hcs' | 'host_owner'
 }
 
 export interface HostResources {
@@ -65,13 +67,14 @@ export interface Session {
   ended_at?: string | null
   network?: string // 'enabled'(Sandbox) | 'blocked'(micro VM)
   window_state?: WindowState
-  host_alive?: boolean
+  host_alive?: boolean | null
   screenshot?: ScreenshotInfo
 }
 
-// 파일 반출 한 건. 백엔드 미구현(제안 계약) — 값은 host/artifacts.py · output_export.py 의 stage/result 기준.
+// 파일 반출 한 건. host/artifacts.py · output_export.py 의 stage/result 및 dashboard overview 계약.
 // stage: 끝나기 전 CANDIDATE·AUTHORIZED·STAGED·SCANNING, 끝나면 EXPORTED·BLOCKED·QUARANTINED·FAILED·HELD·DELETED·SUPERSEDED·CANCELLED
 export interface ExportEntry {
+  time_source?: 'journal_updated_at' // 기존 Host 결과 파일의 갱신 시각을 사용하는 경우
   artifact_id: string // ART-000017
   session_id: string
   session_label?: string | null // 세션이 overview에서 빠진 뒤에도 라벨을 보이려고
@@ -93,7 +96,7 @@ export interface Overview {
   host_resources: HostResources
   metrics?: Metrics
   sessions: Session[]
-  exports?: ExportEntry[] // 백엔드가 아직 안 보냄 → undefined
+  exports?: ExportEntry[] // 구버전 백엔드 호환: 필드가 없으면 undefined
 }
 
 // UI 상태색

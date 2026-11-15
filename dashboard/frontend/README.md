@@ -25,6 +25,7 @@ npm run dev      # http://localhost:5173 — 주소에 ?token= 이 없으면 목
 
 ```powershell
 npm run build    # ../static/ 을 지우고 새로 만든다
+npm test         # 악성 탐지·일반 검사 오류의 표시 분류 검증
 ```
 
 `src/`와 `../static/`을 **같이 커밋**한다. `static/`은 직접 고치지 않는다.
@@ -35,8 +36,10 @@ npm run build    # ../static/ 을 지우고 새로 만든다
 - dev에서도 실제 API를 쓰려면 `.env`에 `VITE_USE_MOCK=false`를 두고, 서버 토큰을 주소에 붙여 연다
   (`vite.config.ts`가 `/api`를 `127.0.0.1:17480`으로 넘긴다).
 
-- 파일 반출 로그는 overview의 `exports`(`types.ts`의 `ExportEntry`)를 쓴다. **백엔드 미구현** —
-  지금은 목업에만 있고, 실제 API에서는 `exports`가 없어 "반출 기록을 아직 받지 않아요"로 보인다.
+- 파일 반출 로그는 overview의 `exports`(`types.ts`의 `ExportEntry`)를 쓴다.
+  악성 감지 필터는 검사기의 악성 판정과 Windows 바이러스 차단 오류 225/226을 구분해 표시한다.
+  일반 검사 오류·시간 초과는 악성 감지 건수에 포함하지 않는다. 구버전 API가 `exports`를 보내지 않으면 연결 전 안내를 표시한다.
+- 런타임 조회가 불확실하면 `UNKNOWN`과 미확인 개수를 표시하고, 확인하지 못한 Sandbox 개수·남은 슬롯은 `—`로 표시한다.
 
 ## 구조
 

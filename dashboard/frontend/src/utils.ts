@@ -42,7 +42,8 @@ export function clampPct(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)))
 }
 
-export function freeSlots(running: number, max: number, starting = 0, explicit?: number): number {
+export function freeSlots(running: number, max: number, starting = 0, explicit?: number | null): number | null {
+  if (explicit === null) return null
   if (typeof explicit === 'number') return explicit
   return Math.max(0, max - running - starting)
 }

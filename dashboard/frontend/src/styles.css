@@ -158,7 +158,7 @@ html,body{margin:0;height:100%;}
 .xp-body::-webkit-scrollbar{width:8px;}
 .xp-body::-webkit-scrollbar-thumb{background:var(--trackbd);border-radius:8px;}
 /* 제목줄과 본문이 같은 열 폭을 쓴다: 시각 | 세션 | 파일 | 결과 | 저장 위치 */
-.xp-row{display:grid;grid-template-columns:76px 64px minmax(160px,1fr) 196px minmax(220px,1.6fr);
+.xp-row{display:grid;grid-template-columns:76px 64px minmax(160px,1fr) 250px minmax(180px,1.6fr);
   grid-template-areas:"t s f r p";column-gap:16px;align-items:center;padding:7px 16px 7px 13px;border-left:3px solid transparent;}
 .xp-row > *{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .xp-row .c-t{grid-area:t;color:var(--muted);} .xp-row .c-s{grid-area:s;} .xp-row .c-f{grid-area:f;}
@@ -184,7 +184,7 @@ html,body{margin:0;height:100%;}
 .xp-empty{padding:26px;text-align:center;color:var(--muted);font-family:var(--font-sans);font-size:13px;}
 
 @media (max-width:1000px){
-  .xp-row{grid-template-columns:70px 58px minmax(0,1fr) 196px;grid-template-areas:"t s f r" ". . p p";row-gap:2px;}
+  .xp-row{grid-template-columns:70px 58px minmax(0,1fr) 250px;grid-template-areas:"t s f r" ". . p p";row-gap:2px;}
   .xp-hrow{grid-template-areas:"t s f r";}
   .xp-hrow .c-p{display:none;}
 }

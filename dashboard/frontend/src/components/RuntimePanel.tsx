@@ -11,7 +11,7 @@ export function RuntimePanel({ runtimes }: { runtimes: Overview['runtimes'] }) {
         <div className="tile">
           <div className="sub" style={{ marginBottom: 8 }}>Windows Sandbox</div>
           <div className="mono big-num" style={!sbOn ? { color: 'var(--muted)' } : undefined}>
-            {sb.running}
+            {sb.running ?? '—'}
             <span className="num-sub"> / 1</span>
           </div>
           <div className="mono sub" style={{ marginTop: 10, fontSize: 12 }}>{sb.state}</div>
@@ -25,6 +25,7 @@ export function RuntimePanel({ runtimes }: { runtimes: Overview['runtimes'] }) {
           <div className="mono sub" style={{ marginTop: 10, fontSize: 12 }}>
             running <span className="s-ok">{vm.running}</span> · starting <span className="s-warn">{vm.starting}</span>
             {vm.failed > 0 && <> · failed <span className="s-danger">{vm.failed}</span></>}
+            {(vm.unknown ?? 0) > 0 && <> · 상태 미확인 <span className="s-warn">{vm.unknown}</span></>}
           </div>
         </div>
       </div>

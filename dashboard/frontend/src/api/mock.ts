@@ -5,7 +5,7 @@ function ago(sec: number): string {
   return new Date(Date.now() - sec * 1000).toISOString()
 }
 
-// 파일 반출 목업 (백엔드 미구현, types.ts ExportEntry 제안 계약). 최신이 위.
+// 파일 반출 목업 (types.ts ExportEntry 계약). 최신이 위.
 function exp(n: number, sid: string, label: string, name: string, sec: number, stage: string, scan?: string): ExportEntry {
   const id = `ART-${String(n).padStart(6, '0')}`
   const done = stage !== 'SCANNING'
