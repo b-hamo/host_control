@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <# Run in ordinary PowerShell. Only service installation requests UAC.
    Requires Windows Sandbox, Defender, Python 3.13 x64, Git, MSYS2 UCRT64.
    Never checks out code, reboots, or terminates an existing VM. #>
@@ -52,6 +52,7 @@ try {
     Invoke-SolutionCommand $python @('-c',"import sys,struct; assert sys.version_info[:2]==(3,13) and struct.calcsize('P')==8")
     Invoke-SolutionCommand $python @('-m','pip','install','-r',(Join-Path $repo 'requirements-base.txt'))
     Install-SolutionManager $python $ManagerRepo $Mode
+    Assert-SolutionTransferContract $python $micro
     $runner = Build-SolutionRunner $RunnerRepo $UcrtRoot
     Invoke-SolutionCommand $python @((Join-Path $repo 'host/solution.py'),'--runner-exe',$runner.executable,'--work',$Work,'--state',$State,'--validate-paths')
     $scannerOut = Join-Path $repo ('build/solution-scanner/'+[Guid]::NewGuid().ToString('N'))

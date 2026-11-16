@@ -22,6 +22,33 @@ def quoted(path):
     return "'" + str(path).replace("'", "''") + "'"
 
 
+def test_transfer_contract_queries_installed_worker_and_propagates_failure(tmp_path):
+    package = tmp_path/'package'
+    package.mkdir()
+    (package/'MinoVmService.exe').write_bytes(b'fixture; never executed')
+    result = ps(f'''. {quoted(ROOT/'installer/solution_common.ps1')}
+function Invoke-SolutionCommand {{
+    param($Program,$Arguments)
+    if ($Program -ne 'fixture-python' -or $Arguments[1] -ne 'sandbox_manager.transfer_limits' -or
+        $Arguments[2] -ne '--service') {{ throw 'wrong compatibility probe' }}
+    throw 'fixture old worker rejected'
+}}
+try {{
+    Assert-SolutionTransferContract 'fixture-python' @{{package={quoted(package)}}}
+    throw 'old worker accepted'
+}} catch {{ if ($_.Exception.Message -notmatch 'fixture old worker rejected') {{ throw }} }}
+''')
+    assert result.returncode == 0, result.stderr
+
+
+def test_windows_sandbox_install_needs_no_management_worker():
+    result = ps(f'''. {quoted(ROOT/'installer/solution_common.ps1')}
+function Invoke-SolutionCommand {{ throw 'unexpected service check' }}
+Assert-SolutionTransferContract 'unused' $null
+''')
+    assert result.returncode == 0, result.stderr
+
+
 def test_all_solution_scripts_parse_in_windows_powershell():
     paths = list((ROOT/'installer').glob('*solution*.ps1'))
     paths += [ROOT/'installer/register_codex.ps1', ROOT/'installer/build.ps1'] + list((ROOT/'scripts').glob('*solution.ps1'))

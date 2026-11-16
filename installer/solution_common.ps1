@@ -75,6 +75,17 @@ function Install-SolutionManager {
     else { Invoke-SolutionCommand $Python @('-m','pip','install','--upgrade','--force-reinstall','--no-deps',$ManagerRepo) }
     # These APIs are actually used by solution.py and the Host lifecycle.
     Invoke-SolutionCommand $Python @('-c', "from sandbox_manager.inbox import USER_FOLDERS,check_inbox_root; from sandbox_manager import SandboxManager,clear_inbox; assert hasattr(SandboxManager,'window_state'), 'Manager window_state API is required'; import sandbox_manager; print('MANAGER_SOURCE:', sandbox_manager.__file__)")
+    Invoke-SolutionCommand $Python @('-c', "from sandbox_manager.transfer_limits import MAX_FILE_BYTES,MAX_SESSION_BYTES; assert (MAX_FILE_BYTES,MAX_SESSION_BYTES)==(536870912,2147483648), 'Install the matching 512 MiB / 2 GiB Manager checkout'")
+}
+function Assert-SolutionTransferContract {
+    param([string]$Python, $MicroVm)
+    if ($MicroVm) {
+        $serviceExe = Join-Path $MicroVm.package 'MinoVmService.exe'
+        if (Test-Path -LiteralPath $serviceExe -PathType Leaf) {
+            # Query the actual worker, not only the on-disk binary/version.
+            Invoke-SolutionCommand $Python @('-m','sandbox_manager.transfer_limits','--service',$serviceExe)
+        }
+    }
 }
 function Build-SolutionRunner {
     param([string]$RunnerRepo, [string]$UcrtRoot)

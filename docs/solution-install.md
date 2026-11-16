@@ -139,9 +139,32 @@ native main 뷰어의 프로토콜 호환성을 보장하지는 않는다.
 세션 고정·기존 Runner 종료 확인을 전제로 한 복구를 일반 배포에서도 사용한다.
 설치·업데이트의 기존 활성 세션 보호 조건은 유지한다. 사용 중인 서비스를 덮어쓰지 않는다.
 
-기본 requirements의 Manager 고정 커밋은 `e20fc2bdf0bd1994a5aa5b9048d8428b2e19f683`이다.
-별도 `ManagerRepo`로 wheel을 만드는 설치에서는 같은 변경이 포함된 checkout을 지정한다.
+기본 `requirements.txt`는 Manager **0.2.0**의 커밋
+`ea6854a40d1f71ad1e500128916fb48630e8b21a`를 고정 설치한다.
+통합 설치기는 `-ManagerRepo` checkout을 사용하므로 이 커밋 또는 같은 수정이 포함된
+대응 배포 checkout을 지정한다. 기본 폴더는 형제 폴더 `../sandbox_manager`이며,
+다른 폴더 배치는 `install_solution.ps1 -ManagerRepo <절대 경로>`를 사용한다.
+설치기는 Manager의 파일당 512 MiB·세션당 2 GiB 상수와 **실행 중인** 관리 서비스의
+health 응답을 검사한다. 예전 서비스, 제한 불일치, 서비스 연결 실패는 설치 성공으로
+표시하지 않는다. 검사는 health 조회뿐이며 세션 생성·종료·서비스 재시작을 하지 않는다.
+micro_VM의 `package-minobox.ps1`과 `install-management-service.ps1`도 빌드된 실행 파일의
+`--describe`를 검사한다. Manager만 변경하거나 이전 서비스 실행 파일을 재사용하지 않는다.
+서비스 최초 설치 후 시작한 뒤 솔루션을 설치한다. 기존 서비스 업그레이드는 기존 세션을
+사용자가 종료한 후 별도 유지보수로 수행하며, 새 설치 검증으로 실행 중인 세션을 종료하지 않는다.
 Host·Manager·Runner·micro_VM의 대응 PR을 함께 검토해 배포한다.
+
+이번 배포 조합은 Manager **0.2.0**과 micro_VM **0.3.0**이다.
+관련 이슈: [Host #152](https://github.com/b-hamo/host_control/issues/152),
+[Manager #69](https://github.com/b-hamo/sandbox_manager/issues/69),
+[micro_VM #14](https://github.com/b-hamo/micro_VM/issues/14).
+Manager와 micro_VM 변경을 먼저 반영하고 0.3.0 소스에서 새 관리 서비스 패키지를 만든 다음,
+대응 Host 설치기를 배포한다. PR 생성만으로 main의 설치 소스나 기존 배포 바이너리가
+갱신되는 것은 아니다. 예전 wheel·서비스 실행 파일을 섞으면 계약 검사에서 중단된다.
+
+종료 전 Sandbox 검증: Manager 283개와 subtest 7개, Host 989개 통과·57개 생략,
+MSVC 서비스 빌드 및 native 경계 검사 39개, 패키징·스키마·새 wheel 설치와 GCC 선택 확인.
+사용자 요청에 따라 최신 develop 반영 및 배포 버전 정리 후 테스트는 재실행하지 않았다.
+새 PC의 전체 설치, 실제 2 GiB 전송과 정식 배포용 DbiBoot 고정 패키지 검증은 별도 범위다.
 
 2026-11-09 실제 PC에서는 설치된 관리 서비스와 별도 venv에 설치한 Manager wheel을 사용해
 Medium Host의 B·C READY, 화면·한글 입력, Router 완료 영수증, Defender 반출을 검증했다.
