@@ -18,6 +18,9 @@ MASKED_FIELDS = {"computer_type": ("text",), "router_capture": ("text",), "inbox
 
 def mask(tool: str, args: dict) -> dict:
     out = dict(args)
+    if tool == "router_execute" and isinstance(out.get("build_plan"), dict):
+        raw = json.dumps(out["build_plan"], sort_keys=True, ensure_ascii=False).encode("utf-8")
+        out["build_plan"] = {"masked": True, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
     for tool_name, key in (("inbox_download", "url"), ("router_capture", "source_url")):
         if tool == tool_name and isinstance(out.get(key), str):
             from urllib.parse import urlsplit, urlunsplit

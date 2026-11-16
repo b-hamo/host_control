@@ -109,6 +109,17 @@ py -3.13 -m dashboard --open
 `http://127.0.0.1:17480`에서 격리 공간 상태, 진행 중인 작업, AI가 마지막으로 본 화면, 파일 반출 기록을 봅니다.
 이 PC에서만 열리고 보기 전용입니다. 자세한 내용은 [대시보드 문서](dashboard/README.md)에 있습니다.
 
+## 에이전트 빌드 명령 (Host 컴파일 → Sandbox 실행)
+
+`router_execute(form="build-plan")`은 에이전트가 고른 컴파일러·인자·작업 폴더·환경 변수와 빌드 단계를
+받는다. **빌드는 Host에서**, 결과 프로그램은 기존 Sandbox에서 실행한다. 명령·옵션·소스 내용의 허용 목록
+검사는 하지 않는다. 단일 소스, 여러 캡처 파일, inbox ZIP 프로젝트와 DLL·리소스를 포함한 출력 폴더를 지원한다.
+구체적인 스키마, C/CMake/Java/.NET 예제와 재요청 규칙은 [빌드 계획 문서](docs/agent-build-plan.md)에 있다.
+
+빌드 전에 run_id를 예약하므로 중복 호출은 다시 컴파일하지 않는다. `sandbox_run_status`의 build_status와
+build_log는 Host 결과이며, state/exit_code/stdout은 Guest 실행 결과다. 명령 검사를 생략해도 입력 해시,
+세션 신원과 Guest 결과 영수증은 유지한다. 실제 Windows/Sandbox 실행은 미검증이며 테스트 실행은 요청에 따라 생략했다.
+
 ## 보안 모델과 한계
 
 - **보호 대상은 AI 에이전트의 실행**입니다. 사용자가 직접 실행하는 프로그램은 기존 백신의 영역이며, minoBox는 관여하지 않습니다.
