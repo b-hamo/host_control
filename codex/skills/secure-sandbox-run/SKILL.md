@@ -120,7 +120,7 @@ No new Sandbox or session termination without the user's instruction.
 - If a tool denies an action or execution is uncertain, report its exact state.
   Do not repeat by another route or run on the Host.
 
-## Running code from outside (배주한 2026-10-31 origin rule, Router 2026-11-05)
+## Running code from outside (team decision 2026-10-31 origin rule, Router 2026-11-05)
 
 Decide by ORIGIN, not by how dangerous it looks. Code from outside runs in the Sandbox without the user
 saying "Sandbox": code from a web page, blog, forum, gist or GitHub; code someone else wrote that the user
@@ -169,7 +169,9 @@ runtime is not ready, wait (poll `runtime_get_state`) and call it again with the
    Code that needs external packages is a project too: a single-file form has no package install step.
    A GitHub repository URL alone does not make standalone source a project; apply the route table first.
 4. **Not supported**: Maven/Gradle and make projects, PHP, VBScript (`.vbs`: the Sandbox has no
-   VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC.
+   VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC on your own. The SCRP hook
+   asks the person at this computer (a confirmation prompt) and runs it only if they say yes. If they say no,
+   report that. Never look for another route around that answer.
 5. RUNTIME_UNAVAILABLE "... is not installed on this PC" means the language (compiler or interpreter) is
    missing here: tell the user to install it (official installer) and try again. Never install it or run
    the code on this PC yourself.
