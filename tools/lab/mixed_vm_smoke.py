@@ -9,9 +9,9 @@ Host A는 Windows Sandbox(기존 17443/17444), Host B는 micro_VM 앱 창 VM(loo
   4. 나중에 켠 슬롯부터 session_stop, 남은 슬롯이 계속 살아 있는지 확인
   5. 끝난 뒤 Windows Sandbox가 남아 있지 않은지 확인
 
-절차와 준비물은 docs/mixed-vm-other-pc.md. micro_VM broker 때문에 관리자 PowerShell에서 실행한다.
+절차와 준비물은 docs/validation/mixed-vm-other-pc.md. micro_VM broker 때문에 관리자 PowerShell에서 실행한다.
 
-  python tools/mixed_vm_smoke.py --runner EXE --manager DIR --vm-package DIR --vm-root DIR --relay EXE --work NEW_DIR
+  python tools/lab/mixed_vm_smoke.py --runner EXE --manager DIR --vm-package DIR --vm-root DIR --relay EXE --work NEW_DIR
   --slots B        micro_VM만 켜고 끈다 (Sandbox를 닫은 상태에서 첫 준비용)
   --slots B,A      micro_VM을 먼저 켜고 Sandbox를 나중에 켠다 (반대 순서)
   --vgpu-off       Sandbox의 vGPU를 끈다 (AMD 드라이버가 Sandbox 시작 중 멈추는 PC용)
@@ -30,7 +30,7 @@ import time
 import uuid
 from pathlib import Path
 
-HOST = Path(__file__).resolve().parents[1]
+HOST = Path(__file__).resolve().parents[2]
 READY_TRIES = 30                 # computer_observe(wait_ms=10000) 30번: READY까지 최대 약 5분
 INPUT_CHANGE = 0.05              # Win+R 뒤 화면의 5% 이상 줄이 바뀌면 입력이 닿은 것으로 본다
 

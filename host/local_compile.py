@@ -1,6 +1,6 @@
 """local_compile: one source file from a router_capture, compiled on this computer, run only in the Sandbox.
 
-배주한 2026-11-05 (mentor and team suggestion): "compile here, run there". Only for a single source
+team decision 2026-11-05 (mentor and team suggestion): "compile here, run there". Only for a single source
 file without a build system. A compiler translates the code, it does not run it. A project's build
 scripts (Makefile, build.rs, npm scripts) would run while building, so projects stay entirely in the
 Sandbox (program_share).
@@ -15,7 +15,7 @@ The one thing a compiler can still do with hostile source is read files on this 
   read must be in the compiler's own folder; no inline assembly in the code itself; the checked
   preprocessed text is what gets compiled
 - Zig: no @cImport (@embedFile and @import cannot leave the work folder: Zig refuses that itself)
-- Rust (배주한 2026-11-12, rustup's default MSVC toolchain installed the usual way): outside comments
+- Rust (team decision 2026-11-12, rustup's default MSVC toolchain installed the usual way): outside comments
   and strings no include / include_str / include_bytes, env! / option_env!, asm / global_asm /
   naked_asm, extern crate, `mod x;`, #[path = ...] or #[link(...)]; then a dep-info pass (macro
   expansion only) must list no file but main.rs and no env-dep before the code is compiled and linked

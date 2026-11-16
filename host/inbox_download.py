@@ -14,7 +14,7 @@ Based on the Lifecycle team's demo tool (sandbox_manager acf5f9f tools/inbox_dow
   - the downloaded file is marked as coming from the Internet (Zone.Identifier, ZoneId=3), so Windows
     and Office treat it as untrusted if someone opens it on the Host anyway
   - the inbox limits (files, total bytes) are checked before anything is written
-  - optional (save_to_downloads, Host --save-downloads, 배주한 결정 2026-10-15): a copy also goes to the
+  - optional (save_to_downloads, Host --save-downloads, 팀 결정 2026-10-15): a copy also goes to the
     user's Downloads folder like a browser download (marked as from the Internet) and stays there after
     the session; the Sandbox still gets the inbox copy (Downloads itself is never mapped)
   - optional (signed_to_downloads, Host --signed-downloads, 2026-11-03 멘토링): the same copy, but only for a

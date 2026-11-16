@@ -1,5 +1,5 @@
 """--save-downloads: inbox_download also keeps a copy in Downloads that stays after the session
-(배주한 결정 2026-10-15: "인터넷에서 받은 건 다운로드 폴더에, 끝나도 그대로")."""
+(팀 결정 2026-10-15: "인터넷에서 받은 건 다운로드 폴더에, 끝나도 그대로")."""
 
 import hashlib
 

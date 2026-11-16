@@ -62,7 +62,7 @@ Host Windows 26200.9711에서 A를 먼저 READY로 만들고, B와 C를 차례�
   A/C의 `1794114081090-A-runtime_get_state.result.json`과
   `1794114081118-C-runtime_get_state.result.json`은 이후에도 READY/connected=true다.
 
-반출 복구는 [추가 계약](artifact-reconnect.md)의 유휴 경계에 한정된다.
+반출 복구는 [추가 계약](../artifact-reconnect.md)의 유휴 경계에 한정된다.
 진행 중인 snapshot/업로드 장애나 Runner 프로세스 자체 종료 뒤 복구까지 통과한 것은 아니다.
 입력 타임아웃을 재전송하지 않았다. STALE_OBSERVATION으로 실행 전 거부된 좌표 입력은 새 화면 후에만 제출했다.
 
@@ -100,7 +100,7 @@ Control만 READY이고 반출 채널 장애 상태로 남아 있다. 검사되�
 
 시험 당시 Host HEAD `92bb9c0be265223c99d8b6c163b32e9b3fe0b2bb`와 작업 트리 변경을 사용했다.
 Manager는 설치 의존성 대신
-`C:\Users\tkwk9\.codex\worktrees\mixed-vm-manager\sandbox_manager\sandbox_manager\__init__.py`를 로드했다.
+`C:\Users\<user>\.codex\worktrees\mixed-vm-manager\sandbox_manager\sandbox_manager\__init__.py`를 로드했다.
 패키지 버전은 0.1.0, HEAD는 `9f8d52e828adf5d7eb26d45a6b7d3d08c95b47f1`이다.
 동작 중인 A/C에는 이후 편집한 코드가 소급 적용되지 않는다.
 
@@ -169,7 +169,7 @@ SUCCEEDED를 확인했다. 테스트 내부 Worker는 대역이며 실제 장애
 `C:\minobox\tmp\verify-b-viewer-close-20261108.ps1`이다. 각각 해당 시험의 정확한 container/세션/소유자를
 검사하므로 다른 실행에는 새 ID로 준비해야 한다. 수집 결과는 같은 증거 루트의
 `b-control-relay-fault.json`, `viewer-close.json`, `viewer-frames.json`이다.
-새 설치/실행은 `micro-vm-app-window.md`의 checkout 경로 설정과 `tools/micro_vm_session_lab.py`를 사용한다.
+새 설치/실행은 `micro-vm-app-window.md`의 checkout 경로 설정과 `tools/lab/micro_vm_session_lab.py`를 사용한다.
 새 artifact.reconnect.v1 Host/Runner를 함께 배포한 후 새 증거 루트를 사용하며, 동작 중인 A/C의
 프로세스를 교체하지 않는다. 결과 영수증 경합 시험은 Router로 1MiB 텍스트를 생성한 뒤
 그 파일에 artifact_export(wait_ms=0), 이어 sandbox_run_status를 호출해 실제 ARTIFACT_BUSY와

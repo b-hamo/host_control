@@ -340,7 +340,7 @@ class Broker:
             raise BrokerError("POLICY_DENIED", f"{run.file} needs {run.program} in the Sandbox; this Host does not "
                                                "lend programs (--share-programs)")
         from sandbox_manager import SandboxManagerError
-        # share_program, not prepare_apps (배주한 2026-11-12): in Windows Sandbox it links the installed folder
+        # share_program, not prepare_apps (team decision 2026-11-12): in Windows Sandbox it links the installed folder
         # read-only within a second, while prepare_apps copies it (Python took over 2 minutes, past
         # sandbox_run's 60 s). A micro_VM Manager's share_program prepares (copies) by itself.
         try:

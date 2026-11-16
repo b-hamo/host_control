@@ -113,12 +113,12 @@ MAX_STATUS_WAIT_MS = 30000      # sandbox_run_status wait_ms cap (like artifact_
 STATUS_POLL_S = 2.0
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 SUFFIXES = (".exe", ".msi", ".ps1", ".py", ".js", ".rb", ".sh", ".zip")   # .zip: a project (host/sandbox_project.py)
-# 배주한 2026-11-05: a script in another language runs with the interpreter program_share lends the Sandbox
+# team decision 2026-11-05: a script in another language runs with the interpreter program_share lends the Sandbox
 # (read-only, from this computer's install). The Broker shares it right before the run (needs --share-programs).
 INTERPRETERS = {".py": "python", ".js": "node", ".rb": "ruby", ".sh": "git"}
 SCRIPT_FORMS = {"python-script": ".py", "javascript-script": ".js", "ruby-script": ".rb", "sh-script": ".sh"}
 INTERPRETER_PENDING = r"C:\Tools\interpreter-pending.exe"   # replaced by with_interpreter() before the run
-# 배주한 2026-11-05: one C, C++, Go, Zig, Java, C# or Rust file is compiled on this PC (host/local_compile.py)
+# team decision 2026-11-05: one C, C++, Go, Zig, Java, C# or Rust file is compiled on this PC (host/local_compile.py)
 # and only the result runs in the Sandbox (Java and C# with java / dotnet lent by program_share).
 from host.local_compile import GUEST_ROOT, LANGS as COMPILE_FORMS, TARGET  # noqa: E402
 # The Runner cannot report which window has focus (ui.click_element is not implemented), so the
