@@ -23,6 +23,7 @@ Codex · Claude Code ──MCP──▶ Host (이 저장소) ──TLS──▶ 
 | **받는 폴더 (inbox)** | 인터넷에서 받은 파일은 내 PC에서 실행이 금지된 폴더에 둡니다 |
 | **서명 검사** | Windows가 신뢰하는 공인 인증 기관의 유효한 서명이 있는 프로그램(.exe, .msi)만 다운로드 폴더로 보내 바로 쓰게 합니다. 서명이 없으면 격리 공간에서만 실행합니다 |
 | **실행 전 검사 hook** | 에이전트가 내 PC에서 밖에서 온 파일을 실행하거나, 인터넷에서 받아 바로 실행하는 명령(`iwr … \| iex` 등)을 쓰거나, 보호 설정을 끄려 하면 실행 전에 막습니다 |
+| **출처 표시** | 에이전트가 명령으로 받은 파일(`curl`, `iwr` 등)과 `git clone`한 프로젝트에 "밖에서 온 것" 표시를 자동으로 붙입니다. 표시된 프로젝트는 내 PC에서 빌드·실행(`npm install`, `python` 등)할 수 없고, 에이전트가 표시를 지울 수도 없습니다. 격리 공간이 아직 못 돌리는 종류(Maven·Gradle·make·PHP·VBScript·Visual Studio C++)는 사용자에게 허용 여부를 묻습니다(Claude Code는 자체 확인 창, Codex는 minoBox 확인 창). 허용해야만 실행됩니다 |
 | **웹 명령·외부 코드 분석** | 웹페이지가 시킨 명령과 GitHub 코드는 데이터로만 받아 격리 공간에서 실행합니다 |
 | **결과물 반출** | 격리 공간의 결과물은 Microsoft Defender 검사를 통과한 것만 다운로드 폴더(`SandboxOutput`)로 가져옵니다 |
 | **병렬 실행** | Windows Sandbox가 사용 중이면 micro VM을 띄워 작업을 동시에 처리합니다 |
@@ -60,13 +61,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.p
 둘 다 쓰면 `-RegisterCodex -RegisterClaude`를 함께 줍니다. 이미 설치한 뒤 나중에 Claude Code만 추가하려면
 `installer/register_claude.ps1`을 실행합니다. Claude Code에는 사용자 범위(모든 프로젝트)로 `scrp_sandbox`라는 이름으로 등록됩니다.
 
-팀 Skill(에이전트에게 "밖에서 온 코드는 Sandbox로" 같은 사용법을 알려 주는 지침)도 넣습니다.
+등록할 때 다음 두 가지도 함께 설치됩니다.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File codex/install_skill.ps1 -Agent Both    # Codex | Claude | Both
-```
+- **팀 Skill**: 에이전트에게 "밖에서 온 코드는 Sandbox로" 같은 사용법을 알려 주는 지침
+- **실행 전 검사 hook**: 위 규칙을 지침이 아니라 코드로 강제합니다. 에이전트가 속거나 지침을 무시해도 같은 결과가 나옵니다
 
-설치가 끝나면 에이전트를 다시 시작합니다. 설치가 하는 일, 옵션, 갱신 방법은 [통합 설치 안내](docs/solution-install.md)에 있습니다.
+Codex는 새 hook을 신뢰해야 실행하므로 Codex 앱의 **설정 → Hooks**에서 신뢰로 등록합니다. 설치가 끝나면 에이전트를 다시 시작합니다. 설치가 하는 일, 옵션, 갱신 방법은 [통합 설치 안내](docs/solution-install.md)에 있습니다.
 
 ### 설치 확인
 
@@ -78,14 +78,14 @@ powershell -ExecutionPolicy Bypass -File scripts/check_solution.ps1
 실제 동작까지 확인하려면 에이전트에게 **"7-Zip 콘솔판(7zr.exe) 받아서 실행해 줘"**라고
 시켜 보세요. Windows Sandbox 창이 뜨고 그 안에서 실행되면 정상입니다.
 
-### 실행 전 검사 hook 켜기 (권장)
+### Skill과 hook만 따로 설치하기
+
+등록 스크립트에 `-NoGuard`를 주면 Skill과 hook을 건너뜁니다. 나중에 따로 넣으려면:
 
 ```powershell
-py -3.13 host\exec_guard.py install --codex --inbox "$env:USERPROFILE\SecureCUA\solution\inbox"
+powershell -ExecutionPolicy Bypass -File codex/install_skill.ps1 -Agent Both    # Codex | Claude | Both
+py -3.13 host\exec_guard.py install --codex --claude --inbox "$env:USERPROFILE\SecureCUA\solution"
 ```
-
-Claude Code에도 쓰려면 `--claude`를 더합니다(`--codex --claude`). Codex는 앱의 **설정 → Hooks**에서 이 hook을 신뢰로
-등록해야 동작합니다. 등록한 뒤 에이전트를 다시 시작합니다.
 
 ## 사용하기
 
@@ -115,7 +115,7 @@ py -3.13 -m dashboard --open
 - minoBox는 악성 여부를 **탐지하지 않고 격리**합니다. Microsoft Defender를 대체하지 않고 함께 씁니다(반출 검사에도 Defender를 사용).
 - 서명은 "누가 만들었는지"의 증거이지 안전 보증이 아닙니다. 다른 코드를 실행하는 프로그램(PowerShell, Python 등)과 원격 제어 도구(AnyDesk 등)는 서명이 있어도 바로 쓰게 하지 않습니다.
 - 실행 전 검사 hook은 명령 문자열을 보고 판단하므로 일부러 난독화한 명령은 놓칠 수 있습니다. 그래서 격리 실행을 2차 방어로 둡니다.
-- `git clone`으로 받은 파일에는 인터넷 표시가 붙지 않아 hook의 출처 판단에서 빠질 수 있습니다.
+- 출처 표시는 에이전트가 **명령으로** 받은 것에만 붙습니다. 에이전트가 직접 짠 다운로드 스크립트를 실행해 받은 파일은 표시가 붙지 않을 수 있습니다.
 - micro VM은 Windows Sandbox 플랫폼의 문서화되지 않은 인터페이스를 쓰는 시험 단계 기능입니다.
 
 ## 문서

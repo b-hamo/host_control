@@ -395,18 +395,39 @@ Host는 HTTPS로 수신한 사본을 실행 금지 `Work/output/<세션>`에 두
 
 "밖에서 온 코드는 Sandbox에서" 규칙은 팀 Skill(프롬프트)에만 있었다. 그래서 웹 페이지나 파일에 속은 Agent가 이 PC에서 실행해도
 막을 장치가 없었다. Codex·Claude Code의 PreToolUse hook으로 Agent의 셸 명령과 파일 수정을 실행 **직전에** 규칙으로 검사한다.
-모델이 무엇을 지시받았든 같은 결과가 나온다.
+모델이 무엇을 지시받았든 같은 결과가 나온다. 같은 스크립트가 PostToolUse hook으로 셸 명령 **직후에도** 불려 그 명령이 받은 것에
+출처 표시를 붙인다(아래 "출처 표시").
 
 | 막는 것 | 예 | 근거 |
 |---|---|---|
 | 밖에서 온 파일 실행·복사·압축 풀기 | 인터넷 표시(Zone.Identifier)가 있거나 다운로드·inbox에 있는 프로그램·스크립트·압축 파일. 서명 검사(`signature_check.py`)를 통과한 exe·msi만 허용. 해시·서명 확인, 목록, 읽기는 허용(읽은 내용을 `iex`로 넘기면 차단) | 팀 출처 기준 규칙 |
 | 받아서 바로 실행 | `iwr … \| iex`, `curl … \| sh`, `-EncodedCommand`, mshta·regsvr32·rundll32·msiexec에 URL | ClickFix(ATT&CK T1204.004), T1218 |
-| 검사 장치 끄기 | hook·`.codex`·`.claude` 설정 수정, Defender 끄기·예외 추가 | 검사를 Agent가 스스로 풀지 못하게 |
+| 받은 프로젝트 빌드·실행 | 출처 표시가 있는 폴더에서 `python`·`npm`·`make`·`dotnet`·`cargo` 등, 그 안의 스크립트 실행. 같은 명령 안에서 받고 바로 실행(`git clone … && cd x && npm install`, `curl -o a.sh … && bash a.sh`)도 포함. `git`·읽기는 허용 | 팀 출처 기준 규칙 |
+| 검사 장치 끄기 | hook·`.codex`·`.claude` 설정 수정, Defender 끄기·예외 추가, 출처 표시 지우기(`Unblock-File`, `Zone.Identifier` 스트림, `scrp-origin.json`) | 검사를 Agent가 스스로 풀지 못하게 |
 
-설치 (Codex는 새 hook을 신뢰해야 실행한다: CLI `/hooks`, 앱 **Settings > Hooks**):
+**출처 표시 (PostToolUse).** `git clone`은 인터넷 표시를 남기지 않고, `curl -o`·`iwr -OutFile`도 남기지 않을 수 있다. 그래서 셸 명령이
+끝나면 명령 문자열에서 다운로드 대상을 찾아 표시를 붙인다. 이 단계는 막지 않는다(이미 실행됨). 다음 명령부터 위 규칙이 표시를 본다.
+
+| 명령 | 붙는 표시 |
+|---|---|
+| `git clone <원격 URL> [폴더]`, `gh repo clone owner/repo [폴더]` | 폴더에 `.git/scrp-origin.json`과 `.scrp-origin.json`(출처 URL, 시각. `git clean`이나 `.git` 삭제 하나로는 둘 다 지워지지 않음, `.git/info/exclude`에 등록해 `git status`에 안 보임), 안의 프로그램·스크립트·압축 파일에 Zone.Identifier ZoneId=3 |
+| `curl -o/-O`, `wget`, `iwr`/`irm -OutFile`, `Start-BitsTransfer`, `bitsadmin /transfer`, `certutil -urlcache` | 받은 파일에 Zone.Identifier ZoneId=3과 HostUrl |
+
+**격리 공간이 못 돌리는 종류.** Maven·Gradle·Ant·make·PHP·VBScript·Visual Studio C++ 는 `sandbox_project.py`에 실행 순서가 없거나
+(VBScript는) 격리 공간 Windows에 엔진이 없다. 이 종류의 밖에서 온 코드는 Claude Code에서 `permissionDecision: "ask"`로 사용자에게
+묻는다(허용하면 이 PC에서 실행). Codex는 hook의 `ask`를 아직 지원하지 않고 명령을 그대로 실행하므로(공식 hooks 문서)
+`--agent codex`에서는 hook이 직접 Windows 확인 창(예/아니요, 기본값 아니요)을 띄우고 기다린다. **예**를 눌러야 실행되고,
+아니요·창 닫기·90초 무응답은 차단이다. Codex hook 제한 시간(120초)보다 짧게 둔 것은 제한 시간에 걸린 hook이 통과로 처리되기
+때문이다. `--agent`가 없으면 묻지 않고 차단한다. 설치가 앱별로 `--agent`를 넣는다.
+
+`cd`와 `powershell -Command "…"`·`bash -c "…"` 안의 명령도 따라간다. 클론은 파일 20,000개까지 표시하고, 폴더 표시는 항상 남긴다.
+
+설치: `installer/register_codex.ps1`·`register_claude.ps1`(통합 설치의 `-RegisterCodex`·`-RegisterClaude`)이 팀 Skill과 함께
+자동으로 넣는다. PreToolUse와 PostToolUse 두 항목이 들어가며, 다시 돌려도 우리 항목만 바뀐다. 따로 넣을 때
+(Codex는 새 hook을 신뢰해야 실행한다: CLI `/hooks`, 앱 **Settings > Hooks**):
 
 ```powershell
-.venv\Scripts\python.exe host\exec_guard.py install --codex --claude --inbox C:\Users\<나>\SecureCUA\solution\inbox
+.venv\Scripts\python.exe host\exec_guard.py install --codex --claude --inbox C:\Users\<나>\SecureCUA\solution
 ```
 
 - 차단하면 Agent에게 이유와 대신 쓸 SCRP 도구(`inbox_import`·`inbox_download` → `sandbox_run`, `router_capture`)를 알려 주고,

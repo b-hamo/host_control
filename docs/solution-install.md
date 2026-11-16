@@ -105,7 +105,10 @@ Codex 등록만 다시 하려면 `installer/register_codex.ps1`을 사용한다.
 설치 명령에서는 `-CodexConfig`를 사용한다. 이전 MCP 이름 `scrp`가 있으면 중복 실행을
 피하도록 거부하므로 사용자가 기존 등록을 제거/이름 변경해야 한다. 복잡한 TOML을 안전하게
 교체할 수 없으면 기존 파일을 유지하고 생성된 `mcp.toml`의 수동 적용을 안내한다.
-팀 Skill은 선택적으로 `codex/install_skill.ps1`로 설치한다. MCP 등록과 별개다.
+등록 스크립트(`register_codex.ps1`, `register_claude.ps1`)는 MCP 등록 뒤 팀 Skill(`codex/install_skill.ps1 -Agent`)과
+실행 전 검사 hook(`host/exec_guard.py install --codex|--claude --inbox <work>`)도 설치한다. `--inbox`는 work 폴더 전체라서
+기본 inbox와 micro VM 클라이언트별 inbox·output이 모두 "밖에서 온 것"으로 판단된다. `-NoGuard`로 건너뛸 수 있다.
+Codex는 새 hook을 신뢰해야 실행한다(앱 Settings > Hooks, CLI `/hooks`).
 
 ## 실패 처리와 재실행
 
