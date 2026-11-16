@@ -34,7 +34,7 @@ Codex · Claude Code ──MCP──▶ Host (이 저장소) ──TLS──▶ 
 - Microsoft Defender
 - Python 3.13 x64, Git
 - MSYS2 UCRT64의 gcc, cmake, ninja, jsoncpp (Runner 빌드용)
-- AI 에이전트: Codex (설치기가 Codex에 등록합니다. 실행 전 검사 hook은 Claude Code도 지원)
+- AI 에이전트: **Codex** 또는 **Claude Code** (둘 다 써도 됩니다)
 - micro VM 병렬 실행은 선택입니다. minoBox 관리 서비스가 따로 필요합니다 ([설치 안내](docs/solution-install.md))
 
 ## 설치
@@ -47,14 +47,26 @@ git clone https://github.com/b-hamo/sandbox_manager
 git clone https://github.com/b-hamo/sandbox_runner
 ```
 
-**일반 PowerShell**에서 host_control 폴더로 이동해 설치하고 Codex에 등록합니다. 검사 서비스·방화벽 단계에서 UAC 승인을 한 번 묻습니다.
+**일반 PowerShell**에서 host_control 폴더로 이동해 설치하고 쓰는 에이전트에 등록합니다. 검사 서비스·방화벽 단계에서 UAC 승인을 한 번 묻습니다.
 
 ```powershell
 cd host_control
+# Codex
 powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.ps1 -Mode Deploy -RegisterCodex
+# Claude Code (claude CLI가 PATH에 있어야 합니다)
+powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.ps1 -Mode Deploy -RegisterClaude
 ```
 
-설치가 끝나면 Codex를 다시 시작합니다. 설치가 하는 일, 옵션, 갱신 방법은 [통합 설치 안내](docs/solution-install.md)에 있습니다.
+둘 다 쓰면 `-RegisterCodex -RegisterClaude`를 함께 줍니다. 이미 설치한 뒤 나중에 Claude Code만 추가하려면
+`installer/register_claude.ps1`을 실행합니다. Claude Code에는 사용자 범위(모든 프로젝트)로 `scrp_sandbox`라는 이름으로 등록됩니다.
+
+팀 Skill(에이전트에게 "밖에서 온 코드는 Sandbox로" 같은 사용법을 알려 주는 지침)도 넣습니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File codex/install_skill.ps1 -Agent Both    # Codex | Claude | Both
+```
+
+설치가 끝나면 에이전트를 다시 시작합니다. 설치가 하는 일, 옵션, 갱신 방법은 [통합 설치 안내](docs/solution-install.md)에 있습니다.
 
 ### 설치 확인
 
@@ -62,7 +74,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.p
 powershell -ExecutionPolicy Bypass -File scripts/check_solution.ps1
 ```
 
-`SOLUTION_READY`가 나오면 준비된 것입니다. 실제 동작까지 확인하려면 Codex에게 **"7-Zip 콘솔판(7zr.exe) 받아서 실행해 줘"**라고
+`SOLUTION_READY`가 나오면 준비된 것입니다. Claude Code는 `claude mcp list`에서 `scrp_sandbox`가 `Connected`로 보여야 합니다.
+실제 동작까지 확인하려면 에이전트에게 **"7-Zip 콘솔판(7zr.exe) 받아서 실행해 줘"**라고
 시켜 보세요. Windows Sandbox 창이 뜨고 그 안에서 실행되면 정상입니다.
 
 ### 실행 전 검사 hook 켜기 (권장)
@@ -71,11 +84,12 @@ powershell -ExecutionPolicy Bypass -File scripts/check_solution.ps1
 py -3.13 host\exec_guard.py install --codex --inbox "$env:USERPROFILE\SecureCUA\solution\inbox"
 ```
 
-Codex 앱의 **설정 → Hooks**에서 이 hook을 신뢰로 등록한 뒤 Codex를 다시 시작합니다. Claude Code에도 쓰려면 `--claude`를 더합니다.
+Claude Code에도 쓰려면 `--claude`를 더합니다(`--codex --claude`). Codex는 앱의 **설정 → Hooks**에서 이 hook을 신뢰로
+등록해야 동작합니다. 등록한 뒤 에이전트를 다시 시작합니다.
 
 ## 사용하기
 
-평소처럼 Codex에게 말하면 됩니다. 밖에서 온 것은 minoBox가 알아서 격리 공간으로 보냅니다.
+평소처럼 Codex나 Claude Code에게 말하면 됩니다. 밖에서 온 것은 minoBox가 알아서 격리 공간으로 보냅니다.
 
 | 이렇게 말하면 | 이렇게 됩니다 |
 |---|---|
@@ -128,7 +142,7 @@ py -3.13 -m dashboard --open
 | `scrp/` | Host ↔ Runner 프로토콜 라이브러리 |
 | `schema/` | MCP 도구 정의와 메시지 스키마 |
 | `installer/`, `scripts/` | 통합 설치·확인·실행 스크립트 |
-| `codex/` | Codex 팀 Skill과 설정 예시 |
+| `codex/` | 팀 Skill(Codex·Claude Code 공용)과 Codex 설정 예시 |
 | `tests/` | 테스트 |
 | `tools/lab/` | 실제 VM 장애·통합 시험 도구 (개발용) |
 
