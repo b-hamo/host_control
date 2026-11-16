@@ -200,6 +200,11 @@ class Run:
     build: tuple | None = None         # (capture, form, source): a compile form not compiled yet
     project: object | None = None      # sandbox_project.Project: a project zip whose script is not written yet
     with_stderr: bool = False          # a language run: its error output is shown too (after stdout)
+    build_plan: dict | None = None     # agent-selected Host build commands, not a fixed recipe
+    build_inputs: tuple = ()
+    build_sources: tuple = ()
+    bundle: bool = False               # Guest only unpacks and runs the Host-built package
+    build_cancel: object | None = None # threading.Event: stop work when its coordinator closes
 
     @property
     def evidence_name(self) -> str:
@@ -387,6 +392,11 @@ class SandboxRunner:
         if not exe:
             raise RunError("RUNTIME_UNAVAILABLE", f"{run.program} has no program for {run.file} in the Sandbox")
         c = run.action.command
+        if run.bundle:
+            run.action = replace(run.action, command=Command(c.executable, (*c.argv, "-Runtime", exe),
+                                                            c.cwd, c.target_source))
+            run.program = None
+            return
         argv = tuple(a.replace(GUEST_ROOT, shared.get("guest_root", "")) for a in c.argv)   # C#: the SDK's runtimeconfig
         run.action = replace(run.action, command=Command(exe, argv, c.cwd, c.target_source))
         run.program = None
@@ -394,6 +404,10 @@ class SandboxRunner:
     def with_build(self, run: Run, built) -> None:
         """A compile form (host/local_compile.py): put what this PC compiled into the inbox and make it the
         run's input. Before start(): the delegation binds this final command, the capture stays the parent."""
+        from host.local_build import BuiltBundle
+        if isinstance(built, BuiltBundle):
+            self._with_build_bundle(run, built)
+            return
         capture, form, _ = run.build
         try:
             path = place(self.inbox, f"{capture.source_id}{built.suffix}", built.data)
@@ -413,6 +427,87 @@ class SandboxRunner:
                             outputs=("stdout",))
         run.file, run.program, run.build = path.name, built.program, None
         run.origin = {**run.origin, "script_source_id": derived.source_id, "compiled_by": built.compiler}
+
+    def _with_build_bundle(self, run: Run, built) -> None:
+        from host.local_build import guest_script
+        parents = run.build_sources
+        package = place(self.inbox, f"build-{run.nonce}.zip", built.data)
+        package_source = Source(f"BUILD-{run.nonce}-ZIP", "derived:agent-build-plan",
+                                hashlib.sha256(built.data).hexdigest(), "generated",
+                                tuple(source.source_id for source in parents))
+        text = guest_script(built, str(self.guest_input / package.name), run.nonce)
+        data = b"\xef\xbb\xbf" + text.encode("utf-8")
+        helper = place(self.inbox, f"build-{run.nonce}.ps1", data)
+        helper_source = Source(f"BUILD-{run.nonce}-PS1", "derived:build-package-launch",
+                               hashlib.sha256(data).hexdigest(), "generated", (package_source.source_id,))
+        for source, path in ((package_source, package), (helper_source, helper)):
+            self._paths[source.source_id] = path
+            self.authority.sources[source.source_id] = source
+        target = str(self.guest_input / helper.name)
+        scope = Scope(reads=(target, str(self.guest_input / package.name)),
+                      writes=(self.output_directory(run.identity),), capabilities=CAPABILITIES)
+        run.action = Action(run.run_id, "router-execute", Operation.EXECUTE, scope, run.run_id,
+                            sources=(helper_source, package_source, *parents),
+                            command=Command(POWERSHELL, ("-NoProfile", "-NonInteractive", "-ExecutionPolicy",
+                                                        "Bypass", "-File", target),
+                                            str(self.guest_input), helper_source.source_id), outputs=("stdout",))
+        run.file, run.program, run.build, run.bundle = helper.name, built.program, None, True
+        run.build_inputs = ()
+        run.origin.update(compiled_by=built.compiler, build_status="SUCCEEDED", build_log=built.log,
+                          build_steps=list(built.steps), output_sha256=package_source.sha256)
+
+    def _plan_build(self, args: dict, identity: tuple) -> tuple[Run, dict]:
+        """Bind original inputs to an agent-authored Host build, without running it."""
+        import copy
+        from host.local_build import BuildInput, relative_path
+        from host.local_compile import CompileError
+        definition = copy.deepcopy(args["build_plan"])
+        sources, inputs = [], []
+        primary = {key: args[key] for key in ("source_id", "file") if key in args}
+        primary.update(path=definition["source_name"], archive=definition.get("archive", False))
+        try:
+            for item in [primary, *definition.get("inputs", [])]:
+                relative_path(item["path"])
+                if "source_id" in item:
+                    known = self.captures.sources.get(item["source_id"])
+                    if known is None:
+                        raise RunError("INVALID_ARGUMENT", "unknown build capture: " + item["source_id"])
+                    source = known[0]
+                    if source.source_id in self.captures.from_clipboard:
+                        raise RunError("INVALID_ARGUMENT", "build-plan takes source captures, not clipboard commands")
+                    if item.get("archive"):
+                        raise RunError("INVALID_ARGUMENT", "archive input must reference an inbox file")
+                    if not self.captures.verify(source):
+                        raise RunError("POLICY_DENIED", "build capture changed after capture")
+                    data = self.captures.text(source.source_id).encode("utf-8")
+                else:
+                    known = self._files.get(item["file"].casefold())
+                    if known is None:
+                        raise RunError("INVALID_ARGUMENT", "build input must be an inbox file from this session")
+                    source, path = known
+                    data = path.read_bytes()
+                    if hashlib.sha256(data).hexdigest() != source.sha256:
+                        raise RunError("POLICY_DENIED", "build inbox input changed after import")
+                self.authority.sources[source.source_id] = source
+                if source not in sources:
+                    sources.append(source)
+                inputs.append(BuildInput(item["path"], data, item.get("archive", False)))
+        except (OSError, CompileError) as exc:
+            raise RunError(getattr(exc, "code", "INVALID_ARGUMENT"), str(exc)) from None
+        self._seq += 1
+        run_id = f"RUN-{self._seq:04d}"
+        scope = Scope(reads=(), writes=(self.output_directory(identity),), capabilities=CAPABILITIES)
+        action = Action(run_id, "router-execute", Operation.EXECUTE, scope, run_id, sources=tuple(sources),
+                        command=Command(INTERPRETER_PENDING, (), str(self.guest_input), sources[0].source_id),
+                        outputs=("stdout",))
+        fingerprint = hashlib.sha256(json.dumps(definition, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        origin = {"request_id": args["request_id"], "source_id": sources[0].source_id,
+                  "transform": "build-plan", "build_location": "HOST", "execution_location": "SANDBOX",
+                  "build_plan_sha256": fingerprint, "build_status": "PENDING"}
+        run = Run(run_id, action, "build.pending", uuid4().hex[:16], identity, origin=origin,
+                  build=(sources[0], "build-plan", ""), build_plan=definition,
+                  build_inputs=tuple(inputs), build_sources=tuple(sources), with_stderr=True)
+        return run, {**origin, "command": "execute supplied build steps on Host; run output in Sandbox"}
 
     # -- a captured web page command (router_execute, #94) -------------------
     def repeated(self, args: dict) -> Run | None:
@@ -435,6 +530,8 @@ class SandboxRunner:
         from host.router_command_intake import decode_powershell, script_from_source
         if self.captures is None:
             raise RunError("POLICY_DENIED", "router_execute is not enabled on this Host (--router-capture)")
+        if args["form"] == "build-plan":
+            return self._plan_build(args, identity)
         known = self.captures.sources.get(args["source_id"])
         if known is None:
             raise RunError("INVALID_ARGUMENT", f"{args['source_id']!r} is not a router_capture source of this "
@@ -525,7 +622,9 @@ class SandboxRunner:
         for run in self.runs.values():
             view = run.view()
             if view["state"] in ("ACCEPTED", "RUNNING"):
-                if run.dispatched:
+                if run.build_plan is not None and view.get("build_status") == "RUNNING":
+                    view.update(state="UNKNOWN", reason="SESSION_ENDED_BUILD_UNCONFIRMED", build_status="UNKNOWN")
+                elif run.dispatched:
                     view.update(state="UNKNOWN", reason="SESSION_ENDED_RESULT_UNCONFIRMED")
                 else:
                     view.update(state="FAILED", reason="SESSION_ENDED_BEFORE_LAUNCH")

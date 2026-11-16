@@ -1,11 +1,41 @@
 ---
 name: "secure-sandbox-run"
-description: "Use SCRP to download, install, open or run internet or untrusted files and code, including programs in Downloads, pasted code, scripts and GitHub repositories (e.g. \"7-Zip 받아서 설치해줘\", \"이 GitHub 저장소 컴파일 후 실행해줘\"). Choose the execution route before preparing apps: supported standalone compiled source uses Router-controlled local compilation and Sandbox execution; project builds and scripts run in the Sandbox. Never execute external code on this PC. Import files through the inbox and export results through the scanned Output flow. Not for ordinary coding or reading project files."
+description: "Use SCRP to download, install, open or run internet or untrusted files and code, including programs in Downloads, pasted code, scripts and GitHub repositories (e.g. \"7-Zip 받아서 설치해줘\", \"이 GitHub 저장소 컴파일 후 실행해줘\"). When exposed, prefer agent-authored Router build-plan: build commands execute on Host and packaged output runs in Sandbox. Legacy fixed routes remain available. Do not run external application output directly on Host. Import files through the inbox and export results through the scanned Output flow. Not for ordinary coding or reading project files."
 ---
 
 # Secure Sandbox Run (Secure CUA team skill)
 
 Reply to the user in Korean, briefly.
+
+## Agent-authored Host build plans (preferred when exposed by the tool)
+
+When `router_execute` exposes form **build-plan**, choose the build commands yourself from the
+source, dependencies and build files. This section takes precedence over the legacy fixed-route
+instructions below: compilation is on the **Host**, and the packaged output runs in the existing
+Sandbox. Do not move compilation into the Guest merely because custom flags or multiple files are needed.
+
+Pass the original source via `router_capture`, then call `router_execute` with form build-plan and
+the build_plan object. It specifies source_name, optional additional inputs, steps (executable and
+arguments arrays), working_directory/environment, and output (path, entry, optional runtime and arguments).
+For a project ZIP use inbox file instead of source_id, archive=true, and source_name="."; its top folder
+is preserved. See [the full contract and examples](../../../docs/agent-build-plan.md).
+
+- Router does not inspect or allowlist build commands, compiler options or source contents in this form.
+  Pass the actual Host compiler/build-tool path or discoverable name. Do not edit source to fit fixed flags.
+- A supplied build script or dependency installation step executes on the Host too. Keep application
+  execution in output metadata; do not put the application's launch in the Host build steps.
+- Package an output directory when DLLs/resources are needed. Set output.runtime for java/dotnet and
+  put {entry}/{root} in its argument array. Only Guest runtimes need preparation/sharing.
+- A build-plan returns a run_id before compiling. Poll `sandbox_run_status`: build_status/build_log
+  describe Host compilation; state/exit_code/stdout describe the Guest execution separately.
+- A definitive compiler failure may be corrected by changing the plan and using a new request_id.
+  The same ID always returns the same job, even after failure. Never replay UNKNOWN, a timeout or
+  uncertain input. Source hashes, transport checks, session identity and Guest receipts remain in force.
+- Do not invoke a Host compiler directly through another tool. This is Router-controlled execution.
+  If the connected tool does not expose build-plan, report that this Host version needs an update;
+  do not invent unsupported fields or replace it with an ad hoc Guest compiler script.
+
+The fixed forms below remain available for older integrations; their original checks still apply.
 
 ## Choose the execution route before preparing apps
 

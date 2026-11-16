@@ -408,10 +408,50 @@ class Broker:
         from host.local_compile import CompileError, build
         _, form, source = run.build
         try:
-            built = await asyncio.to_thread(build, form, source)
+            if run.build_plan is not None:
+                from host.local_build import build as build_plan
+                built = await asyncio.to_thread(build_plan, run.build_plan, run.build_inputs, cancel=run.build_cancel)
+            else:
+                built = await asyncio.to_thread(build, form, source)
         except CompileError as e:
+            if run.build_plan is not None:
+                run.origin.update(build_status="UNKNOWN" if e.code == "ACTION_TIMEOUT" else "FAILED", build_error=e.message,
+                                  build_error_code=e.code, build_exit_code=getattr(e, "exit_code", None),
+                                  build_steps=getattr(e, "steps", []))
             raise BrokerError(e.code, e.message) from None
         self.runner.with_build(run, built)
+
+    async def _start_build_plan(self, run) -> None:
+        """A reserved build survives client timeouts; identical requests never rebuild."""
+        import threading
+        from host.sandbox_run import RunError
+        if self.session.identity != run.identity or self.session.terminated:
+            run.origin["build_status"] = "FAILED"
+            run.set("FAILED", "SESSION_CHANGED_BEFORE_BUILD")
+            return
+        run.build_cancel = threading.Event()
+        run.origin["build_status"] = "RUNNING"
+        try:
+            await self._compile_here(run)
+            if self.session.identity != run.identity or self.session.terminated:
+                run.set("FAILED", "SESSION_CHANGED_AFTER_BUILD")
+                return
+            await self._lend_interpreter(run)
+            await self.runner.start(self, run)
+        except asyncio.CancelledError:
+            run.build_cancel.set()
+            run.origin.update(build_status="UNKNOWN" if run.build is not None else "SUCCEEDED", error="ACTION_TIMEOUT",
+                              message="build coordinator interrupted; commands are not replayed")
+            run.set("UNKNOWN", "BUILD_INTERRUPTED")
+            raise
+        except (BrokerError, RunError) as exc:
+            run.origin.update(error=exc.code, message=exc.message)
+            run.set("UNKNOWN" if exc.code == "ACTION_TIMEOUT" else "FAILED", "BUILD_OR_LAUNCH_FAILED")
+        except Exception as exc:
+            # A crashed build coordinator is not permission to replay commands.
+            run.origin.update(build_status="UNKNOWN" if run.build is not None else "SUCCEEDED",
+                              error="INTERNAL", message=str(exc))
+            run.set("UNKNOWN", "BUILD_OR_LAUNCH_UNCONFIRMED")
 
     def _execute_plan(self, args: dict):
         from host.sandbox_run import RunError
@@ -621,8 +661,18 @@ class Broker:
                 raise BrokerError(e.code, e.message) from None
         if tool == "router_execute":
             from host.sandbox_run import RunError
+            earlier = self.runner.repeated(args)
+            if earlier is not None:
+                return {**earlier.view(), "repeated": True}
             if plan.run_id in self.runner.runs:
                 return {**plan.view(), "repeated": True}     # the same request: its run, not a new one
+            if plan.build_plan is not None:
+                self.runner.runs[plan.run_id] = plan
+                self.runner.bind_request(args, plan)
+                plan.set("ACCEPTED", "BUILD_PENDING")
+                plan.task = asyncio.create_task(self._start_build_plan(plan))
+                return {**plan.view(), "message": "Build accepted on Host; output will run in Sandbox. "
+                        "Poll sandbox_run_status with this run_id. Do not replay while build_status is RUNNING."}
             try:
                 await self._compile_here(plan)
                 await self._lend_interpreter(plan)
@@ -683,7 +733,8 @@ class Broker:
                                                               "repeated") if k in result.data}
         if result.ok and tool in ("sandbox_run", "sandbox_run_status", "router_execute"):
             outcome["run"] = {k: result.data[k] for k in ("run_id", "file", "state", "reason", "exit_code",
-                                                          "request_id", "source_id", "repeated")
+                                                          "request_id", "source_id", "repeated", "build_status",
+                                                          "build_plan_sha256", "build_location", "output_sha256")
                               if k in result.data}
             run = self.runner.runs.get(result.data["run_id"]) if self.runner is not None else None
             if run is not None and tool == "router_execute" and not result.data.get("repeated"):
