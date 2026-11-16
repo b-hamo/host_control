@@ -10,7 +10,7 @@ param(
     [ValidateSet('WindowsSandbox','AutoAppWindow','AppWindow')][string]$VmMode = 'WindowsSandbox',
     [string]$MicroVmPackage = '', [string]$MicroVmRoot = '', [string]$MicroVmRelay = '',
     [ValidateRange(1,64)][int]$MicroVmMaxActive = 8,
-    [switch]$RegisterCodex, [string]$CodexConfig = '', [switch]$Start,
+    [switch]$RegisterCodex, [string]$CodexConfig = '', [switch]$RegisterClaude, [switch]$Start,
     [switch]$CheckOnly
 )
 . (Join-Path $PSScriptRoot 'solution_common.ps1')
@@ -66,6 +66,7 @@ try {
     Save-SolutionProfile $profile $State
     Invoke-SolutionCommand $python @((Join-Path $repo 'host/solution.py'),'--config',(Join-Path $State 'solution.json'),'--write-config',(Join-Path $State 'mcp.toml'))
     if ($RegisterCodex) { & (Join-Path $PSScriptRoot 'register_codex.ps1') -State $State -ConfigPath $CodexConfig }
+    if ($RegisterClaude) { & (Join-Path $PSScriptRoot 'register_claude.ps1') -State $State }
     Write-Host "SOLUTION_INSTALLED: $(Join-Path $State 'solution.json')"
 } finally { Stop-Transcript | Out-Null; $lock.Dispose() }
 if ($Start) { & (Join-Path $repo 'scripts/start_solution.ps1') -State $State }

@@ -108,6 +108,8 @@ def main(argv=None):
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--write-config", type=Path)
     mode.add_argument("--register-codex", type=Path)
+    mode.add_argument("--register-claude", action="store_true",
+                      help="register this Host with Claude Code (user scope, via `claude mcp add-json`)")
     a = p.parse_args(argv)
     try:
         profile = None
@@ -147,6 +149,13 @@ def main(argv=None):
             from host.solution_config import register_mcp, render_profile_mcp
             backup = register_mcp(a.register_codex, render_profile_mcp(a.config, profile))
             print(f'CODEX_REGISTERED: {a.register_codex}; backup={backup or "unchanged"}; reconnect MCP')
+            return
+        if a.register_claude:
+            if not profile:
+                raise ValueError('--register-claude requires --config')
+            from host.solution_config import register_claude, render_profile_claude
+            exe = register_claude(render_profile_claude(a.config, profile))
+            print(f'CLAUDE_REGISTERED: scrp_sandbox (user scope) via {exe}; restart Claude Code')
             return
         if a.write_config:
             a.write_config.parent.mkdir(parents=True, exist_ok=True)
