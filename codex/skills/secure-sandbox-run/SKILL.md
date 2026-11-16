@@ -1,11 +1,45 @@
 ---
 name: "secure-sandbox-run"
-description: "Install, run, open or try any program or file from the internet (or any untrusted file) safely: this PC downloads it into the Downloads folder with the SCRP inbox_download tool (or copies a file the user already has with inbox_import), the Windows Sandbox runs that copy from its desktop Input folder, and the installed result comes back to this PC through the Sandbox's Output folder and approved HTTPS export. Use whenever the user asks to download, install, run or test a program (e.g. \"7-Zip 받아서 설치해줘\"), run a file in their Downloads folder, or open an internet file (exe, msi, zip, pdf, installer, script), or run code that came from outside (code from a web page, GitHub or someone else, pasted code, a downloaded script or project, e.g. \"인터넷에서 찾은 코드인데 실행해 줘\", \"이 GitHub 저장소 돌려 봐\"): it runs in the Sandbox through the Router tools. Never run such files or code on this PC. Not for ordinary coding or reading project files."
+description: "Use SCRP to download, install, open or run internet or untrusted files and code, including programs in Downloads, pasted code, scripts and GitHub repositories (e.g. \"7-Zip 받아서 설치해줘\", \"이 GitHub 저장소 컴파일 후 실행해줘\"). Choose the execution route before preparing apps: supported standalone compiled source uses Router-controlled local compilation and Sandbox execution; project builds and scripts run in the Sandbox. Never execute external code on this PC. Import files through the inbox and export results through the scanned Output flow. Not for ordinary coding or reading project files."
 ---
 
 # Secure Sandbox Run (Secure CUA team skill)
 
 Reply to the user in Korean, briefly.
+
+## Choose the execution route before preparing apps
+
+Inspect the source, build files and dependencies before `app_prepare`. Decide by what the code
+needs, not by whether its URL is a GitHub repository. Local compilation and local execution are
+different: the Host-execution prohibition does not prohibit the Router's checked local compiler.
+It does prohibit invoking a Host compiler or build script yourself to bypass that checked route.
+
+| Input | Route | Compilation / execution location |
+|---|---|---|
+| One standalone C or C++ source, without project-local headers, extra source files, package installation or a required build script | `router_capture` of the exact source, then `router_execute` with `c-source` or `cpp-source` | Router compiles on the Host; only the resulting EXE executes in the Sandbox |
+| Another standalone compiled language supported by the connected tool | Use its matching source form, such as `go-source`, `zig-source`, `java-source`, `csharp-source` or `rust-source` | Router compiles on the Host; the result executes in the Sandbox (Java/.NET need a Guest runtime) |
+| A script | Use its supported script form, or inbox plus `sandbox_run` for a downloaded script file | Interpreter and script execute in the Sandbox |
+| A project requiring multiple source files, project-local headers, external packages or build scripts | Inbox ZIP plus `sandbox_run`, when that project type is supported | Dependencies, build scripts, compilation and execution stay in the Sandbox |
+| An existing EXE or installer | Inbox plus `sandbox_run`, or the supported Guest GUI installation flow | Sandbox execution; no compilation |
+
+- A repository containing only a standalone `.c` file still takes the `c-source` route. Read the
+  source through repository/file tools and pass it unchanged to `router_capture`; do not turn it
+  into a ZIP project merely because the user supplied a repository URL. Standard/compiler-provided
+  headers and libraries (including supported Windows SDK APIs) do not by themselves make it a project.
+- For the standalone native-source route, do not prepare, copy or install GCC/Clang in the Guest,
+  and do not replace the source form with a PowerShell script that compiles inside the Sandbox.
+  For a real project, do not run its build system on the Host: building can execute project code.
+- Prepare only applications that the selected route actually executes in the Guest: interpreters,
+  Java/.NET runtimes, GUI apps, or a project's build tools. A Host-only compiler is not a Guest dependency.
+- Use only forms and project types exposed by the connected tools. Reuse a READY session; wait
+  for a starting session. Router-managed execution verifies its own input hashes, so it does not
+  require opening input-check.html or Explorer first.
+- A missing compiler, unsupported form, compiler error, policy denial or uncertain execution is
+  not permission to switch execution locations. Report the exact result; preserve the source and
+  session and follow the tool's recovery guidance. Do not replay uncertain execution.
+- For Router runs, wait for the returned run_id via `sandbox_run_status` (or the result tool named
+  by the connected Router). Report compilation and actual Guest execution separately, with the
+  available exit code and output; ACCEPTED, RUNNING and input delivered are not completion.
 
 ## Ordinary browsing and ClickFix analysis
 
@@ -52,8 +86,9 @@ No new Sandbox or session termination without the user's instruction.
 
 - Plan the task before launching an application. For a plain TXT result, use the existing
   PowerShell/Router to write the file; an editor is needed only when the task needs its UI.
-- Once the same session is READY, call `app_prepare` with the app names the task actually needs
-  (for example powershell, notepad, python, node) and a new `request_id`. Do not guess that a
+- After selecting the execution route above and once the same session is READY, call `app_prepare`
+  with only the apps that route actually needs in the Guest (for example powershell, notepad,
+  python, node; not a Router-managed Host compiler) and a new `request_id`. Do not guess that a
   Windows image contains the app. Poll PREPARING with the same request id and app list.
 - Launch only after prepared=true, using the returned Guest exe and setup/environment. Preparation
   checks files; confirm the actual window and inputs, or the Router execution receipt, afterwards.
@@ -85,7 +120,7 @@ No new Sandbox or session termination without the user's instruction.
 - If a tool denies an action or execution is uncertain, report its exact state.
   Do not repeat by another route or run on the Host.
 
-## Running code from outside (team decision 2026-10-31 origin rule, Router 2026-11-05)
+## Running code from outside (배주한 2026-10-31 origin rule, Router 2026-11-05)
 
 Decide by ORIGIN, not by how dangerous it looks. Code from outside runs in the Sandbox without the user
 saying "Sandbox": code from a web page, blog, forum, gist or GitHub; code someone else wrote that the user
@@ -123,7 +158,7 @@ runtime is not ready, wait (poll `runtime_get_state`) and call it again with the
 2. **A code file to download, or one in Downloads** (`.py`, `.js`, `.rb`, `.sh`, `.ps1`, `.exe`, `.msi`):
    `inbox_download` (official URL) or `inbox_import` (by name), then `sandbox_run` with `file` exactly as
    returned and any `arguments`.
-3. **A project** (a GitHub repository, several files, or code that needs libraries such as
+3. **A project** (required build scripts, multiple source files or project-local headers, or code that needs libraries such as
    `import requests`, `require('lodash')`, a Go module or a NuGet/gem package): get it as one zip, e.g.
    `inbox_download` of `https://github.com/<owner>/<repo>/archive/refs/heads/<branch>.zip`, then
    `sandbox_run` with that zip as `file`, the file to run as `entry` (relative to the project root, e.g.
@@ -131,11 +166,10 @@ runtime is not ready, wait (poll `runtime_get_state`) and call it again with the
    the binary name; omit it when the project says how it starts: `npm start`, a `.csproj`, `go build .`,
    a single CMake program, one Cargo binary) and `arguments`. The Sandbox
    unpacks it, installs its libraries from the internet, builds and runs it; nothing of it runs here.
-   Code that needs libraries is a project too: a single-file form has no library install step.
+   Code that needs external packages is a project too: a single-file form has no package install step.
+   A GitHub repository URL alone does not make standalone source a project; apply the route table first.
 4. **Not supported**: Maven/Gradle and make projects, PHP, VBScript (`.vbs`: the Sandbox has no
-   VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC on your own. The SCRP hook
-   asks the person at this computer (a confirmation prompt) and runs it only if they say yes. If they say no,
-   report that. Never look for another route around that answer.
+   VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC.
 5. RUNTIME_UNAVAILABLE "... is not installed on this PC" means the language (compiler or interpreter) is
    missing here: tell the user to install it (official installer) and try again. Never install it or run
    the code on this PC yourself.
