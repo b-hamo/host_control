@@ -20,6 +20,8 @@ Manager 선택 후 `sandbox_run.py`에 실제 Guest 입력 경로를 연결하�
 `output_export.py`/`artifacts.py`의 재연결 reset과 수신 중 취소는 `test_output_export.py`/`test_artifact_export.py`에서,
 선택적 설치 backend·바이너리 pin·세션 경로는 `test_solution_config.py`에서 검증한다.
 관리 서비스 바이너리·설정 pin 및 배포 복구 설정도 같은 테스트에서 검사한다.
+설치·업데이트의 Manager/관리 서비스 전송 한도 일치 검사는 `installer/solution_common.ps1`에서
+수행하고 `tests/test_solution_powershell.py`에서 이전 서비스 거부·Windows Sandbox 경로 보존을 검증한다.
 `solution.py`는 다중 VM 프로필의 채팅 전용 매핑을 먼저 만든 뒤 그 경로에서 실행 차단을 검사한다.
 기존 WSB가 매핑한 공용 inbox에는 probe를 쓰지 않는다. `test_solution.py`에서 실제 Host 인자와
 검사 경로 일치, 두 클라이언트 격리, inbox·output·검사 서비스 실패 시 시작 거부를 검증한다.

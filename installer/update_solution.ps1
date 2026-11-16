@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][ValidateSet('Host','Manager','Runner','Scanner','All')][string]$Component,
       [string]$State = '')
@@ -37,6 +37,9 @@ try {
             Invoke-SolutionCommand powershell.exe @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'build.ps1'),'-OutDir',$output,'-PythonExe',$p.python)
             Install-SolutionPrivileged $repo $p.python $p.work $State $p.runner_exe (Join-Path $output 'SecureArtifactScanner') $p.manager_repo
         }
+    }
+    if ($p.PSObject.Properties['micro_vm'] -and $p.micro_vm) {
+        Assert-SolutionTransferContract $p.python $p.micro_vm
     }
     Invoke-SolutionCommand $p.python @((Join-Path $repo 'host/solution.py'),'--runner-exe',$p.runner_exe,'--work',$p.work,'--state',$State,'--check')
     $p.sources = @{host=(Get-SolutionSource $repo); manager=(Get-SolutionSource $p.manager_repo); runner=(Get-SolutionSource $p.runner_repo)}
