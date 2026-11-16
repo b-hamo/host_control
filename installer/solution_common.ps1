@@ -7,6 +7,14 @@ function Invoke-SolutionCommand {
     & $Program @Arguments | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "$Program failed (exit $LASTEXITCODE)." }
 }
+function Install-SolutionAgentGuard {
+    # The team Skill tells the Agent the origin rule; the exec guard hook enforces it whatever the Agent was told.
+    param($SolutionProfile, [ValidateSet('Codex','Claude')][string]$Agent)
+    & (Join-Path $SolutionProfile.host_repo 'codex/install_skill.ps1') -Agent $Agent | Out-Host
+    $flag = if ($Agent -eq 'Codex') { '--codex' } else { '--claude' }
+    # The whole work folder: the inbox and every micro VM client's inbox and output are outside material.
+    Invoke-SolutionCommand $SolutionProfile.python @((Join-Path $SolutionProfile.host_repo 'host/exec_guard.py'),'install',$flag,'--inbox',$SolutionProfile.work)
+}
 function Get-SolutionStatePath {
     param([string]$State)
     if (-not $State) { $State = Join-Path $env:USERPROFILE 'SecureCUAState/solution' }

@@ -133,7 +133,9 @@ runtime is not ready, wait (poll `runtime_get_state`) and call it again with the
    unpacks it, installs its libraries from the internet, builds and runs it; nothing of it runs here.
    Code that needs libraries is a project too: a single-file form has no library install step.
 4. **Not supported**: Maven/Gradle and make projects, PHP, VBScript (`.vbs`: the Sandbox has no
-   VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC.
+   VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC on your own. The SCRP hook
+   asks the person at this computer (a confirmation prompt) and runs it only if they say yes. If they say no,
+   report that. Never look for another route around that answer.
 5. RUNTIME_UNAVAILABLE "... is not installed on this PC" means the language (compiler or interpreter) is
    missing here: tell the user to install it (official installer) and try again. Never install it or run
    the code on this PC yourself.
