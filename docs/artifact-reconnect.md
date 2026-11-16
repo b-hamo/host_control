@@ -17,4 +17,4 @@ Runner도 복구하지 않는다. 새 연결은 기존 snapshot 완료 표시를
 `tests/test_output_export.py`는 이전 권한 폐기·늦은 종료·대기 snapshot·진행 중 전송·종료 상태와
 Host 사본 보존을 검사한다. `test_artifact_export.py`는 실제 TLS 연결의 새 Control/Telemetry
 자격 교환과 이전 토큰 거부를 검사한다. 이 시험의 Runner와 Scanner는 테스트 대역이다.
-실제 VM 결과는 `mixed-vm-followup-20261108.md`에 따로 기록한다.
+실제 VM 결과는 `validation/mixed-vm-followup-20261108.md`에 따로 기록한다.

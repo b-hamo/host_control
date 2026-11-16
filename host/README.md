@@ -14,16 +14,16 @@ micro_VM 앱 창 연결은 `mcp_server.py`의 Manager 선택, `lifecycle.py`의 
 기존 Host를 종료하지 않으며 부분 listener는 정리한다. [다른 PC 적용과 검증](../docs/automatic-listener-conflict.md)을 따른다.
 Manager 선택 후 `sandbox_run.py`에 실제 Guest 입력 경로를 연결하며,
 `lifecycle.py`는 고정 VM의 통신 장애를 자동 종료·재생성으로 처리하지 않는다.
-실제 혼합 실행과 미완료 복구 항목은 [후속 검증 보고서](../docs/mixed-vm-followup-20261108.md)에 구분했다.
+실제 혼합 실행과 미완료 복구 항목은 [후속 검증 보고서](../docs/validation/mixed-vm-followup-20261108.md)에 구분했다.
 전송 중 장애 복구, 최초 자동 WSB listener, 설치 Manager 및 동시 한도 거부의 최신 결과는
-[2026-11-09 검증](../docs/mixed-vm-hardening-20261109.md)을 따른다.
+[2026-11-09 검증](../docs/validation/mixed-vm-hardening-20261109.md)을 따른다.
 `output_export.py`/`artifacts.py`의 재연결 reset과 수신 중 취소는 `test_output_export.py`/`test_artifact_export.py`에서,
 선택적 설치 backend·바이너리 pin·세션 경로는 `test_solution_config.py`에서 검증한다.
 관리 서비스 바이너리·설정 pin 및 배포 복구 설정도 같은 테스트에서 검사한다.
 `solution.py`는 다중 VM 프로필의 채팅 전용 매핑을 먼저 만든 뒤 그 경로에서 실행 차단을 검사한다.
 기존 WSB가 매핑한 공용 inbox에는 probe를 쓰지 않는다. `test_solution.py`에서 실제 Host 인자와
 검사 경로 일치, 두 클라이언트 격리, inbox·output·검사 서비스 실패 시 시작 거부를 검증한다.
-일반 권한 Host의 실제 B·C 화면·입력·반출 결과는 [관리 서비스 검증](../docs/management-service-validation-20261109.md)에 있다.
+일반 권한 Host의 실제 B·C 화면·입력·반출 결과는 [관리 서비스 검증](../docs/validation/management-service-validation-20261109.md)에 있다.
 
 Agent(Codex)의 요청을 받아 검사하고, 격리된 Sandbox 안의 Runner로 전달하는 Host 프로그램이다.
 핵심 파일은 **4개 층**으로 나뉘어 있고, 요청은 위층에서 아래층으로 흐른다.

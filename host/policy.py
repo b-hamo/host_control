@@ -76,7 +76,7 @@ class Policy:
             # Sandbox only, bound to the SHA-256 of the capture and of the script.
             return Decision("ALLOW", "P-ROUTER-EXECUTE", "analyzes a captured command inside the Sandbox only; recorded")
         if tool in ("program_share", "app_prepare"):
-            # 배주한 결정 2026-10-29: no dialog. Only listed compilers, their install folder only, always
+            # 팀 결정 2026-10-29: no dialog. Only listed compilers, their install folder only, always
             # read-only (sandbox_manager programs.py refuses anything else); every share is recorded.
             return Decision("ALLOW", "P-PROGRAM-SHARE", "an installed compiler, read-only, into the Sandbox; recorded")
         if tool in self.require_approval_for:

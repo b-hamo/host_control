@@ -18,7 +18,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-HOST = Path(__file__).resolve().parents[1]
+HOST = Path(__file__).resolve().parents[2]
 MANAGER = Path(os.environ["SCRP_LAB_MANAGER"])
 RUNNER = Path(os.environ["SCRP_LAB_RUNNER"])
 PACKAGE = Path(os.environ["SCRP_LAB_PACKAGE"])

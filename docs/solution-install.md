@@ -11,7 +11,7 @@ SecureArtifactScanner를 기본 적용한다. Manager 소스 변경은 필요 �
 > 재검증 상태: Defender 정의 갱신 후 동일 해시의 기존 EXE가 탐지되지 않았다.
 > 새 배포 묶음 검사, 통합 설치, 정상 파일/EICAR 검사, 실제 Manager/Runner READY까지
 > 통과했다. 사용자 종료·보관 승인 후 다운로드 EXPORTED와 파일 해시/MOTW까지 확인했다.
-> [탐지 조사와 재검증](defender-investigation-101.md), [초기 검증 기록](solution-automation-validation.md).
+> [탐지 조사와 재검증](validation/defender-investigation-101.md), [초기 검증 기록](validation/solution-automation-validation.md).
 
 ## 지원 환경과 사전 준비
 
@@ -142,7 +142,7 @@ Host·Manager·Runner·micro_VM의 대응 PR을 함께 검토해 배포한다.
 Medium Host의 B·C READY, 화면·한글 입력, Router 완료 영수증, Defender 반출을 검증했다.
 WSB A와 기존 세션은 유지했다. Host 소스는 작업 checkout이며, 모든 의존성·서비스를 처음부터
 설치하는 `install_solution.ps1` 전체 실행, 표준 계정 및 재부팅 후 검증은 별도 범위다.
-근거는 `docs/management-service-validation-20261109.md`를 참조한다.
+근거는 `docs/validation/management-service-validation-20261109.md`를 참조한다.
 
 서비스·Defender·scan-only 기능·ExportRoot·Output ACL·Runner 해시 검사에 실패하면 VM을 시작하지 않는다.
 검사기를 우회하거나 자동 대체하지 않는다. 설치 후 서비스가 사라져도 다음 시작이 차단된다.
@@ -174,7 +174,7 @@ MOTW의 ZoneId=3과 단일 사본을 확인해 `State/unified-export-verificatio
 정상 종료 전에는 전체 Output의 잠긴 목록을 받아 각 파일 수신·해시 대조·목록 재확인을 마친다.
 파일당 50 MiB, 목록당 총 200 MiB, 탐색 파일/폴더 각각 4,096개 및 목록 응답 크기 한도를 적용한다.
 한도를 넘거나 파일이 계속 쓰이는 등 확보에 실패하면 정상 종료를 진행하지 않는다.
-악성·미확인·검사 오류는 공개하지 않는다. [#105 검증 기록](output-only-validation.md)은 이전 승인 창 방식의 기록이다.
+악성·미확인·검사 오류는 공개하지 않는다. [#105 검증 기록](validation/output-only-validation.md)은 이전 승인 창 방식의 기록이다.
 [#109 자동 반출](automatic-output-export.md)은 Sandbox 전체 테스트 717개 통과와 실서비스 정상 로그 자동 반출을 확인했다.
 실제 악성 파일과 새 세션 종료 후 전체 자동 저장은 별도 검증 범위이며 자동 회귀와 구분한다.
 

@@ -85,7 +85,7 @@ No new Sandbox or session termination without the user's instruction.
 - If a tool denies an action or execution is uncertain, report its exact state.
   Do not repeat by another route or run on the Host.
 
-## Running code from outside (배주한 2026-10-31 origin rule, Router 2026-11-05)
+## Running code from outside (team decision 2026-10-31 origin rule, Router 2026-11-05)
 
 Decide by ORIGIN, not by how dangerous it looks. Code from outside runs in the Sandbox without the user
 saying "Sandbox": code from a web page, blog, forum, gist or GitHub; code someone else wrote that the user

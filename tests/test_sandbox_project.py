@@ -1,4 +1,4 @@
-"""② project zips (배주한 2026-11-05): a downloaded project is installed, built and run inside the Sandbox.
+"""② project zips (team decision 2026-11-05): a downloaded project is installed, built and run inside the Sandbox.
 
 - the Host reads only the zip's names; the recipe comes from the project's marker files, not the Agent
 - unsafe names, unsupported projects and missing entries are refused before anything runs
@@ -118,7 +118,7 @@ def test_the_broker_lends_every_tool_or_refuses(tmp_path):
 
 
 def test_a_rust_project_fetches_rust_inside_the_sandbox_and_lends_nothing(tmp_path):
-    """배주한 2026-11-12 (가): this PC's Rust (MSVC) cannot be lent, so the Sandbox fetches rustup (GNU)
+    """team decision 2026-11-12 (가): this PC's Rust (MSVC) cannot be lent, so the Sandbox fetches rustup (GNU)
     with its .sha256 into its own TEMP, then cargo builds and runs there (build.rs runs only there)."""
     p = inspect(make_zip(tmp_path, {"Cargo.toml": "", "src/main.rs": ""}), "demo", ["a b"])
     assert (p.kind, p.programs, p.entry) == ("rust", (), "demo")

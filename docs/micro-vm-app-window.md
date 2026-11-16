@@ -14,9 +14,9 @@ Win+R은 Runner의 전용 명령 입력 창이며 Windows Shell의 Run 창·작�
 6. 검사 서비스가 허용하는 export-dir을 사용한다. 최종 공개 경로는 세션별 Downloads/SandboxOutput이다.
 
 관리 작업은 관리자 권한이 필요하다. 실행 요청의 프로그램은 VM에서만 실행된다.
-tools/micro_vm_session_lab.py는 선택한 슬롯마다 실제 MCP Host를 실행한다. SCRP_APP_LAB_ROOT를 새 증거 폴더로 지정한다.
+tools/lab/micro_vm_session_lab.py는 선택한 슬롯마다 실제 MCP Host를 실행한다. SCRP_APP_LAB_ROOT를 새 증거 폴더로 지정한다.
 SCRP_LAB_MANAGER, SCRP_LAB_RUNNER, SCRP_LAB_PACKAGE, SCRP_LAB_VM_ROOT, SCRP_LAB_RELAY, SCRP_LAB_EXPORT에 해당 절대 경로를 지정한다.
-tools/scrp-app-window-proof.ps1을 Downloads에 복사한 뒤 inbox_import로 가져와 각 세션에서 -Slot B 또는 C와 -Session 값을 전달한다.
+tools/lab/scrp-app-window-proof.ps1을 Downloads에 복사한 뒤 inbox_import로 가져와 각 세션에서 -Slot B 또는 C와 -Session 값을 전달한다.
 requests/<id>.json의 `{slot, tool, arguments}`를 한 번만 소비한다. ready.json은 MCP 준비이며 VM READY가 아니다.
 task_submit 뒤 SCRP READY와 실제 스크린샷을 확인한다. 인증서·bootstrap을 커밋하지 않는다.
 

@@ -179,7 +179,6 @@ Host가 끝나면 화면 파일을 지운다(사용자 화면을 남기지 않�
 | `server.py` | 페이지와 `/api/*`를 주는 HTTP 서버 (토큰, Host 헤더, 읽기 전용) |
 | `__main__.py` | `python -m dashboard` |
 | `sample-overview.json` | 프론트 개발용 예시 응답 |
-| `example-wiring.js` | 프론트 페이지(`minobox-dashboard.html`)를 이 API에 붙이는 예시. 페이지 끝에 넣으면 두 탭을 2초마다 채운다. 제품 코드가 아니라 연동 참고용 (API에서 온 글자는 escape한다) |
 | `frontend/` | 프론트 소스 (React + Vite + TypeScript). `npm run build`가 결과물을 `static/`에 바로 쓴다. 자세한 건 `frontend/README.md` |
 | `static/` | 프론트 빌드 결과물. 직접 고치지 말고 `frontend/`에서 다시 빌드한다 |
 

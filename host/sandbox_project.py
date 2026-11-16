@@ -1,6 +1,6 @@
 """sandbox_project: a downloaded project (.zip, e.g. a GitHub archive) installed, built and run inside the Sandbox.
 
-배주한 2026-11-05 (②): a project's build files and library installs run code (setup.py, npm scripts,
+team decision 2026-11-05 (②): a project's build files and library installs run code (setup.py, npm scripts,
 CMake, MSBuild), so none of it happens on this computer. The Host only reads the zip's list of names
 (never unpacks or runs anything here), picks a fixed recipe from the project's marker files, lends
 the tools with program_share, and writes one PowerShell script that the Sandbox runs:
@@ -18,7 +18,7 @@ Recipes (by the first marker found at the project root):
   none of them: by the entry's suffix (.py .js .rb .java .sh)
 Not yet: Maven/Gradle, make (not installed), Zig projects.
 
-Rust (배주한 2026-11-12, (가)): this PC's Rust is usually the default install, the MSVC toolchain, which
+Rust (team decision 2026-11-12, (가)): this PC's Rust is usually the default install, the MSVC toolchain, which
 links with Visual Studio's link.exe. Visual Studio cannot be lent to the Sandbox (it is installed, not a
 folder: MSVC is not supported, 2026-11-04). So nothing is lent: the Sandbox fetches the official rustup
 (static.rust-lang.org, its .sha256 checked) and installs the GNU toolchain, which brings its own MinGW

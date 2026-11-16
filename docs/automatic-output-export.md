@@ -83,4 +83,4 @@ python -m pytest -q tests/test_repo_rules.py tests/test_codex_skill.py
 python -m pytest -q tests
 ```
 
-docs/output-only-validation.md는 #105 승인 창 방식의 검증 기록이며 이번 변경의 통과 증거가 아니다.
+docs/validation/output-only-validation.md는 #105 승인 창 방식의 검증 기록이며 이번 변경의 통과 증거가 아니다.
