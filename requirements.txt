@@ -1,5 +1,6 @@
 -r requirements-base.txt
 # Sandbox 창 종료 API (#78, sandbox_manager #46·#47) + X 뒤 닫힘 약 1초 확정(sandbox_manager #50·#52)
 # + micro_VM 혼합 세션·관리 서비스·앱 준비·자동 listener 점유 처리(sandbox_manager #66)
-sandbox_manager @ git+https://github.com/b-hamo/sandbox_manager.git@9f16d754cbe4b5cfd7a3269da938867a4ae92641
+# Manager 0.2.0: 512 MiB / 2 GiB transfer contract and MinGW-w64 selection (#152, sandbox_manager #69)
+sandbox_manager @ git+https://github.com/b-hamo/sandbox_manager.git@ea6854a40d1f71ad1e500128916fb48630e8b21a
 # SecureArtifactScanner service (scanner_service/, Windows only). Build tools: installer/requirements-build.txt
