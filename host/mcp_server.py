@@ -544,11 +544,23 @@ class HostBackend(threading.Thread):
 
                 def window_state():
                     return self.launcher.status().get("window_state") if self.launcher is not None else None
+
+                def exports():
+                    # The artifact broker lives on the Host loop: read it there, never from this thread.
+                    import asyncio
+                    from host.dashboard_status import export_row
+                    arts, loop = self.artifacts, self.loop
+                    if arts is None or loop is None or loop.is_closed() or not loop.is_running():
+                        return None
+
+                    async def snapshot():
+                        return [export_row(arts, a) for a in list(arts._by_id.values())]
+                    return asyncio.run_coroutine_threadsafe(snapshot(), loop).result(2)
                 self._dashboard = DashboardStatus(directory, self.session.identity[0],
                                                   sandbox_root=getattr(self.args, "sandbox_root", None),
                                                   vm_max=(getattr(self.args, "micro_vm_max_active", None)
                                                           if getattr(self.args, "micro_vm_package", None) else None),
-                                                  window_state=window_state)
+                                                  window_state=window_state, exports=exports)
             self._dashboard.record(tool, arguments, ok, image)
         except Exception:  # noqa: BLE001 - the dashboard never fails a tool call
             log.exception("dashboard status not written")

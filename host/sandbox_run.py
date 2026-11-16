@@ -118,7 +118,7 @@ SUFFIXES = (".exe", ".msi", ".ps1", ".py", ".js", ".rb", ".sh", ".zip")   # .zip
 INTERPRETERS = {".py": "python", ".js": "node", ".rb": "ruby", ".sh": "git"}
 SCRIPT_FORMS = {"python-script": ".py", "javascript-script": ".js", "ruby-script": ".rb", "sh-script": ".sh"}
 INTERPRETER_PENDING = r"C:\Tools\interpreter-pending.exe"   # replaced by with_interpreter() before the run
-# 배주한 2026-11-05: one C, C++, Go, Zig, Java or C# file is compiled on this PC (host/local_compile.py)
+# 배주한 2026-11-05: one C, C++, Go, Zig, Java, C# or Rust file is compiled on this PC (host/local_compile.py)
 # and only the result runs in the Sandbox (Java and C# with java / dotnet lent by program_share).
 from host.local_compile import GUEST_ROOT, LANGS as COMPILE_FORMS, TARGET  # noqa: E402
 # The Runner cannot report which window has focus (ui.click_element is not implemented), so the

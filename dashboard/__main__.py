@@ -16,6 +16,8 @@ def main(argv=None) -> int:
                          "every --sandbox-root a running Host reports is added on its own)")
     ap.add_argument("--dashboard-dir", type=Path, default=default_dashboard_dir(),
                     help="where Hosts write their status (Host --dashboard-dir)")
+    ap.add_argument("--output-root", type=Path, action="append", default=[],
+                    help="trusted Output receipt root for existing blocked exports (repeatable, metadata only)")
     ap.add_argument("--static", type=Path, default=Path(__file__).resolve().parent / "static",
                     help="folder with the page (index.html)")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -25,7 +27,8 @@ def main(argv=None) -> int:
     ap.add_argument("--open", action="store_true", help="open the page in the default browser")
     a = ap.parse_args(argv)
     roots = [default_manager_root()] + [r for r in a.root if r != default_manager_root()]
-    collector = Collector(roots, a.dashboard_dir, vm_max=a.vm_max, keep_ended_s=a.keep_ended)
+    collector = Collector(roots, a.dashboard_dir, vm_max=a.vm_max, keep_ended_s=a.keep_ended,
+                          output_roots=a.output_root)
     app = Dashboard(collector, a.token, a.static if a.static.is_dir() else None)
     server = serve(app, a.port)
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={app.token}"

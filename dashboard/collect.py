@@ -22,11 +22,17 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dashboard.liveness import owner_alive, wsb_ids, hcs_ids
+
 ACTIVE = ("PREPARED", "STARTING", "STARTED", "RUNNING", "RESTARTING")
 UP = ("STARTED", "RUNNING", "RESTARTING")
 WSB, MICRO = "WINDOWS_SANDBOX", "MICRO_VM_APP_WINDOW"
 KEEP_ENDED_S = 600          # an ended session stays on the board this long
 VM_MAX = 8                  # sandbox_manager MicroVmManager max_active default
+EXPORT_KEEP_S = 24 * 3600   # a decided export stays in the log this long
+EXPORTS_MAX = 200
+EXPORT_FIELDS = ("artifact_id", "session_id", "name", "stage", "code", "scan_code", "observed_at", "finished_at",
+                 "export_path")
 
 EXECUTABLE = {".exe", ".msi", ".msix", ".appx", ".com", ".scr"}
 SCRIPT = {".ps1", ".bat", ".cmd", ".vbs", ".js", ".jse", ".wsf", ".hta", ".py", ".rb", ".sh", ".pl", ".php"}
@@ -214,45 +220,23 @@ class VmMeter:
 
 
 def wsb_running() -> int | None:
-    """How many Windows Sandboxes are running (0 or 1), None when `wsb` cannot say."""
-    try:
-        out = subprocess.run(["wsb", "list", "--raw"], capture_output=True, text=True, timeout=10,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    try:
-        return len(json.loads(out).get("WindowsSandboxEnvironments") or [])
-    except ValueError:
-        return None
-
-
-def _pid_alive(pid) -> bool:
-    if type(pid) is not int or pid <= 0:
-        return False
-    if sys.platform != "win32":
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
-    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
-    if not handle:
-        return False
-    code = ctypes.c_uint32()
-    ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-    ctypes.windll.kernel32.CloseHandle(handle)
-    return bool(ok) and code.value == 259                                  # STILL_ACTIVE
+    ids = wsb_ids()
+    return None if ids is None else len(ids)
 
 
 # --------------------------------------------------------------------- the overview
 class Collector:
     def __init__(self, roots: list[Path] | None = None, dashboard_dir: Path | None = None, *, vm_max: int = VM_MAX,
                  keep_ended_s: float = KEEP_ENDED_S, wsb=wsb_running, host_meter=None, vm_meter=None,
-                 clock=time.time, pid_alive=_pid_alive):
+                 clock=time.time, output_roots=(), owner_check=owner_alive,
+                 sandbox_inventory=wsb_ids, vm_inventory=hcs_ids):
         self.roots = [Path(r) for r in (roots or [default_manager_root()])]
         self.dashboard_dir = Path(dashboard_dir or default_dashboard_dir())
+        self.output_roots = tuple(Path(p) for p in output_roots)
         self.vm_max, self.keep_ended_s = vm_max, keep_ended_s
-        self.wsb, self.clock, self.pid_alive = wsb, clock, pid_alive
+        self.wsb, self.clock = wsb, clock
+        self.owner_check = owner_check
+        self.sandbox_inventory, self.vm_inventory = sandbox_inventory, vm_inventory
         self.host_meter = host_meter or HostMeter()
         self.vm_meter = vm_meter or VmMeter()
 
@@ -269,20 +253,29 @@ class Collector:
         for h in hosts.values():
             if h.get("sandbox_root") and Path(h["sandbox_root"]) not in roots:
                 roots.append(Path(h["sandbox_root"]))
-        seen, out = set(), []
+        out, preferred = {}, set()
         for root in roots:
             for path in sorted((root / "sessions").glob("*/state.json")) if (root / "sessions").is_dir() else ():
                 s = _read_json(path)
-                if s and isinstance(s.get("session_id"), str) and s["session_id"] not in seen:
-                    seen.add(s["session_id"])
-                    out.append(s)
-        return out
+                if s and isinstance(s.get('session_id'), str):
+                    sid = s['session_id']
+                    reported = hosts.get(sid, {}).get('sandbox_root')
+                    if sid in preferred:
+                        continue
+                    if reported and Path(reported).resolve() == root.resolve():
+                        out[sid] = s
+                        preferred.add(sid)
+                    elif sid not in out:
+                        out[sid] = s
+        return list(out.values())
 
     def overview(self) -> dict:
         now = self.clock()
         hosts = self.host_status()
+        sandbox_ids, vm_ids = self.sandbox_inventory(), self.vm_inventory()
         rows = []
         for s in self._sessions(hosts):
+            s = dict(s)  # presentation must never rewrite Manager state
             events = [e for e in s.get("events") or [] if isinstance(e, dict)]
             started = next((_ts(e.get("at")) for e in events if e.get("kind") == "PREPARED"), None)
             ended = next((_ts(e.get("at")) for e in reversed(events)
@@ -290,7 +283,38 @@ class Collector:
             state = s.get("state")
             if state not in ACTIVE and (ended is None or now - ended > self.keep_ended_s):
                 continue
+            owner = self.owner_check(s.get('owner') or {}) if state in ACTIVE else None
+            if state in ACTIVE:
+                h = hosts.get(s['session_id'], {})
+                if h.get('ended_at'):
+                    owner = False
+                micro = s.get('runtime_type') == MICRO
+                binding = s.get('micro_vm') or {}
+                runtime_id = binding.get('container_id') if micro else s.get('sandbox_id')
+                inventory = vm_ids if micro else sandbox_ids
+                present = runtime_id.lower() in inventory if isinstance(runtime_id, str) and inventory is not None else None
+                starting = state in ('PREPARED', 'STARTING', 'RESTARTING')
+                if present is False and not (starting and owner is True):
+                    continue
+                if present is None and owner is False:
+                    continue  # abandoned historical RUNNING record, not proof of a running VM
+                if present is None and owner is not True:
+                    s['display_state'] = 'UNKNOWN'
+                elif present is False and state == 'RESTARTING':
+                    s['display_state'] = 'STARTING'
+                s['_runtime_key'] = (s.get('runtime_type'), runtime_id.lower()) if runtime_id else None
+            s['_owner_alive'] = owner
             rows.append((started or 0.0, s, events, ended))
+        # Multiple roots/records can describe one physical runtime. Prefer a live owner, then newest.
+        unique, selected = set(), []
+        for row in sorted(rows, key=lambda r: (r[1]['_owner_alive'] is True, r[0]), reverse=True):
+            key = row[1].get('_runtime_key')
+            if key and key in unique:
+                continue
+            if key:
+                unique.add(key)
+            selected.append(row)
+        rows = selected
         rows.sort(key=lambda r: r[0])
         sessions, counters = [], {WSB: 0, MICRO: 0}
         for started, s, events, ended in rows:
@@ -300,7 +324,7 @@ class Collector:
             micro = kind == MICRO
             binding = s.get("micro_vm") if isinstance(s.get("micro_vm"), dict) else {}
             cpu = mem = None
-            if s.get("state") in UP:
+            if s.get('display_state', s.get('state')) in UP:
                 cpu, mem = self.vm_meter.read(binding.get("container_id") if micro else s.get("sandbox_id"))
             reason = s.get("termination_reason")
             owner = s.get("owner") if isinstance(s.get("owner"), dict) else {}
@@ -310,7 +334,7 @@ class Collector:
                 "label": f"{'VM' if micro else 'GUI'}-{counters[kind]:02d}",
                 "runtime": "micro_vm" if micro else "windows_sandbox",
                 "state": s.get("state"),
-                "display_state": "VIOLATION" if reason == "SECURITY_VIOLATION" else s.get("state"),
+                "display_state": "VIOLATION" if reason == "SECURITY_VIOLATION" else s.get("display_state", s.get("state")),
                 "termination_reason": reason,
                 "risk_type": risk_type(_user_files(events), h.get("last_tool")),
                 "task": h.get("task"),
@@ -322,37 +346,66 @@ class Collector:
                 "ended_at": _iso(ended),
                 "network": "blocked" if micro else "enabled",
                 "window_state": None if micro else h.get("window_state"),
-                "host_alive": self.pid_alive(owner.get("pid")) if s.get("state") in ACTIVE else None,
+                "host_alive": s['_owner_alive'],
                 "screenshot": {"available": image.is_file(), "captured_at": h.get("screen_captured_at")},
             })
         wsb_sessions = [x for x in sessions if x["runtime"] == "windows_sandbox"]
-        live_wsb = next((x for x in reversed(wsb_sessions) if x["state"] in ACTIVE), None)
-        running = self.wsb()
-        if running is None:
-            running = 1 if live_wsb and live_wsb["state"] in UP else 0
+        live_wsb = next((x for x in reversed(wsb_sessions) if x['display_state'] in ACTIVE), None)
+        running = len(sandbox_ids) if sandbox_ids is not None else self.wsb()
         micro = [x for x in sessions if x["runtime"] == "micro_vm"]
-        up = sum(x["state"] in UP for x in micro)
-        starting = sum(x["state"] in ("PREPARED", "STARTING") for x in micro)
+        up = sum(x["display_state"] in UP for x in micro)
+        starting = sum(x["display_state"] in ("PREPARED", "STARTING") for x in micro)
+        unknown = sum(x['display_state'] == 'UNKNOWN' for x in micro)
         # The limit a micro_VM Host was started with (--micro-vm-max-active), else the Manager's default.
-        vm_max = max((h["vm_max"] for h in hosts.values() if type(h.get("vm_max")) is int and h.get("ended_at") is None),
+        live_owners = {x['id'] for x in sessions if x['host_alive'] is True}
+        vm_max = max((h["vm_max"] for sid, h in hosts.items() if sid in live_owners and type(h.get("vm_max")) is int and h.get("ended_at") is None),
                      default=self.vm_max)
         return {
             "updated_at": _iso(now),
             "runtimes": {
                 "windows_sandbox": {
                     "running": running,
-                    "state": live_wsb["state"] if live_wsb else ("RUNNING" if running else "STOPPED"),
+                    "state": live_wsb['display_state'] if live_wsb else ('UNKNOWN' if running is None else "RUNNING" if running else "STOPPED"),
                     "window_state": (live_wsb or {}).get("window_state") or "UNAVAILABLE",
                 },
-                "micro_vm": {"running": up, "max": vm_max, "starting": starting,
+                "micro_vm": {"running": up, "max": vm_max, "starting": starting, "unknown": unknown,
+                             "count_source": 'hcs' if vm_ids is not None else 'host_owner',
                              "failed": sum(x["state"] == "FAILED" for x in micro),
-                             "free_slots": max(0, vm_max - up - starting)},
+                             "free_slots": None if unknown else max(0, vm_max - up - starting)},
             },
             "host_resources": self.host_meter.read(),
             "metrics": {"per_session": "hcs" if self.vm_meter.reason is None else "unavailable",
                         "reason": self.vm_meter.reason},
             "sessions": sessions,
+            "exports": self._exports(hosts, {s["id"]: s["label"] for s in sessions}, now),
         }
+
+    def _exports(self, hosts: dict[str, dict], labels: dict[str, str], now: float) -> list[dict]:
+        """File exports every Host reported, newest first; decided ones older than EXPORT_KEEP_S drop off."""
+        rows = []
+        seen = set()
+        for h in hosts.values():
+            for e in h.get("exports") or []:
+                if not isinstance(e, dict) or not isinstance(e.get("artifact_id"), str):
+                    continue
+                when = _ts(e.get("finished_at")) or _ts(e.get("observed_at"))
+                if e.get("finished_at") and when is not None and now - when > EXPORT_KEEP_S:
+                    continue
+                row = {k: e.get(k) for k in EXPORT_FIELDS}
+                row["session_label"] = labels.get(row["session_id"])
+                rows.append((when or 0.0, row))
+                seen.add((row["session_id"], row["artifact_id"]))
+        from dashboard.export_history import blocked_exports
+        for row in blocked_exports(self.output_roots):
+            key = row["session_id"], row["artifact_id"]
+            when = _ts(row["finished_at"])
+            if key in seen or when is None or now - when > EXPORT_KEEP_S:
+                continue
+            seen.add(key)
+            row["session_label"] = labels.get(row["session_id"])
+            rows.append((when, row))
+        rows.sort(key=lambda r: (r[0], r[1]["artifact_id"]), reverse=True)
+        return [r for _, r in rows[:EXPORTS_MAX]]
 
     def screenshot(self, session_id: str) -> Path | None:
         """The last screen the Agent saw in that session, if its Host left one."""

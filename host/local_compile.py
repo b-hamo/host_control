@@ -15,10 +15,14 @@ The one thing a compiler can still do with hostile source is read files on this 
   read must be in the compiler's own folder; no inline assembly in the code itself; the checked
   preprocessed text is what gets compiled
 - Zig: no @cImport (@embedFile and @import cannot leave the work folder: Zig refuses that itself)
+- Rust (배주한 2026-11-12, rustup's default MSVC toolchain installed the usual way): outside comments
+  and strings no include / include_str / include_bytes, env! / option_env!, asm / global_asm /
+  naked_asm, extern crate, `mod x;`, #[path = ...] or #[link(...)]; then a dep-info pass (macro
+  expansion only) must list no file but main.rs and no env-dep before the code is compiled and linked
+  (statically, the Sandbox has no VC++ runtime)
 
-The result runs in the Sandbox: a static .exe (C, C++, Go, Zig), app.jar (Java: java is lent
-there), app.dll (C#: dotnet is lent there). Not supported: MSVC (team decision 2026-11-04), Rust
-(not installed here; the GNU toolchain could work later).
+The result runs in the Sandbox: a static .exe (C, C++, Go, Zig, Rust), app.jar (Java: java is lent
+there), app.dll (C#: dotnet is lent there). Not supported: MSVC for C/C++ (team decision 2026-11-04).
 """
 
 from __future__ import annotations
@@ -33,8 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 LANGS = {"c-source": "c", "cpp-source": "cpp", "go-source": "go", "zig-source": "zig",
-         "java-source": "java", "csharp-source": "csharp"}
-TOOLS = {"c": "gcc", "cpp": "gcc", "go": "go", "zig": "zig", "java": "java", "csharp": "dotnet"}
+         "java-source": "java", "csharp-source": "csharp", "rust-source": "rust"}
+TOOLS = {"c": "gcc", "cpp": "gcc", "go": "go", "zig": "zig", "java": "java", "csharp": "dotnet", "rust": "rustc"}
 TIMEOUT_S = {"zig": 900}          # Zig builds its own libc once per cache (minutes); then seconds
 DEFAULT_TIMEOUT_S = 180
 MAX_OUTPUT = 50 * 1024 * 1024
@@ -64,8 +68,31 @@ def cache_root() -> Path:
     return Path(base) / "SecureCUA" / "build-cache"
 
 
+def find_rust_toolchain() -> Path:
+    """The active rustup toolchain folder (…\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc).
+
+    Its rustc.exe is called directly: the rustup proxy in .cargo\\bin would need this user's
+    profile folders, which the compiler's minimal environment does not have."""
+    rustup = shutil.which("rustup") or str(Path(os.path.expanduser(r"~\.cargo\bin\rustup.exe")))
+    try:
+        out = subprocess.run([rustup, "which", "rustc"], capture_output=True, text=True, timeout=60,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        out = None
+    rustc = Path(out.stdout.strip()) if out is not None and out.returncode == 0 else None
+    if rustc is None or not rustc.is_file():
+        raise CompileError("RUNTIME_UNAVAILABLE", "Rust is not installed on this PC; install it with rustup "
+                                                  "(https://rustup.rs, default settings) to compile this code here")
+    return rustc.parent.parent
+
+
+OWN_LOOKUP = {"rustc": find_rust_toolchain}     # compilers that are never lent to the Sandbox
+
+
 def find_compiler(tool: str) -> Path:
     """This PC's install folder of the compiler (the same lookup program_share uses)."""
+    if own := OWN_LOOKUP.get(tool):
+        return own()
     from sandbox_manager import SandboxManagerError
     from sandbox_manager.programs import find_program
     try:
@@ -308,7 +335,117 @@ def _csharp(lang, text, work, root, timeout) -> Built:
                  ("exec", "--runtimeconfig", guest_config, TARGET), "dotnet build")
 
 
-BUILDERS = {"c": _c, "cpp": _c, "go": _go, "zig": _zig, "java": _java, "csharp": _csharp}
+# -- Rust -----------------------------------------------------------------------
+RUST_RAW = re.compile(r'(?:b|c)?r(#*)"')
+RUST_CHAR = re.compile(r"(?:b)?'(?:\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]{1,8}\}|.)|[^\\'\n])'")
+RUST_WORDS = re.compile(r"(?<![A-Za-z0-9_])(include|include_str|include_bytes|asm|global_asm|naked_asm)"
+                        r"(?![A-Za-z0-9_])")
+RUST_ENV = re.compile(r"(?<![A-Za-z0-9_])((?:option_)?env)\s*!")
+RUST_EXTERN_CRATE = re.compile(r"(?<![A-Za-z0-9_])extern\s+crate(?![A-Za-z0-9_])")
+RUST_MOD_FILE = re.compile(r"(?<![A-Za-z0-9_])mod\s+(?:r#)?[A-Za-z_]\w*\s*;")
+RUST_ATTR = re.compile(r"#!?\s*\[([^\]]*)\]")
+RUST_ATTR_BAD = re.compile(r"(?<![A-Za-z0-9_])(?:path\s*=|link(?:_args)?\s*[(=])")
+
+
+def _ident_before(t: str, i: int) -> bool:
+    return i > 0 and (t[i - 1].isalnum() or t[i - 1] == "_")
+
+
+def _strip_rust(t: str) -> str:
+    """Comments out (block comments nest in Rust) and every string or char literal emptied, so words in
+    them cannot trip the checks and the checks cannot be hidden in them. Lifetimes stay as they are."""
+    out, i, n = [], 0, len(t)
+    while i < n:
+        c = t[i]
+        if t.startswith("//", i):
+            j = t.find("\n", i)
+            i = n if j < 0 else j
+        elif t.startswith("/*", i):
+            depth, i = 1, i + 2
+            while i < n and depth:
+                if t.startswith("/*", i):
+                    depth, i = depth + 1, i + 2
+                elif t.startswith("*/", i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            if depth:
+                raise CompileError("INVALID_ARGUMENT", "an unterminated /* comment")
+            out.append(" ")
+        elif (m := RUST_RAW.match(t, i)) and not _ident_before(t, i):
+            end = '"' + m.group(1)
+            j = t.find(end, m.end())
+            if j < 0:
+                raise CompileError("INVALID_ARGUMENT", "an unterminated raw string")
+            out.append('""')
+            i = j + len(end)
+        elif (c == '"' or (c in "bc" and t.startswith('"', i + 1))) and not _ident_before(t, i):
+            j = i + (1 if c == '"' else 2)
+            while j < n and t[j] != '"':
+                j += 2 if t[j] == "\\" else 1
+            if j >= n:
+                raise CompileError("INVALID_ARGUMENT", "an unterminated string")
+            out.append('""')
+            i = j + 1
+        elif (m := RUST_CHAR.match(t, i)) and not _ident_before(t, i):
+            out.append("' '")
+            i = m.end()
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def check_rust_source(text: str) -> None:
+    code = _strip_rust(text)
+    if m := RUST_WORDS.search(code):
+        raise CompileError("INVALID_ARGUMENT", f"{m.group(1)} is not compiled on this PC")
+    if m := RUST_ENV.search(code):
+        raise CompileError("INVALID_ARGUMENT", f"{m.group(1)}! (a value from this PC) is not compiled on this PC")
+    if RUST_EXTERN_CRATE.search(code):
+        raise CompileError("INVALID_ARGUMENT", "extern crate (a library) is not compiled on this PC; "
+                                               "build a Cargo project in the Sandbox instead")
+    if RUST_MOD_FILE.search(code):
+        raise CompileError("INVALID_ARGUMENT", "mod x; (another file) is not compiled on this PC; "
+                                               "only one source file")
+    for m in RUST_ATTR.finditer(code):
+        if RUST_ATTR_BAD.search(m.group(1)):
+            raise CompileError("INVALID_ARGUMENT", f"#[{m.group(1).strip()}] is not compiled on this PC")
+
+
+def rust_dep_info(path: Path) -> tuple[list[str], list[str]]:
+    """Files and environment variables a rustc dep-info file lists."""
+    files, envs = [], []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("# env-dep:"):
+            envs.append(line[len("# env-dep:"):].split("=", 1)[0])
+        elif line and not line.startswith("#") and ":" in line:
+            target, _, deps = line.partition(": ")
+            files += [d.replace("\\ ", " ") for d in re.split(r"(?<!\\)\s+", deps.strip()) if d]
+            if not deps:
+                files.append(target.rstrip(":"))
+    return files, envs
+
+
+def _rust(lang, text, work, root, timeout) -> Built:
+    check_rust_source(text)
+    src = work / "main.rs"
+    src.write_text(text, encoding="utf-8")
+    rustc = root / "bin" / "rustc.exe"
+    env = _env(work, [root / "bin"], {})
+    common = ["--edition", "2021", "--crate-type", "bin", "--crate-name", "app", "--cap-lints", "warn",
+              f"--remap-path-prefix={work}=src", src.name]
+    _run([rustc, *common, "--emit", "dep-info=deps.d"], work, env, timeout)    # macro expansion only
+    files, envs = rust_dep_info(work / "deps.d")
+    if envs:
+        raise CompileError("POLICY_DENIED", f"the code reads {envs[0]}, a value from this PC; refused")
+    check_reads(files, work, src, root)
+    _run([rustc, *common, "-C", "opt-level=2", "-C", "target-feature=+crt-static", "-C", "debuginfo=0",
+          "-C", "strip=symbols", "-o", "app.exe"], work, env, timeout)
+    return Built(lang, ".exe", _read_output(work / "app.exe"), None, (TARGET,), "rustc")
+
+
+BUILDERS = {"c": _c, "cpp": _c, "go": _go, "zig": _zig, "java": _java, "csharp": _csharp, "rust": _rust}
 
 
 def build(form: str, text: str, *, find=find_compiler) -> Built:

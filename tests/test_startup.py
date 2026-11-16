@@ -90,9 +90,10 @@ def test_large_clock_skew_blocks_ready():
 
 
 # --------------------------------------------------------------------- server
-def test_healthy_runner_is_verified_then_ready(certs):
+@pytest.mark.parametrize("foreground_window", [None, "", "실행"])
+def test_healthy_runner_is_verified_then_ready(certs, foreground_window):
     async def body(port, sessions, rec):
-        r = MiniRunner(port, certs[2], SES)
+        r = MiniRunner(port, certs[2], SES, foreground_window=foreground_window)
         await r.connect(rec.token)
         serving = asyncio.create_task(r.serve())
         session = sessions.get(SES)

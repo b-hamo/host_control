@@ -25,11 +25,19 @@ Host에 붙이지 않고 따로 도는 이유: Host는 Agent 대화마다 뜨고
 | `--root DIR` | `%LOCALAPPDATA%\SecureCUA\sandbox-manager` (항상 읽음) | 더 읽을 Manager 폴더. 돌고 있는 Host가 알려 준 `--sandbox-root`는 자동으로 더한다 |
 | `--dashboard-dir DIR` | `%LOCALAPPDATA%\SecureCUA\dashboard` | Host가 상태를 쓰는 곳 (Host `--dashboard-dir`와 같아야 함). 통합 설치(`host/solution.py`)는 기본값으로 켠다 |
 | `--static DIR` | `dashboard/static` | 프론트 페이지(`index.html`과 그 파일들)를 두는 곳 |
+| `--output-root DIR` | 없음 | 기존 Host의 차단된 Output 영수증을 읽을 신뢰된 폴더. 반복 지정 가능. 파일 내용은 읽지 않음 |
 | `--port N` | 17480 | |
 | `--vm-max N` | 8 | micro VM 동시 실행 상한. micro VM Host가 `--micro-vm-max-active`로 떠 있으면 그 값을 쓴다 |
 | `--keep-ended S` | 600 | 끝난 세션을 목록에 남겨 두는 시간(초) |
 
 ## API
+
+파일 반출 목록의 **악성 감지** 필터는 `MALWARE_DETECTED` 및 Windows 바이러스 차단 오류 225/226을 센다.
+후자는 원래 결과 코드를 보존하면서 표시용 `scan_code=WINDOWS_MALWARE_BLOCKED`로 구분하며, 툴팁에 탐지 출처를 표시한다.
+일반 검사 오류·시간 초과를 악성으로 분류하지 않는다.
+기존 Host를 재시작하지 않고 기록을 연결하려면 `--output-root`에 해당 Host의 Output 수신 루트를 지정한다.
+이 호환 경로의 시각은 정확한 판정 시각 대신 영수증 파일 갱신 시각이며, 화면의 시각 툴팁에 이를 표시한다.
+최신 Host 상태가 같은 세션·artifact 결과를 제공하면 그 상태를 우선한다. 최근 24시간, 최대 200건을 표시한다.
 
 모든 `/api` 요청은 토큰이 필요하다. 페이지 주소의 `?token=`을 읽어 `Authorization: Bearer <token>` 헤더로 보낸다.
 `<img src>`처럼 헤더를 못 붙이는 곳은 `?token=`을 붙인다. 페이지와 API가 같은 서버라 **CORS 설정은 필요 없다**.
@@ -49,7 +57,8 @@ GET만 받는다(그 밖은 405). 시각은 모두 ISO-8601 UTC(`...Z`).
   },
   "host_resources": {"cpu_percent": 64.0, "mem_percent": 72},
   "metrics": {"per_session": "unavailable", "reason": "needs administrator (HCS_E_ACCESS_DENIED)"},
-  "sessions": [ /* 아래 표 */ ]
+  "sessions": [ /* 아래 표 */ ],
+  "exports": [ /* 파일 반출 로그, 아래 표 */ ]
 }
 ```
 
@@ -95,6 +104,31 @@ GET만 받는다(그 밖은 405). 시각은 모두 ISO-8601 UTC(`...Z`).
 | `받은 파일 열기 (이름)` | 그 밖의 받은 파일 |
 | `웹페이지 명령` · `파일 받기` · `결과 반출` · `화면 작업` · `일반 작업` | 받은 파일이 없을 때 마지막 도구로 |
 
+`exports[]` — 파일 반출 로그 (최신이 먼저, 최대 200건, 결과가 정해진 지 24시간이 지난 것은 빠짐):
+
+| 필드 | 예 | 설명 |
+|---|---|---|
+| `artifact_id` | `ART-000017` | 반출 한 건의 ID (Host가 붙임) |
+| `session_id`, `session_label` | `SES-…`, `GUI-01` / `null` | 어느 세션의 파일인지. 세션이 목록에서 빠졌으면 `session_label`은 `null` |
+| `name` | `사진.7z` | 파일 이름 (Guest가 알린 경로의 마지막 부분, 표시용) |
+| `stage` | 아래 표 | 지금 단계 |
+| `code` | `EXPORTED` `BLOCKED` `QUARANTINED` `OUTPUT_FAILED` … / `null` | 결과 코드 (`result.code`) |
+| `scan_code` | `MALWARE_DETECTED` `SCAN_ERROR` `FILE_TOO_LARGE` `CONTENT_CHANGED` … / `null` | 검사기가 막은 이유. 반출된 것은 `null` |
+| `observed_at` | ISO 시각 | Guest가 파일을 알린 시각 |
+| `finished_at` | ISO 시각 / `null` | 결과가 정해진 시각 (Host가 2초 간격으로 기록하므로 최대 2초 늦음). 진행 중이면 `null` |
+| `export_path` | `SandboxOutput\SES-…\ART-000017\사진.7z` / `null` | 반출된 경우만. 다운로드 폴더 기준 상대 경로 |
+
+| `stage` | 뜻 |
+|---|---|
+| `CANDIDATE` `AUTHORIZED` `RECEIVING` `RECEIVED` `STAGED` `SCANNING` | 진행 중 (받는 중, 검사 중) |
+| `EXPORTED` | 검사 통과, 다운로드 폴더에 저장됨 |
+| `BLOCKED` `QUARANTINED` `FAILED` | 막힘 또는 실패 (`code`, `scan_code`로 이유) |
+| `HELD` | 보류 (받은 사본은 남아 있음) |
+| `SUPERSEDED` `CANCELLED` `DELETED` | 같은 파일의 새 사본으로 바뀌었거나, 세션이 끝나 취소되었거나, 지워짐 (화면에서 숨겨도 됨) |
+
+반출 상태는 Host 메모리(`ArtifactBroker`)에만 있으므로, Host가 상태 파일(`hosts/<세션>.json`의 `exports`)에 2초마다 옮겨 적고
+대시보드가 모든 Host의 것을 합친다. Host가 끝난 뒤에도 마지막 목록은 파일에 남는다.
+
 ### `GET /api/runtimes/{id}/screenshot`
 
 `{id}`는 `id`(`SES-…`)나 `label`(`GUI-01`). `image/png`와 `X-Captured-At` 헤더를 돌려준다.
@@ -126,7 +160,7 @@ Host가 끝나면 화면 파일을 지운다(사용자 화면을 남기지 않�
 | 세션별 CPU·메모리 | 관리자 권한으로 실행할 때만 숫자, 아니면 `null` | Windows가 Hyper-V 통계(HCS)를 관리자에게만 준다. 대시보드를 관리자로 띄우는 것은 권하지 않는다 |
 | 스크린샷: Runner 캡처 / `minobox screenshot` | Host가 저장한 마지막 관찰 화면 (두 런타임 같음) | 대시보드가 Runner·VM에 직접 붙으면 Host를 거치지 않는 두 번째 제어 경로가 생긴다 |
 | 라이브 썸네일 1~3초 | `captured_at`이 바뀔 때만 | 위와 같음 |
-| 추가 | `label`, `display_state`, `task`, `last_activity`, `ended_at`, `host_alive`, `screenshot`, `metrics` | |
+| 추가 | `label`, `display_state`, `task`, `last_activity`, `ended_at`, `host_alive`, `screenshot`, `metrics`, `exports`(반출 로그, 프론트 `ExportEntry` 형식) | |
 
 ## 보안
 
@@ -140,11 +174,34 @@ Host가 끝나면 화면 파일을 지운다(사용자 화면을 남기지 않�
 | 파일 | 하는 일 |
 |---|---|
 | `collect.py` | Manager `state.json`, Host 상태 파일, `wsb list`, PC CPU·메모리, HCS 통계를 모아 overview를 만든다 |
+| `export_history.py` | 명시한 Output 루트의 차단 영수증 메타데이터를 읽어 기존 Host 기록을 연결한다. 파일 본문은 읽지 않는다 |
+| `liveness.py` | PID와 생성 FILETIME을 대조하고 `wsb list`·HCS 실행 목록을 읽는다. 조회 불가는 미확인으로 구분한다 |
 | `server.py` | 페이지와 `/api/*`를 주는 HTTP 서버 (토큰, Host 헤더, 읽기 전용) |
 | `__main__.py` | `python -m dashboard` |
 | `sample-overview.json` | 프론트 개발용 예시 응답 |
 | `example-wiring.js` | 프론트 페이지(`minobox-dashboard.html`)를 이 API에 붙이는 예시. 페이지 끝에 넣으면 두 탭을 2초마다 채운다. 제품 코드가 아니라 연동 참고용 (API에서 온 글자는 escape한다) |
+| `frontend/` | 프론트 소스 (React + Vite + TypeScript). `npm run build`가 결과물을 `static/`에 바로 쓴다. 자세한 건 `frontend/README.md` |
+| `static/` | 프론트 빌드 결과물. 직접 고치지 말고 `frontend/`에서 다시 빌드한다 |
 
 프론트 페이지는 `dashboard/static/index.html`에 두면 `python -m dashboard`가 같이 준다(다른 폴더는 `--static`).
+화면을 고쳤으면 `cd dashboard/frontend; npm ci; npm run build`로 `static/`을 다시 만들고 같이 커밋한다.
 
 시험: `tests/test_dashboard.py` (overview 계약, CPU 계산, 관리자 아님, 토큰·Host 헤더·경로 탈출, 실제 MCP Host가 상태와 화면을 남기고 끝나면 지움).
+
+## 오래된 세션과 실행 개수
+
+`state.json`의 `RUNNING`만으로 실행 개수를 세지 않는다. Windows Sandbox는 `wsb list`의 실제 ID,
+micro VM은 HCS에서 확인한 container ID와 대조한다. 실제 목록에 없는 종료 기록은 표시에서 제외한다.
+HCS 조회 권한이 없는 경우에는 Manager가 기록한 Host의 PID **및 생성 FILETIME**이 모두 일치하는 활성 기록을 사용한다.
+이 대체 경로의 `runtimes.micro_vm.count_source`는 `host_owner`, HCS 경로는 `hcs`다.
+따라서 관리자 권한 없는 집계는 Host가 관리 중인 세션 기준이며, Host 없이 남은 micro VM까지 확인한 OS 전체 VM 개수는 아니다.
+실제 ID가 확인되면 Host가 없어도 목록과 개수에 남긴다. 동일 container ID는 한 번만 센다.
+
+프로세스 조회 권한 부족이나 생성 시각 누락은 종료로 단정하지 않는다. 원본 `state`를 보존하고
+`display_state=UNKNOWN`, `host_alive=null`로 표시하며 실행·시작 개수에는 넣지 않는다.
+`micro_vm.unknown`이 0보다 크면 `free_slots=null`이고 화면은 남은 슬롯을 `—`로 표시한다.
+Sandbox 조회 실패도 `running=null`, `state=UNKNOWN`으로 표현한다.
+오래된 Manager 파일은 수정·삭제하지 않고, 반출 이력은 세션 표시 여부와 독립적으로 유지한다.
+중복 세션 ID는 Host가 명시한 Manager root를 우선한다. 시작 중인 살아 있는 Host는 VM 생성 전에도 유지한다.
+
+추가 시험: `tests/test_dashboard_liveness.py` (PID 재사용·권한 부족·실제 런타임 대조·중복·시작 중·원본 불변).

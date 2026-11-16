@@ -14,8 +14,15 @@ Recipes (by the first marker found at the project root):
   go.mod -> go build | package.json -> npm install, node <entry> or npm start | *.csproj -> dotnet run
   CMakeLists.txt -> cmake + ninja (gcc) | Gemfile -> bundle install, ruby <entry>
   requirements.txt / pyproject.toml / setup.py -> venv + pip install, python <entry>
+  Cargo.toml -> Rust fetched inside the Sandbox (below), cargo build --release, cargo run
   none of them: by the entry's suffix (.py .js .rb .java .sh)
-Not yet: Rust (Cargo.toml, not installed), Maven/Gradle, make (not installed), Zig projects.
+Not yet: Maven/Gradle, make (not installed), Zig projects.
+
+Rust (배주한 2026-11-12, (가)): this PC's Rust is usually the default install, the MSVC toolchain, which
+links with Visual Studio's link.exe. Visual Studio cannot be lent to the Sandbox (it is installed, not a
+folder: MSVC is not supported, 2026-11-04). So nothing is lent: the Sandbox fetches the official rustup
+(static.rust-lang.org, its .sha256 checked) and installs the GNU toolchain, which brings its own MinGW
+linker, into its own TEMP. It costs a download on every run; nothing is fetched or kept on this PC.
 """
 
 from __future__ import annotations
@@ -48,9 +55,14 @@ class Project:
     marker: str | None             # the file that chose the recipe
 
 
-UNSUPPORTED = {"Cargo.toml": "Rust projects (Rust is not installed on this PC)",
-               "pom.xml": "Maven projects", "build.gradle": "Gradle projects", "build.gradle.kts": "Gradle projects",
+UNSUPPORTED = {"pom.xml": "Maven projects", "build.gradle": "Gradle projects", "build.gradle.kts": "Gradle projects",
                "build.zig": "Zig projects", "Makefile": "make projects (make is not installed; CMake is)"}
+RUSTUP_URL = "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe"
+RUST_HOST = "x86_64-pc-windows-gnu"
+RUST_ENV = {"RUSTUP_HOME": r"%TEMP%\rustup", "CARGO_HOME": r"%TEMP%\cargo"}
+CURL = r"%SystemRoot%\System32\curl.exe"
+import re  # noqa: E402
+RUST_BIN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")
 BY_SUFFIX = {".py": ("python", ("python",)), ".js": ("node", ("node",)), ".mjs": ("node", ("node",)),
              ".rb": ("ruby", ("ruby",)), ".java": ("java", ("java",)), ".sh": ("sh", ("git",))}
 
@@ -109,6 +121,8 @@ def inspect(path: Path, entry: str | None, arguments: list[str]) -> Project:
         kind, programs, marker = "ruby", ("ruby",), "Gemfile"
     elif marker := next((m for m in ("requirements.txt", "pyproject.toml", "setup.py") if has(m)), None):
         kind, programs = "python", ("python",)
+    elif has("Cargo.toml"):
+        kind, programs, marker = "rust", (), "Cargo.toml"
     elif blocked := next((m for m in UNSUPPORTED if has(m)), None):
         raise ProjectError("INVALID_ARGUMENT", f"{UNSUPPORTED[blocked]} are not supported yet")
     elif entry is not None and PurePosixPath(entry).suffix.lower() in BY_SUFFIX:
@@ -125,7 +139,9 @@ def inspect(path: Path, entry: str | None, arguments: list[str]) -> Project:
     if kind == "go" and entry is not None and f"{entry}/go.mod" in files:
         # Found 2026-11-05 (golang/example): a repo of several modules; the entry folder is its own module.
         root, entry, marker = f"{root}/{entry}" if root else entry, None, f"{entry}/go.mod"
-    if entry is not None and kind != "cmake" and kind != "go" and entry not in files:
+    if kind == "rust" and entry is not None and not RUST_BIN.fullmatch(entry):
+        raise ProjectError("INVALID_ARGUMENT", "for a Rust project, entry is the name of a binary (cargo run --bin)")
+    if entry is not None and kind not in ("cmake", "go", "rust") and entry not in files:
         raise ProjectError("INVALID_ARGUMENT", f"{entry} is not in the project")
     return Project(kind, programs, root, entry, tuple(arguments), marker)
 
@@ -176,6 +192,22 @@ def _steps(p: Project, shared: dict) -> list[tuple[str, str, list, bool]]:
         bundle = _dir(shared["ruby"]["exe"]) + r"\bundle.bat"
         return [("bundle install", bundle, ["install"], False),
                 ("run ruby " + p.entry, bundle, ["exec", "ruby", entry, *args], True)]
+    if p.kind == "rust":
+        # rustup acts by its file name (found 2026-11-12: '.rustup-init' -> "unknown proxy name"), so it
+        # keeps its name, in a folder of its own inside the project folder (arguments are not expanded)
+        init = r".rustup-download\rustup-init.exe"
+        cargo = r"%TEMP%\cargo\bin\cargo.exe"
+        run = ["run", "--release", "--quiet", *(["--bin", p.entry] if p.entry else [])]
+        return [("download rustup", CURL, ["-sSfL", "--retry", "2", "--create-dirs", "-o", init, RUSTUP_URL], False),
+                ("download rustup checksum", CURL, ["-sSfL", "--retry", "2", "-o", init + ".sha256",
+                                                    RUSTUP_URL + ".sha256"], False),
+                ("check rustup checksum", "#sha256", [init], False),
+                ("install Rust (GNU, minimal)", init, ["-y", "--no-modify-path", "--profile", "minimal",
+                                                       "--default-host", RUST_HOST, "--default-toolchain",
+                                                       "stable"], False),
+                ("cargo build --release", cargo, ["build", "--release"], False),
+                ("run cargo" + (" --bin " + p.entry if p.entry else ""), cargo,
+                 run + (["--", *args] if args else []), True)]
     if p.kind == "java":
         return [("run java " + p.entry, shared["java"]["exe"], [entry, *args], True)]
     if p.kind == "sh":
@@ -190,6 +222,9 @@ def script(p: Project, zip_name: str, zip_sha256: str, nonce: str, shared: dict,
     env = {k: v for s in shared.values() for k, v in s.get("env", {}).items()}
     if "ruby" in shared:
         env.setdefault("BUNDLE_PATH", r"%TEMP%\bundle")
+    if p.kind == "rust":
+        for k, v in RUST_ENV.items():
+            env.setdefault(k, v)
     if "dotnet" in shared:
         env.setdefault("DOTNET_CLI_UI_LANGUAGE", "en")      # not the console code page (unreadable in the log)
     lines = [
@@ -219,6 +254,13 @@ def script(p: Project, zip_name: str, zip_sha256: str, nonce: str, shared: dict,
         "function Convert-Text([byte[]]$b) { try { $strict.GetString($b) } catch { $oem.GetString($b) } }",
         "function Invoke-Step([string]$title, [string]$exe, [string]$line, [bool]$show) {",
         "  Write-Output ('== ' + $title)",
+        "  $exe = [Environment]::ExpandEnvironmentVariables($exe)",
+        # '#sha256 <file>': the file's SHA-256 must equal the first word of <file>.sha256 (rustup publishes it)
+        "  if ($exe -eq '#sha256') { $f = $line.Trim('\"')",
+        "    $want = ((Get-Content -LiteralPath ($f + '.sha256') -Raw) -split '\\s+')[0].ToLowerInvariant()",
+        "    $got = (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant()",
+        "    if ($want -ne $got) { Write-Output ('== ' + $title + ' FAILED (checksum)'); exit 5 }",
+        "    Write-Output ('== ' + $title + ' OK'); return }",
         "  if ($exe -like '*`**') { $found = @(Get-ChildItem -Path (Join-Path $root (Split-Path $exe)) -Filter '*.exe' -File)",
         "    if ($found.Count -ne 1) { Write-Output ('PROJECT: ' + $found.Count + ' programs were built; give entry: ' + (($found | ForEach-Object Name) -join ', ')); exit 4 }",
         "    $exe = $found[0].FullName }",
