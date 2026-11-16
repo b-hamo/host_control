@@ -1,4 +1,4 @@
-"""router_execute compile forms (배주한 2026-11-05): one C/C++/Go/Zig/Java/C# file is compiled on this PC,
+"""router_execute compile forms (team decision 2026-11-05): one C/C++/Go/Zig/Java/C# file is compiled on this PC,
 only the result runs in the Sandbox.
 
 - code that would make the compiler read other files here (UNC, absolute, .., #embed, .incbin) is refused
@@ -134,7 +134,7 @@ def test_the_broker_compiles_before_the_run_or_reports_the_compiler(tmp_path, mo
     assert plan.build is None and plan.file == "CAP-0001-AGENT.exe"
 
 
-# -- Rust (배주한 2026-11-12) ------------------------------------------------------------------------
+# -- Rust (team decision 2026-11-12) ------------------------------------------------------------------------
 def _rust_toolchain():
     try:
         return find_rust_toolchain()

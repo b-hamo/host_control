@@ -85,7 +85,7 @@ B/C에서 실제 로드한 Manager는 checkout import가 아니라 별도 venv�
   첫 실패는 pending 결과에 완료 전용 필드를 조회한 새 테스트의 오류였고, 완료된 결과로 검사 위치를 수정했다.
   실패 기록과 성공 영수증을 모두 보존한다.
 
-`tools/micro_vm_session_lab.py`에 새 증거 root, Manager, Runner, package, VM root, relay, 검사 서비스 export 경로를 지정한다.
+`tools/lab/micro_vm_session_lab.py`에 새 증거 root, Manager, Runner, package, VM root, relay, 검사 서비스 export 경로를 지정한다.
 `SCRP_LAB_AUTO=1`은 자동 배정, `SCRP_LAB_INSTALLED_MANAGER=1`은 해당 Python 환경의 설치 Manager,
 `SCRP_LAB_MAX_ACTIVE`는 VM 수 한도를 선택한다. ready.json은 MCP client 준비이며 VM READY가 아니다.
 requests 폴더에 고유 이름의 도구 요청 JSON을 쓰고 결과/영수증을 기다린다. batch에는 서로 다른 slot만 넣는다.

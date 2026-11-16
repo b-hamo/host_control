@@ -105,7 +105,7 @@ B 증거는 `C:\SCRPAppLab\management-session2-20261109`, C는 `C:\SCRPAppLab\ma
 
 준비 실패도 별도로 보존했다. 첫 준비 실행기는 PowerShell 5.1에서 Get-Content 문자열의 확장 속성을 JSON으로 직렬화하다 정체되어, PID·생성 시각·실행 경로를 검증한 **자신의 실행기만** 종료했다. Guest 추적·RDP는 시작 전이었다. ReadAllText의 일반 문자열로 수정했다. 다음 준비는 logman의 복수 `-p` 사용 오류로 시작 코드 `0x80070057`을 반환했다(Router RUN-0004 FAILED). `-pf` provider 파일로 수정한 RUN-0005는 SUCCEEDED/GUEST_PROCESS_VERIFIED/exit 0이다. 기록 중 열린 ETL 때문에 Output 스냅샷이 한 번 OUTPUT_UNAVAILABLE로 거부됐으나, 추적 종료 후 같은 검사·반출 경로로 완료했다.
 
-기존 Guest 이벤트 진단기는 UserData에 있는 Session/Reason을 누락하고, 상한 시각 없이 이전 이미지 이벤트까지 섞었다. `tools/guest-logon-evidence.ps1`에 시작·종료 시각과 UserData 추출, ActivityID/PID/TID, RdpCoreTS 조회를 추가했다. 실제 RUN-0006이 SUCCEEDED했고 ART-000015에서 원래 시도의 Session 2/Reason 12/같은 ActivityID를 확인했다. 이 수정은 진단 정확도 개선이며 바탕화면 기능 구현으로 계산하지 않는다.
+기존 Guest 이벤트 진단기는 UserData에 있는 Session/Reason을 누락하고, 상한 시각 없이 이전 이미지 이벤트까지 섞었다. `tools/lab/guest-logon-evidence.ps1`에 시작·종료 시각과 UserData 추출, ActivityID/PID/TID, RdpCoreTS 조회를 추가했다. 실제 RUN-0006이 SUCCEEDED했고 ART-000015에서 원래 시도의 Session 2/Reason 12/같은 ActivityID를 확인했다. 이 수정은 진단 정확도 개선이며 바탕화면 기능 구현으로 계산하지 않는다.
 
 ### 로그온 화면 수집 준비 실패
 

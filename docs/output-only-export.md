@@ -53,4 +53,4 @@
 - [x] 수정 레포별 이슈·develop 대상 PR 및 실제 검증 근거
 
 연계: host_control #105 / sandbox_runner #35. 구현과 이번 PC의 통합 반출 검증 완료.
-[현재 검증 기록](output-only-validation.md).
+[현재 검증 기록](validation/output-only-validation.md).

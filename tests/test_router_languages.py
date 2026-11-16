@@ -1,4 +1,4 @@
-"""router_execute / sandbox_run for other languages (배주한 2026-11-05): a Python, JavaScript (Node.js), Ruby or
+"""router_execute / sandbox_run for other languages (team decision 2026-11-05): a Python, JavaScript (Node.js), Ruby or
 sh script runs inside the Sandbox, unchanged, with the interpreter program_share lends from this computer.
 
 - a *-script form takes the whole Agent capture as that language's file (no BOM, no transform)

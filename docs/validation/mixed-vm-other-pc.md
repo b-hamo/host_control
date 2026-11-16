@@ -6,7 +6,7 @@ micro_VM README의 검증 상태표에서 "다른 PC·다른 Windows 빌드"는 
 | 단계 | 확인하는 것 | 쓰는 것 |
 |---|---|---|
 | 1단계 | VM끼리 같이 켜지는가 (SCRP 없음) | micro_VM CLI(`minobox`), Windows Sandbox 앱 |
-| 2단계 | SCRP Host 두 개가 각자 VM을 맡아 같이 동작하는가 | `tools/mixed_vm_smoke.py` |
+| 2단계 | SCRP Host 두 개가 각자 VM을 맡아 같이 동작하는가 | `tools/lab/mixed_vm_smoke.py` |
 
 모든 명령은 **관리자 Windows PowerShell 5.1**에서 실행한다. micro_VM broker가 관리자 권한을 요구한다.
 `.ps1` 실행이 막히면, 그 창에서만 허용한다.
@@ -92,7 +92,7 @@ micro_VM 묶음 폴더(`C:\scrp\micro_VM\tmp\dist\minoBox-<시각>`)에서 실�
 | 1-5 | `.\minobox stop 시험B`, Sandbox를 닫는다 | 둘 다 깨끗이 꺼진다 (`.\minobox ps`, `wsb list`가 비어 있다) |
 | 1-6 (선택) | 바탕화면 VM(`.\minobox run --name 바탕`)을 켠 채 Sandbox를 켠다 | 문서상 Sandbox가 "원격 환경이 로그오프되고 있습니다"로 닫혀야 한다. 결과만 적는다 |
 
-## 2단계: SCRP Host 두 개 (`tools/mixed_vm_smoke.py`)
+## 2단계: SCRP Host 두 개 (`tools/lab/mixed_vm_smoke.py`)
 
 스크립트가 하는 일:
 - Host A(Windows Sandbox)와 Host B(micro_VM 앱 창)를 실제 MCP 서버로 띄운다.
@@ -118,9 +118,9 @@ $common = @("--runner", "C:\scrp\sandbox_runner\build\solution\sandbox_runner.ex
 
 | 순서 | 명령 | 확인하는 것 |
 |---|---|---|
-| 2-0 | Sandbox를 닫고 `& $py tools\mixed_vm_smoke.py @common --slots B --work C:\scrp\evidence\2-0-B` | micro_VM 혼자 SCRP READY가 되는가 (새 `--vm-root`의 첫 준비 포함) |
-| 2-1 | `& $py tools\mixed_vm_smoke.py @common --slots A,B --work C:\scrp\evidence\2-1-AB` | **Sandbox 사용 중에 micro_VM을 켜는** 경우. 우리가 정한 정책의 핵심이다 |
-| 2-2 | `& $py tools\mixed_vm_smoke.py @common --slots B,A --work C:\scrp\evidence\2-2-BA` | 반대 순서: micro_VM을 쓰는 중에 Sandbox를 켜는 경우 |
+| 2-0 | Sandbox를 닫고 `& $py tools\lab\mixed_vm_smoke.py @common --slots B --work C:\scrp\evidence\2-0-B` | micro_VM 혼자 SCRP READY가 되는가 (새 `--vm-root`의 첫 준비 포함) |
+| 2-1 | `& $py tools\lab\mixed_vm_smoke.py @common --slots A,B --work C:\scrp\evidence\2-1-AB` | **Sandbox 사용 중에 micro_VM을 켜는** 경우. 우리가 정한 정책의 핵심이다 |
+| 2-2 | `& $py tools\lab\mixed_vm_smoke.py @common --slots B,A --work C:\scrp\evidence\2-2-BA` | 반대 순서: micro_VM을 쓰는 중에 Sandbox를 켜는 경우 |
 
 - Sandbox가 시작 중에 멈추거나 화면이 검게 남으면 `--vgpu-off`를 붙여 다시 실행하고, 그 사실을 기록한다. AMD GPU PC에서 vGPU 때문에 Sandbox가 죽은 사례가 있다.
 - Win+R을 누르면 Sandbox(A)에는 Windows 실행 창이, micro_VM(B)에는 Runner 전용 명령 입력 창이 뜬다. 스크립트가 Esc로 닫는다.

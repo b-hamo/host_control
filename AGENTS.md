@@ -21,7 +21,8 @@ Codex ─MCP─▶ host/mcp_server.py ─▶ host/broker.py ─▶ host/runtime_
 | 알고 싶은 것 | 문서 |
 |---|---|
 | host/ 파일별 역할, 4개 층, 요청 하나가 지나가는 길, 무엇을 고치려면 어디를 보나 | `host/README.md` |
-| 실행 옵션, Broker 검사 순서, Codex 연결, inbox·sandbox_run·Router·반출 | `README.md` |
+| 실행 옵션, Broker 검사 순서, Codex 연결, inbox·sandbox_run·Router·반출 | `docs/reference.md` |
+| 설치와 사용법 (사용자용) | `README.md` |
 | Host ↔ Runner 메시지 규격, 담당, 동결 | `schema/README.md` |
 | 파일 반출 Runner 계약 | `schema/profiles/artifact-export-v1/README.md` |
 | 검사 서비스 구조·판정 기준·실제 검증 결과 | `scanner_service/README.md` |

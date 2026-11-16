@@ -813,7 +813,7 @@ def main(argv: list[str] | None = None) -> None:
                          "the Sandbox or downloads another file when a similar one is already in Downloads")
     ap.add_argument("--share-programs", action="store_true",
                     help="with --runner-exe: program_share shares an installed compiler (python, git, gcc, node, go, java, zig, dotnet, ruby, php) "
-                         "read-only into the running Sandbox, without asking (배주한 2026-10-29)")
+                         "read-only into the running Sandbox, without asking (team decision 2026-10-29)")
     ap.add_argument("--sandbox-root", type=Path, default=None,
                     help="Sandbox Manager workspace (default %%LOCALAPPDATA%%/SecureCUA/sandbox-manager)")
     ap.add_argument("--cert-dir", type=Path, default=HOST_DIR / ".certs")
