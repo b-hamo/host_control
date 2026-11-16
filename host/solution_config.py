@@ -80,13 +80,49 @@ def validate_micro_vm(micro: dict) -> None:
             raise ValueError('micro_VM capacity differs from installed service')
 
 
-def render_profile_mcp(profile_path: Path, profile: dict) -> str:
-    q = lambda value: json.dumps(str(value), ensure_ascii=False)
+def _stdio_args(profile_path: Path, profile: dict) -> list[str]:
     # Resolve Python from the current profile on every connection: a full update
     # publishes a fresh environment without rewriting the user's MCP registration.
-    args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    return ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
             str(Path(profile['host_repo']) / 'scripts' / 'start_solution.ps1'),
             '-Stdio', '-State', str(profile_path.parent)]
+
+
+MCP_ENV = {'PYTHONIOENCODING': 'utf-8', 'PYTHONDONTWRITEBYTECODE': '1'}
+CLAUDE_NAME = 'scrp_sandbox'
+
+
+def render_profile_claude(profile_path: Path, profile: dict) -> dict:
+    """The same stdio Host as Codex gets, in Claude Code's MCP server JSON (claude mcp add-json)."""
+    return {'type': 'stdio', 'command': 'powershell.exe', 'args': _stdio_args(profile_path, profile),
+            'env': dict(MCP_ENV)}
+
+
+def register_claude(server: dict, *, claude: str | None = None, run=None) -> str:
+    """Register the Host for every Claude Code project of this user (user scope), replacing our earlier entry.
+
+    Claude Code keeps its MCP servers in its own settings; its CLI is the supported way to change them.
+    Returns the claude executable used.
+    """
+    import shutil
+    import subprocess
+    run = run or subprocess.run
+    exe = claude or shutil.which('claude')
+    if not exe:
+        raise ValueError('Claude Code CLI (claude) not found on PATH; install Claude Code, then run '
+                         'installer/register_claude.ps1 again')
+    # Only our name, only the user scope: other servers and project-scoped entries stay as they are.
+    run([exe, 'mcp', 'remove', '--scope', 'user', CLAUDE_NAME], capture_output=True, text=True)
+    done = run([exe, 'mcp', 'add-json', '--scope', 'user', CLAUDE_NAME,
+                json.dumps(server, ensure_ascii=False)], capture_output=True, text=True)
+    if done.returncode != 0:
+        raise ValueError(f'claude mcp add-json failed: {(done.stderr or done.stdout).strip()}')
+    return exe
+
+
+def render_profile_mcp(profile_path: Path, profile: dict) -> str:
+    q = lambda value: json.dumps(str(value), ensure_ascii=False)
+    args = _stdio_args(profile_path, profile)
     return ('[mcp_servers.scrp_sandbox]\n'
             f'command = "powershell.exe"\nargs = {json.dumps(args, ensure_ascii=False)}\n'
             f'cwd = {q(profile["host_repo"])}\nenabled = true\n'

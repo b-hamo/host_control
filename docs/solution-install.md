@@ -40,6 +40,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File installer/install_solution.p
 ```
 
 Codex에 연결해 사용할 때는 `-Start` 대신 `-RegisterCodex`를 지정한 뒤 MCP를 다시 연결한다.
+Claude Code는 `-RegisterClaude`를 지정한다. `claude mcp add-json --scope user scrp_sandbox`로 같은 Host 명령을 등록하며,
+기존의 같은 이름 항목만 바꾼다. 설치 후에 추가할 때는 `installer/register_claude.ps1`을 실행한다(`claude` CLI 필요).
 독립 세션과 Codex 세션을 동시에 시작하지 않는다.
 
 ```powershell
