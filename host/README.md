@@ -99,6 +99,13 @@ Sandbox 안 Runner
 | `lifecycle.py` | Sandbox 켜고 끄기 (Lifecycle 담당의 Sandbox Manager 호출). `task_submit` 때 백그라운드로 켜기 시작 → Sandbox가 보는 Host 주소로 인증서·bootstrap 작성 → READY면 token 파일 삭제 → 세션이 끝나면(정상·실패·Codex 종료) 끄고 치운다. Runner가 응답이 없으면 같은 Sandbox에서 Runner만 다시 켜거나 Sandbox를 새로 켠다(다음 세대). `mcp_server.py --runner-exe`일 때만 쓴다 | 5.9 |
 | `startup.py` | Startup Verification. Runner가 "준비됐다"고 해도 Host가 7가지(버전·Capability·Monitor·시계 / Worker 생존·첫 캡처·Heartbeat)를 확인한 뒤에만 READY. 등록 후 120초 안에 안 되면 실패 | 4.5 |
 
+에이전트가 결정하는 Host 빌드 경로:
+
+| 파일 | 하는 일 | WBS |
+|---|---|---|
+| `local_build.py` | build-plan의 명령·인자를 Host에서 실행한다. 명령/옵션/소스 허용 목록 없이 여러 입력·ZIP·빌드 단계를 받고, 출력 파일/폴더를 묶는다. 빌드 로그와 단계별 종료 코드를 반환하며 결과 entry는 Host에서 실행하지 않는다 | 7.x |
+| `local_build_guest.ps1` | Host 산출물의 해시 확인·압축 해제·entry 실행만 담당한다. Guest에서 컴파일하지 않으며 기존 실행 영수증에 실제 결과를 남긴다 | 7.x |
+
 ## ④ Sandbox와 통신하는 층
 
 | 파일 | 하는 일 | WBS |
@@ -178,6 +185,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 |---|---|
 | 새 도구 추가, 도구 입력 규칙 변경 | `schema/mcp-tools/*.json` → `broker.py`의 `OPERATIONS`·`translate()` (같이 고칠 곳 전체는 [AGENTS.md](../AGENTS.md) 규칙 1) |
 | 보안 규칙 추가 (차단할 요청) | `policy.py` |
+| 에이전트 빌드 명령·Host 컴파일·Guest 산출물 실행 | `local_build.py`, `local_build_guest.ps1`, `sandbox_run.py`, `broker.py`, `schema/mcp-tools/router_execute.json`, [호출 문서](../docs/agent-build-plan.md) |
 | 호출 빈도 제한 변경 | `broker.py`의 `RATE_LIMITS` |
 | 다른 채팅의 Host·VM 보존 | `mcp_server.py`, `mcp_runtime.py`, `single_host.py`(무동작 호환 API), Manager의 배정 잠금 |
 | micro_VM 설치 프로필·파일 교체 시 시작 검사 | `solution_config.py`, `installer/solution_common.ps1`, `tests/test_solution_config.py`, `tests/test_solution_powershell.py` |
@@ -193,6 +201,7 @@ Codex가 `computer_click(x=640, y=420)`을 부르면:
 
 | 테스트 파일 | 확인하는 것 |
 |---|---|
+| `tests/test_local_build.py` | 임의 빌드 인자·다중 입력·ZIP·출력 폴더·실패 중단·Host/Guest 분리·요청 중복·계획 로그 마스킹. 실제 프로세스는 가짜로 대체하며 이번 작업에서는 테스트 실행 생략 |
 | `tests/test_auth.py` | TLS, token(없음·틀림·만료·재사용·다른 세션), nonce 재사용, 로그에 token 노출 |
 | `tests/test_heartbeat_reconnect.py` | Health 전이, 재접속 token, 연결 교체, 끊긴 Action 재동기화 |
 | `tests/test_startup.py` | 정상 승격, 창 제목 포함/생략 Runner의 READY 호환성, 고장 Runner 거부, 시간 초과, 시계 오차 |

@@ -72,6 +72,9 @@ class Policy:
             # #94: stores web page text as untrusted data; opens nothing, runs nothing.
             return Decision("ALLOW", "P-ROUTER-CAPTURE", "records web page text as untrusted data; runs nothing")
         if tool == "router_execute":
+            if args.get("form") == "build-plan":
+                return Decision("ALLOW", "P-ROUTER-BUILD-PLAN",
+                                "agent build commands run on Host; packaged output runs in Sandbox; recorded")
             # #94: same rule as sandbox_run. The script derived from a capture runs inside the
             # Sandbox only, bound to the SHA-256 of the capture and of the script.
             return Decision("ALLOW", "P-ROUTER-EXECUTE", "analyzes a captured command inside the Sandbox only; recorded")
