@@ -110,6 +110,11 @@ not a complete outbound firewall. The flow below applies to ordinary user-reques
 Use the connected SCRP tools: runtime_get_state, task_submit, computer_observe,
 computer_*, inbox_import/inbox_download, artifact_list/artifact_export, session_stop.
 Reuse a READY session. Wait if starting; start only when no live session exists.
+Starting takes about 40 s for Windows Sandbox and 1-2 minutes (up to 3) for a micro_VM, which is
+used when another conversation already has the Windows Sandbox. `RUNTIME_UNAVAILABLE ... PREPARING`
+during that time is normal, not a failure: keep calling computer_observe with wait_ms=10000 (each
+call waits up to 60 s) until READY. Never give up, stop or report failure before 3 minutes; the
+first micro_VM on a new PC may take up to 20 minutes, so keep waiting while the session is alive.
 No new Sandbox or session termination without the user's instruction.
 
 ## Input and execution

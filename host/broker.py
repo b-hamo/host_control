@@ -61,6 +61,9 @@ RUNTIME_TOOLS = {"computer_observe", "artifact_export", "sandbox_run", "router_e
 
 # Rate limits per session (protocol doc §7: input 5/s, observe 2/s)
 RATE_LIMITS = {"observe": 2.0, "input": 5.0, "control": 5.0}
+# While the runtime is first starting, one tool call waits up to this long for READY
+# (a micro_VM needs 1-2 minutes) instead of failing at once; Codex allows 120 s per call.
+STARTUP_WAIT_S = 60.0
 
 # session_stop reason → TERMINATE reason (the Agent's own reason stays in the audit log)
 STOP_REASONS = {"TASK_COMPLETE": "TASK_COMPLETE", "CANNOT_COMPLETE": "TASK_COMPLETE",
@@ -265,13 +268,25 @@ class Broker:
         or being restarted) waits for READY instead of failing at once, so the Agent has one
         way to wait. Returns the seconds spent; the capture then follows without the extra delay.
 
+        While the runtime is first starting (or being restarted) that wait lasts up to
+        STARTUP_WAIT_S, and other tools that need READY wait the same way, because a micro_VM
+        needs 1-2 minutes and Agents gave up after a few immediate refusals (2026-11-20).
+        computer_observe with wait_ms=0 still answers at once.
+
         A restart swaps self.session for the next generation meanwhile, so whichever session
         is current is checked again every half second."""
-        if tool != "computer_observe" or not args.get("wait_ms") or self.task_id is None \
+        if tool not in RUNTIME_TOOLS or self.task_id is None \
                 or self.session.terminated or self.session.ready.is_set():
             return 0.0
+        starting = self.launcher is not None and self.launcher.starting()
+        asked = args.get("wait_ms", 0) / 1000 if tool == "computer_observe" else 0
+        if tool == "computer_observe" and not asked:
+            return 0.0
+        budget = max(asked, STARTUP_WAIT_S if starting else 0)
+        if budget <= 0:
+            return 0.0
         started = time.monotonic()
-        deadline = started + args["wait_ms"] / 1000
+        deadline = started + budget
         while not self.session.terminated and not self.session.ready.is_set():
             left = deadline - time.monotonic()
             if left <= 0:
@@ -539,8 +554,10 @@ class Broker:
                 self.launcher.begin()                # returns at once; the Sandbox boots meanwhile
                 reply["sandbox"] = self.launcher.status()
             if not s.ready.is_set():
-                reply["message"] = ("The runtime is starting (usually 20-60 s). Call computer_observe "
-                                    "with wait_ms=10000 to wait for it; repeat while it is not READY.")
+                reply["message"] = ("The runtime is starting: Windows Sandbox usually takes about 40 s, a "
+                                    "micro_VM 1-2 minutes (up to 3). Call computer_observe with wait_ms=10000: "
+                                    "each call waits up to 60 s while it starts. Repeat until it is READY; "
+                                    "not READY yet is normal, not a failure, so do not give up or stop.")
             return reply
         if tool == "computer_observe":
             # Already waited for the runtime to start: capture right away (it has just come up).
@@ -578,6 +595,9 @@ class Broker:
             if self.launcher is not None:
                 host_view["sandbox"] = self.launcher.status()
             if not s.ready.is_set():
+                hint = self.launcher.hint() if self.launcher is not None else None
+                if hint:
+                    host_view["message"] = hint
                 return {**host_view, "source": "host"}   # the Runner is not reachable right now
             st = (await s.state(wanted))["payload"]
             if wanted and st["action_state"]:
