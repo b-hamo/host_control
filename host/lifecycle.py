@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -59,6 +60,9 @@ Identity = tuple[str, str, int]
 TERMINATION_REASONS = ("TASK_COMPLETE", "USER_STOP", "SECURITY_VIOLATION", "TIMEOUT", "RUNTIME_ERROR")
 RUNNER_EXIT_WAIT_S = 5.0          # after TERMINATE_RESULT, before `wsb stop` (grace_ms is 1 s)
 WAIT_HINT = "call computer_observe with wait_ms=10000 to wait for it"
+# 2026-11-20: a micro_VM took 57-128 s to become READY and Agents gave up after about a minute
+# of RUNTIME_UNAVAILABLE replies. Say plainly that this is normal and how long it may take.
+START_LIMIT_S = 180
 
 IDLE, LAUNCHING, PUBLISHED, READY, RECOVERING, STOPPING, STOPPED, FAILED = (
     "IDLE", "LAUNCHING", "PUBLISHED", "READY", "RECOVERING", "STOPPING", "STOPPED", "FAILED")
@@ -117,6 +121,7 @@ class SandboxLauncher:
         self._window_watch: asyncio.Task | None = None
         self._window_stop_requested = False
         self._fixed_recovery_generation = None
+        self._began: float | None = None
 
     @property
     def output_storage_generation(self):
@@ -145,11 +150,27 @@ class SandboxLauncher:
                                         and self.session.identity[2] > self._first_generation):
             return f"it is being restarted after it stopped answering; {WAIT_HINT}"
         if self.state in (LAUNCHING, PUBLISHED) and not self.session.verified:
-            return f"the Sandbox is starting; {WAIT_HINT}"
+            return self.start_note()
         if self.session.verified and self.session.disconnected() and self.auto_recover:
             return ("the connection to the Runner was lost; if it does not come back it is restarted "
                     f"automatically; {WAIT_HINT}")
         return None
+
+    def starting(self) -> bool:
+        """The first start (or an automatic restart) is under way and may still become READY."""
+        return not self.session.terminated and (
+            self.state == RECOVERING
+            or (self.state in (LAUNCHING, PUBLISHED) and not self.session.verified))
+
+    def start_note(self) -> str:
+        took = int(time.monotonic() - self._began) if self._began is not None else 0
+        kind = getattr(self.sandbox, "runtime_type", None)
+        usual = ("a micro_VM usually needs 1-2 minutes" if kind == "MICRO_VM_APP_WINDOW" else
+                 "Windows Sandbox usually needs about 40 s and a micro_VM 1-2 minutes")
+        return (f"the Sandbox is starting ({took} s so far). This is normal, not a failure: {usual}, "
+                f"up to {START_LIMIT_S} s (the first micro_VM on a new PC can take up to 20 minutes while "
+                f"its image is prepared). Keep waiting until it is READY or the session ends, and do not "
+                f"give up or stop the session before then; {WAIT_HINT}")
 
     # -- start -----------------------------------------------------------------
     def begin(self) -> bool:
@@ -157,6 +178,7 @@ class SandboxLauncher:
         if self._launch is not None or self.session.terminated:
             return False
         self.state = LAUNCHING
+        self._began = time.monotonic()
         # Boot + Startup Verification must finish within profile.timeout_s from now (protocol doc §7).
         self.session.start_watchdog()
         self._launch = asyncio.get_running_loop().create_task(self._run_launch())

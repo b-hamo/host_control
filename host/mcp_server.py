@@ -61,8 +61,10 @@ START_CAPABILITIES = {"gui.observe", "gui.input"}
 
 INSTRUCTIONS = (
     "These tools control a GUI inside an isolated Windows Sandbox, not this computer. "
-    "Call task_submit with your goal first. The runtime may take up to a minute to start after that; "
-    "computer_observe with wait_ms=10000 waits for it. "
+    "Call task_submit with your goal first. The runtime then starts: Windows Sandbox in about 40 s, "
+    "a micro_VM in 1-2 minutes (up to 3). computer_observe with wait_ms=10000 waits up to 60 s per call "
+    "while it starts; repeat until READY. RUNTIME_UNAVAILABLE while it is starting is normal, not a "
+    "failure: keep waiting, do not give up or stop the session. "
     "Then call computer_observe before any coordinate-based "
     "action; x/y are pixels of the most recent observation, origin top-left. "
     "If the screen is still loading, call computer_observe again with wait_ms (up to 10000) "
