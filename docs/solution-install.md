@@ -140,7 +140,7 @@ native main 뷰어의 프로토콜 호환성을 보장하지는 않는다.
 설치·업데이트의 기존 활성 세션 보호 조건은 유지한다. 사용 중인 서비스를 덮어쓰지 않는다.
 
 기본 `requirements.txt`는 Manager **0.2.0**의 커밋
-`ea6854a40d1f71ad1e500128916fb48630e8b21a`를 고정 설치한다.
+`4afb6383fda301f5b02a25d5127f4c36e74e5680`를 고정 설치한다.
 통합 설치기는 `-ManagerRepo` checkout을 사용하므로 이 커밋 또는 같은 수정이 포함된
 대응 배포 checkout을 지정한다. 기본 폴더는 형제 폴더 `../sandbox_manager`이며,
 다른 폴더 배치는 `install_solution.ps1 -ManagerRepo <절대 경로>`를 사용한다.

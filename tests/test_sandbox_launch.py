@@ -183,6 +183,31 @@ def test_observe_with_wait_ms_waits_for_the_sandbox(tmp_path):
     assert took < 9.5                                            # returned soon after READY, not after 10 s
 
 
+def test_tools_wait_while_a_slow_runtime_starts(tmp_path):
+    """2026-11-20: a micro_VM took 57-128 s and Agents gave up after a few immediate
+    RUNTIME_UNAVAILABLE replies. While starting, a READY-only tool waits instead, and the
+    state says plainly that this is normal."""
+    fake = FakeManager(tmp_path / "sbx", start_delay_s=1.0)
+
+    async def body():
+        host = Host(tmp_path, fake)
+        await host.call("task_submit", {"goal": "g"})
+        state = await host.call("runtime_get_state")
+        runner = asyncio.create_task(guest(*paths(tmp_path / "sbx")))
+        t0 = time.monotonic()
+        clicked = await host.call("computer_click", {"x": 1, "y": 1})   # no observation yet
+        took = time.monotonic() - t0
+        await host.call("session_stop", {"reason": "TASK_COMPLETE"})
+        await (await runner)[2]
+        host.backend.shutdown()
+        return state, clicked, took
+
+    state, clicked, took = run(body())
+    assert "not a failure" in state["message"] and "s so far" in state["message"]
+    assert clicked.get("error") != "RUNTIME_UNAVAILABLE"        # waited for READY, then the normal path
+    assert 0.5 < took < 9.5
+
+
 def test_start_failure_ends_the_session_and_cleans_up(tmp_path):
     fake = FakeManager(tmp_path / "sbx", start_error=FakeError(
         "RUNTIME_UNAVAILABLE", "firewall not ready: no active allow rule for TCP 17443"))
