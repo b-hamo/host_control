@@ -403,7 +403,7 @@ class Broker:
         (host/sandbox_project.py). Installing, building and running all happen in the Sandbox."""
         if run.project is None:
             return
-        if not self.programs:
+        if run.project.programs and not self.programs:
             raise BrokerError("POLICY_DENIED", f"{run.file} needs {', '.join(run.project.programs)} in the Sandbox; "
                                                "this Host does not lend programs (--share-programs)")
         from sandbox_manager import SandboxManagerError
@@ -724,6 +724,9 @@ class Broker:
                 return result
             except ArtifactError as e:
                 raise BrokerError(e.code, e.message, next_step=e.next_step) from None
+        if tool in ("batch_run", "batch_status", "batch_observe"):
+            # Other Hosts' runtimes: served by the MCP front (host/mcp_runtime.py), never by a session's Broker.
+            raise BrokerError("POLICY_DENIED", f"{tool} is not a tool of this session's runtime (--batch-max)")
         if tool == "session_stop":
             if s.ready.is_set():
                 await s.terminate(STOP_REASONS[args["reason"]])

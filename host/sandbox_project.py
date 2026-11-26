@@ -15,7 +15,9 @@ Recipes (by the first marker found at the project root):
   CMakeLists.txt -> cmake + ninja (gcc) | Gemfile -> bundle install, ruby <entry>
   requirements.txt / pyproject.toml / setup.py -> venv + pip install, python <entry>
   Cargo.toml -> Rust fetched inside the Sandbox (below), cargo build --release, cargo run
-  none of them: by the entry's suffix (.py .js .rb .java .sh)
+  none of them: by the entry's suffix (.py .js .rb .java .sh; or what is packed in the zip ready to run,
+  with nothing lent: .exe as it is, .msi with msiexec /i (its install window opens), .ps1 with PowerShell.
+  host/batch_run.py gives each program of such a zip its own runtime)
 Not yet: Maven/Gradle, make (not installed), Zig projects.
 
 Rust (team decision 2026-11-12, (가)): this PC's Rust is usually the default install, the MSVC toolchain, which
@@ -64,7 +66,11 @@ CURL = r"%SystemRoot%\System32\curl.exe"
 import re  # noqa: E402
 RUST_BIN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}")
 BY_SUFFIX = {".py": ("python", ("python",)), ".js": ("node", ("node",)), ".mjs": ("node", ("node",)),
-             ".rb": ("ruby", ("ruby",)), ".java": ("java", ("java",)), ".sh": ("sh", ("git",))}
+             ".rb": ("ruby", ("ruby",)), ".java": ("java", ("java",)), ".sh": ("sh", ("git",)),
+             # 2026-11-26: packed in the zip ready to run; unpacked and run in the Sandbox only
+             ".exe": ("exe", ()), ".msi": ("msi", ()), ".ps1": ("ps1", ())}
+MSIEXEC = r"%SystemRoot%\System32\msiexec.exe"
+POWERSHELL = r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 
 def _names(path: Path) -> list[str]:
@@ -130,7 +136,8 @@ def inspect(path: Path, entry: str | None, arguments: list[str]) -> Project:
     else:
         raise ProjectError("INVALID_ARGUMENT", "no known project file at the project root (go.mod, package.json, "
                                                "*.csproj, CMakeLists.txt, Gemfile, requirements.txt, pyproject.toml, "
-                                               "setup.py); give entry (a .py/.js/.rb/.java/.sh file) to run one file")
+                                               "setup.py); give entry (a .py/.js/.rb/.java/.sh/.exe/.msi/.ps1 "
+                                               "file) to run one file")
     if kind in ("python", "ruby", "java", "sh") and entry is None:
         if kind == "python" and "__main__.py" in at_root:
             entry = "__main__.py"
@@ -210,6 +217,13 @@ def _steps(p: Project, shared: dict) -> list[tuple[str, str, list, bool]]:
                  run + (["--", *args] if args else []), True)]
     if p.kind == "java":
         return [("run java " + p.entry, shared["java"]["exe"], [entry, *args], True)]
+    if p.kind == "exe":
+        return [("run " + p.entry, entry, args, True)]
+    if p.kind == "msi":                          # like a single .msi (host/sandbox_run.py): its install window opens
+        return [("install " + p.entry, MSIEXEC, ["/i", entry, *args], True)]
+    if p.kind == "ps1":
+        return [("run " + p.entry, POWERSHELL, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", entry, *args],
+                 True)]
     if p.kind == "sh":
         return [("run sh " + p.entry, shared["git"]["shell"], [p.entry, *args], True)]
     raise ProjectError("INVALID_ARGUMENT", f"unknown project kind {p.kind}")

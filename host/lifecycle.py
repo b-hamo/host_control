@@ -131,6 +131,9 @@ class SandboxLauncher:
     def status(self) -> dict:
         st = {"state": self.state, "host_address": self.host_address, "error": self.error,
               "generation": self.session.identity[2], "recoveries": list(self.recoveries)}
+        kind = getattr(self.sandbox, "runtime_type", None)
+        if isinstance(kind, str):
+            st["runtime_type"] = kind              # WINDOWS_SANDBOX or MICRO_VM_APP_WINDOW, once it is chosen
         if self.sandbox is not None and callable(getattr(self.manager, "window_state", None)):
             st["window_state"] = self._window_state()
         if self.output is not None:

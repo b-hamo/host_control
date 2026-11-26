@@ -24,6 +24,7 @@ class McpRuntime:
         self._lock = threading.RLock()
         self._serial = 0
         self._closed = False
+        self.batch = None                    # host/batch_run.py BatchRunner (--batch-max), made on first use
 
     def is_alive(self):
         return False
@@ -34,8 +35,48 @@ class McpRuntime:
     def shutdown(self):
         with self._lock:
             self._closed = True
+            batch = self.batch
+        if batch is not None:
+            batch.shutdown()                 # the children stop their own runtimes, side by side
+        with self._lock:
             if self.backend is not None:
                 self.backend.shutdown()
+
+    def _batch_call(self, tool, args):
+        """batch_run / batch_status / batch_observe: other Hosts' runtimes, never this Host's own."""
+        from host.batch_run import BatchError, BatchRunner
+        from host.mcp_server import _error_result
+        limit = getattr(self.args, "batch_max", 0)
+        if not limit:
+            return _error_result("POLICY_DENIED", "batch_run is not enabled on this Host (--batch-max)", False, None)
+        with self._lock:
+            if self._closed:
+                return _error_result("SESSION_TERMINATED", "MCP connection closed", False, None)
+            if self.batch is None:
+                self.batch = BatchRunner(limit, self.args.log_file.parent / "batch")
+            batch = self.batch
+        try:
+            if tool == "batch_run":
+                return success(**batch.start(args["name"], args.get("entries")))
+            if tool == "batch_status":
+                return success(**batch.status(args["wait_ms"]))
+            return batch.observe(args["index"], args["wait_ms"])
+        except BatchError as e:
+            retry = e.code == "RUNTIME_UNAVAILABLE"
+            return _error_result(e.code, e.message, retry, "batch_status" if tool != "batch_run" or retry else None)
+
+    def _stop_batch(self, result, args):
+        """session_stop also reaches the batch runtimes; each one's own guard asks the person first."""
+        batch = self.batch
+        if batch is None or result.get("isError"):
+            return result
+        stopped = batch.stop(args["reason"])
+        if stopped is None:
+            return result
+        body = json.loads(result["content"][-1]["text"])
+        body["batch"] = stopped
+        result["content"][-1]["text"] = json.dumps(body, ensure_ascii=False)
+        return result
 
     def call(self, tool, arguments):
         from host.mcp_server import _error_result
@@ -45,6 +86,14 @@ class McpRuntime:
             args = ToolCatalog().validate(tool, arguments)
         except ToolError as exc:
             return _error_result(exc.code, exc.message, False, "fix_arguments")
+        if tool in ("batch_run", "batch_status", "batch_observe"):
+            return self._batch_call(tool, args)
+        if tool == "session_stop":
+            return self._stop_batch(self._call(tool, args), args)
+        return self._call(tool, args)
+
+    def _call(self, tool, args):
+        from host.mcp_server import _error_result
         with self._lock:
             if self._closed:
                 return _error_result("SESSION_TERMINATED", "MCP connection closed", False, None)

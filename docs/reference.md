@@ -61,7 +61,8 @@ VM 및 창 backend와 Defender 판정/사용자 선택은 테스트 대역이다
 | `host/approval.py` | 사용자 승인 창 (Host 화면) | 5.6 |
 | `host/lifecycle.py` | Sandbox Manager(Lifecycle) 연결: task_submit 때 Sandbox 켜기, 세션이 끝나면 끄고 치우기 | 5.9 |
 | `host/broker.py` | Broker 코어: 도구 호출 검사 → SCRP 메시지로 변환 → 결과·오류 정규화 | 5.6 |
-| `host/tool_catalog.py` | 도구 23개 목록(GUI 18 + `router_capture`·`router_execute` + `program_share`·`inbox_write`·`app_prepare`), 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/tool_catalog.py` | 도구 26개 목록(GUI 18 + `router_capture`·`router_execute` + `program_share`·`inbox_write`·`app_prepare` + `batch_run`·`batch_status`·`batch_observe`), 입력 스키마 검사, 이 세션에서 쓸 수 있는 도구만 노출 | 5.6 |
+| `host/batch_run.py` | zip 안의 프로그램(.exe)마다 실행 환경 하나씩 (`--batch-max N`): 프로그램 수만큼 Host를 더 띄우고 그 Host의 MCP 클라이언트가 됨 | 7.x |
 | `host/policy.py` | 중앙 정책: ALLOW / REQUIRE_APPROVAL / DENY + 규칙 ID | 5.6 |
 | `host/audit.py` | 감사 로그 (호출마다 1줄, 입력 글자는 가림) | 5.6 |
 | `host/tool_availability.py` | 도구 노출 규칙 (표준 라이브러리만 사용, MCP Server가 빠르게 뜨도록) | 5.7 |
@@ -359,6 +360,32 @@ Host는 HTTPS로 수신한 사본을 실행 금지 `Work/output/<세션>`에 두
 
 실제 Sandbox 확인: Sandbox가 켜진 뒤 ZoomIt 받기 → `sandbox_run` → Sandbox 안에서 ZoomIt 창이 뜸(실행 기록·도우미·해시 확인 사본·프로세스 확인).
 내 PC로 가져와 직접 실행하려면 `inbox_finish`로 남길 파일을 고르고, Host 화면 승인 창에서 사람이 허락한다(`P-INBOX-KEEP`).
+
+### zip 안의 프로그램을 환경 하나씩 나눠 실행 (batch_run)
+
+대화 하나는 Host 하나, 실행 환경 하나를 가진다. zip에 든 프로그램 여러 개를 한 대화에서 동시에 격리해 실행하려고
+`batch_run`은 프로그램 수만큼 **Host를 더 띄운다**(대화를 여러 개 연 것과 같은 길). 기본은 꺼져 있다.
+
+```
+--batch-max 3            (mcp_server.py, --sandbox-run 필요)
+"batch_max": 3           (통합 설치: solution.json 에 넣는 선택 항목, micro_VM AutoAppWindow 일 때만)
+```
+
+| 단계 | 누가 | 하는 일 |
+|---|---|---|
+| 요청 | Agent | `batch_run(name)`: 다운로드 폴더의 zip 이름만. `task_submit`·`inbox_import`·`sandbox_run`은 부르지 않는다 |
+| 확인 | Host | zip의 **이름 목록만** 읽는다(이 PC에서 풀지 않음). 대상은 `.exe`와 `.msi`(설치 창이 뜸), `entries`로 이름을 주면 혼자 실행되는 스크립트(`.ps1` `.py` `.js` `.rb` `.java` `.sh`)도. 대상이 없거나, 빌드 파일이 있는 프로젝트거나, `--batch-max`보다 많으면 아무것도 시작하지 않고 거절 |
+| 시작 | Host | 프로그램마다 자식 Host 하나(자기 세션·받는 폴더·Output·감사 로그). `task_submit`은 한 자식씩 차례로 보내서 첫 프로그램이 먼저 고른다: Windows Sandbox가 비었으면 Sandbox, 나머지는 micro_VM (Sandbox Manager의 기존 규칙) |
+| 실행 | 자식 Host | `inbox_import`(zip 통째로) → READY → `sandbox_run(file=zip, entry=프로그램)` 한 번. 실행 환경 안에서 zip을 풀고 그 프로그램만 실행 |
+| 결과 | Agent | `batch_status(wait_ms)`: 프로그램별 상태·`runtime_type`·종료 코드·stdout. `batch_observe(index)`: 그 환경의 화면 |
+| 끝 | 사용자 / Agent | 창을 닫으면 그 세션만 끝난다. `session_stop`은 열린 환경 모두에 전달되고 각 환경이 평소처럼 사람에게 먼저 묻는다. 대화가 닫히면 모든 자식이 자기 환경을 끄고 끝난다(자식 프로세스를 강제로 죽이지 않는다) |
+
+Agent 앱이 닫히면서 자식 Host들이 환경을 끄기 전에 한꺼번에 끝나는 경우(2026-11-26 확인)에 대비해, 자식 Host는
+자기 프로세스 묶음 밖에 감시 프로세스(`host/orphan_reaper.py`)를 하나 띄운다. 그 Host가 사라지면 Sandbox Manager의
+`reclaim_orphans()`로 그 Host의 환경만 끄고 치운다(Output 반출과 확인 창은 없음).
+
+입력은 다시 보내지 않는다: `sandbox_run`은 자식마다 한 번, 응답이 없으면 `UNKNOWN`. 배치 환경에는 클릭·키 입력을 보내지 않는다.
+한 대화에서 배치는 한 번에 하나만(열린 환경이 남아 있으면 새 배치 거절).
 
 ### 웹 페이지 명령 분석 (router_capture → router_execute, #94)
 

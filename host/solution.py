@@ -18,7 +18,8 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 
-def host_arguments(runner: Path, work: Path, state: Path, *, micro_vm=None, client_id=None) -> list[str]:
+def host_arguments(runner: Path, work: Path, state: Path, *, micro_vm=None, client_id=None,
+                   batch_max=None) -> list[str]:
     export_root = state / 'exports'
     if client_id is not None:
         if str(uuid.UUID(client_id)) != client_id:
@@ -44,6 +45,11 @@ def host_arguments(runner: Path, work: Path, state: Path, *, micro_vm=None, clie
                  '--micro-vm-relay', micro_vm['relay'], '--micro-vm-max-active', str(micro_vm.get('max_active', 8))]
         if micro_vm['mode'] == 'AutoAppWindow':
             args += ['--auto-vm-app-window']
+            if batch_max:
+                # Profile key "batch_max" (optional): batch_run needs runtimes beyond the one Windows Sandbox.
+                if type(batch_max) is not int or not 1 <= batch_max <= 8:
+                    raise ValueError('profile batch_max must be an integer from 1 to 8')
+                args += ['--batch-max', str(batch_max)]
         else:
             args += ['--host', '127.0.0.1', '--port', '0', '--upload-port', '0']
     return args
@@ -127,7 +133,8 @@ def main(argv=None):
             return
         micro = profile.get('micro_vm') if profile else None
         client = str(uuid.uuid4()) if micro else None
-        arguments = host_arguments(a.runner_exe, a.work, a.state, micro_vm=micro, client_id=client)
+        arguments = host_arguments(a.runner_exe, a.work, a.state, micro_vm=micro, client_id=client,
+                                   batch_max=profile.get('batch_max') if profile else None)
         from sandbox_manager.inbox import check_inbox_root
         from host.inbox_download import check_no_execute
         # Check exactly the mappings this Host will use. The legacy root inbox
