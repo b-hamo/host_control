@@ -182,6 +182,51 @@ def test_the_api_needs_the_token_and_this_host(server):
     assert get(server, "/api/dashboard/overview", method="POST")[0] == 405
 
 
+def test_the_refresh_button_asks_running_hosts_for_a_new_screen(server, board):
+    hosts = board[0].dashboard_dir / "hosts"
+    (hosts / "SES-done.json").write_text(json.dumps({"session_id": "SES-done", "ended_at": at(5)}), encoding="utf-8")
+    assert get(server, "/api/runtimes/refresh", token=None, method="POST")[0] == 401
+    assert get(server, "/api/runtimes/refresh?token=t0ken", token=None, method="POST")[0] == 401   # header only
+    assert get(server, "/api/runtimes/refresh", host="evil.example:80", method="POST")[0] == 403
+    assert not list(hosts.glob("*.refresh"))
+    code, _, body = get(server, "/api/runtimes/refresh", method="POST")
+    assert code == 202 and json.loads(body) == {"requested": ["SES-vm3", "SES-wsb"]}
+    assert sorted(p.name for p in hosts.glob("*.refresh")) == ["SES-vm3.refresh", "SES-wsb.refresh"]   # not the ended one
+    assert (hosts / "SES-wsb.refresh").read_bytes() == b""                # only its existence counts
+    for method in ("PUT", "DELETE", "PATCH"):                             # still nothing else
+        assert get(server, "/api/runtimes/refresh", method=method)[0] == 405
+    assert get(server, "/api/runtimes/SES-wsb/screenshot", method="POST")[0] == 405
+
+
+def test_the_host_takes_one_capture_per_refresh_request(tmp_path):
+    shots = []
+
+    def capture():
+        shots.append(1)
+        return png(8, 6) if len(shots) < 3 else None            # the third one fails: the last screen stays
+    s = DashboardStatus(tmp_path, "SES-1", capture=capture, refresh_s=0.05)
+    request, image = tmp_path / "hosts" / "SES-1.refresh", tmp_path / "hosts" / "SES-1.png"
+    s.record("computer_observe", {}, True, png())
+    time.sleep(0.2)
+    assert shots == [] and image.read_bytes() == png()          # nothing is captured without a request
+
+    def ask():
+        request.write_text("ignored: only its existence counts", encoding="utf-8")
+        deadline = time.monotonic() + 5
+        while request.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        time.sleep(0.1)
+    ask()
+    first = json.loads((tmp_path / "hosts" / "SES-1.json").read_text(encoding="utf-8"))["screen_captured_at"]
+    assert len(shots) == 1 and image.read_bytes() == png(8, 6) and first
+    ask()
+    ask()
+    assert len(shots) == 3 and image.read_bytes() == png(8, 6)  # one capture per request
+    request.write_text("", encoding="utf-8")
+    s.close()
+    assert not request.exists() and not image.exists()          # nothing is left behind when the Host ends
+
+
 def test_overview_and_screenshot(server):
     code, headers, body = get(server, "/api/dashboard/overview")
     assert code == 200 and headers["Content-Type"].startswith("application/json")

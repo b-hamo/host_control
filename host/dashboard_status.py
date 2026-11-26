@@ -6,6 +6,8 @@ several can run at once, so each Host leaves a small file the dashboard reads. P
   <dir>/hosts/<session_id>.json   pid, sandbox root, task (the task_submit goal), last tool and file,
                                   window_state of the Sandbox window, when the screen was last captured
   <dir>/hosts/<session_id>.png    the last screen the Agent observed; removed when the Host ends
+  <dir>/hosts/<session_id>.refresh   left by the dashboard's refresh button (2026-11-26): this Host takes one
+                                  new capture for the .png and removes the request. Only its existence counts
 
 The status file also lists this Host's file exports (artifact id, file name, stage, result and scan codes,
 when it was seen and decided, where it was published). The artifact broker keeps them only in memory.
@@ -98,11 +100,14 @@ def export_row(broker, art) -> dict:
 class DashboardStatus:
     def __init__(self, directory: Path, session_id: str, *, sandbox_root: Path | None = None, vm_max: int | None = None,
                  window_state: Callable[[], str | None] | None = None,
-                 exports: Callable[[], list[dict] | None] | None = None, refresh_s: float = REFRESH_S):
+                 exports: Callable[[], list[dict] | None] | None = None, refresh_s: float = REFRESH_S,
+                 capture: Callable[[], bytes | None] | None = None):
         self.dir = Path(directory) / "hosts"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / f"{session_id}.json"
         self.image = self.dir / f"{session_id}.png"
+        self.request = self.dir / f"{session_id}.refresh"
+        self._capture = capture
         self._window_state = window_state
         self._exports = exports
         self._decided_at: dict[str, str] = {}
@@ -113,7 +118,7 @@ class DashboardStatus:
                      "last_tool": None, "last_file": None, "last_ok": None, "last_activity_at": None,
                      "window_state": None, "screen_captured_at": None, "exports": []}
         self._write()
-        if window_state is not None or exports is not None:
+        if window_state is not None or exports is not None or capture is not None:
             threading.Thread(target=self._refresh, args=(refresh_s,), name="dashboard-status", daemon=True).start()
 
     def record(self, tool: str, arguments: dict, ok: bool, image: bytes | None = None) -> None:
@@ -137,6 +142,7 @@ class DashboardStatus:
             self.data["screen_captured_at"] = None
             try:
                 self.image.unlink(missing_ok=True)       # a screen of the user's work does not outlive the Host
+                self.request.unlink(missing_ok=True)
             except OSError:
                 pass
             self._write()
@@ -149,10 +155,21 @@ class DashboardStatus:
                     state = self._window_state()
                 except Exception:  # noqa: BLE001 - the dashboard never takes the Host down
                     state = None
+            image = None
+            if self._capture is not None and self.request.exists():
+                try:
+                    self.request.unlink()                # one capture per request; its content is never read
+                    image = self._capture()
+                except Exception:  # noqa: BLE001 - a failed capture keeps the last screen
+                    image = None
             with self._lock:
                 if self._stop.is_set():
                     return
                 changed = self._take_exports()
+                if image:
+                    self._replace(self.image, image)
+                    self.data["screen_captured_at"] = _now()
+                    changed = True
                 if state != self.data["window_state"]:
                     self.data["window_state"] = state
                     changed = True

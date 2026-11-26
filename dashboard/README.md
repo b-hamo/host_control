@@ -1,6 +1,10 @@
 # dashboard/ — 로컬 대시보드 백엔드
 
 Windows Sandbox와 micro VM에서 무엇이 돌고 있는지 보여 주는 **이 PC 전용, 읽기 전용** 서버다.
+예외 하나(2026-11-26): 페이지의 **화면 새로고침** 버튼. `POST /api/runtimes/refresh`가 켜져 있는 Host마다
+`hosts/<세션>.refresh`(빈 파일)를 남기면, 그 Host가 2초 안에 화면을 한 장 새로 찍어 `<세션>.png`를 바꾼다.
+Host에 시킬 수 있는 것은 이 캡처 하나뿐이고 입력(클릭·키)은 보내지 않는다. AI가 도구를 쓰는 중이거나 프로그램을
+실행시키는 순간에는 찍지 않는다. 버튼은 번들과 따로 도는 `static/refresh.js`(원본 `frontend/public/refresh.js`)다.
 프론트 요청서(`minobox-dashboard-backend.md`)의 API를 제공한다. 요청서와 다른 점은 [요청서와 다른 점](#요청서와-다른-점)에 모았다.
 
 ```

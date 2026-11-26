@@ -4,6 +4,7 @@
   GET /api/dashboard/overview             collect.Collector.overview() as JSON
   GET /api/runtimes/{id}/screenshot       image/png of the last screen the Agent saw ({id}: session id or label)
   GET /api/runtimes/{id}/screenshot?format=json   {image_url, captured_at, width, height}
+  POST /api/runtimes/refresh              ask every running Host for one new screen capture (the refresh button)
 
 Only 127.0.0.1. Every /api request carries the token (header `Authorization: Bearer <token>` or
 `?token=` for <img src>), and the Host header must be this server, so another site in the browser
@@ -79,18 +80,28 @@ def make_handler(app: Dashboard, port_ref: list[int]):
         def _json(self, code: int, data: dict):
             self._send(code, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
-        def do_GET(self):
+        def _allowed(self, url, query) -> bool:
             host = (self.headers.get("Host") or "").lower()
             if host not in (f"127.0.0.1:{port_ref[0]}", f"localhost:{port_ref[0]}"):
-                return self._json(403, {"error": "FORBIDDEN_HOST"})
-            url = urlsplit(self.path)
-            query = parse_qs(url.query)
-            if not url.path.startswith("/api/"):
-                return self._static(url.path)
+                self._json(403, {"error": "FORBIDDEN_HOST"})
+                return False
             given = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip() or \
                 (query.get("token") or [""])[0]
             if not secrets.compare_digest(given, app.token):
-                return self._json(401, {"error": "UNAUTHORIZED", "message": "token missing or wrong"})
+                self._json(401, {"error": "UNAUTHORIZED", "message": "token missing or wrong"})
+                return False
+            return True
+
+        def do_GET(self):
+            url = urlsplit(self.path)
+            query = parse_qs(url.query)
+            if not url.path.startswith("/api/"):
+                host = (self.headers.get("Host") or "").lower()
+                if host not in (f"127.0.0.1:{port_ref[0]}", f"localhost:{port_ref[0]}"):
+                    return self._json(403, {"error": "FORBIDDEN_HOST"})
+                return self._static(url.path)
+            if not self._allowed(url, query):
+                return
             parts = url.path.strip("/").split("/")
             if parts == ["api", "dashboard", "overview"]:
                 return self._json(200, app.overview())
@@ -127,9 +138,18 @@ def make_handler(app: Dashboard, port_ref: list[int]):
             return self._send(200, target.read_bytes(), kind)
 
         def do_POST(self):
+            # The one thing this server asks of a Host (2026-11-26): a new screen capture for the live view.
+            url = urlsplit(self.path)
+            if url.path.rstrip("/") != "/api/runtimes/refresh":
+                return self._json(405, {"error": "READ_ONLY"})
+            if not self._allowed(url, {}):               # the token in the header only, never in the URL
+                return
+            return self._json(202, {"requested": app.collector.request_screens()})
+
+        def _read_only(self):
             self._json(405, {"error": "READ_ONLY"})
 
-        do_PUT = do_DELETE = do_PATCH = do_POST
+        do_PUT = do_DELETE = do_PATCH = _read_only
 
     return Handler
 

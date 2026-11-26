@@ -16,6 +16,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -239,6 +240,25 @@ class Collector:
         self.sandbox_inventory, self.vm_inventory = sandbox_inventory, vm_inventory
         self.host_meter = host_meter or HostMeter()
         self.vm_meter = vm_meter or VmMeter()
+
+    def request_screens(self) -> list[str]:
+        """The refresh button: ask every Host that is still running for one new screen capture.
+
+        An empty <session>.refresh next to its status file; that Host removes it and replaces its .png
+        (host/dashboard_status.py). Nothing else can be asked of a Host from here."""
+        asked = []
+        # Only sessions the overview shows as up: a Host that died leaves its status file and would never
+        # remove the request (found 2026-11-26: 31 requests written, 4 Hosts alive).
+        up = {s["id"] for s in self.overview()["sessions"] if s.get("display_state") in UP}
+        for sid, h in self.host_status().items():
+            if sid not in up or h.get("ended_at") or not re.fullmatch(r"SES-[A-Za-z0-9-]{1,64}", sid):
+                continue
+            try:
+                (self.dashboard_dir / "hosts" / f"{sid}.refresh").touch()
+                asked.append(sid)
+            except OSError:
+                pass
+        return asked
 
     def host_status(self) -> dict[str, dict]:
         found = {}
