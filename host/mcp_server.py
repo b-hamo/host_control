@@ -569,11 +569,30 @@ class HostBackend(threading.Thread):
                     async def snapshot():
                         return [export_row(arts, a) for a in list(arts._by_id.values())]
                     return asyncio.run_coroutine_threadsafe(snapshot(), loop).result(2)
+
+                def capture():
+                    # The dashboard's refresh button: one screen capture, never an input. Not while the Agent is
+                    # in a tool call or a program is being launched (their own captures follow anyway).
+                    import asyncio
+                    broker, loop, runner = self.broker, self.loop, self.runner
+                    if broker is None or loop is None or loop.is_closed() or not loop.is_running() or self._calls:
+                        return None
+                    if runner is not None and runner._launching is not None:
+                        return None
+
+                    async def shot():
+                        session = broker.session
+                        seen_at = session.last_observation_at
+                        result = await broker.call("computer_observe", {})
+                        # The Agent has not seen this screen: its own last look still decides whether it may click.
+                        session.last_observation_at = seen_at
+                        return result.image if result.ok else None
+                    return asyncio.run_coroutine_threadsafe(shot(), loop).result(30)
                 self._dashboard = DashboardStatus(directory, self.session.identity[0],
                                                   sandbox_root=getattr(self.args, "sandbox_root", None),
                                                   vm_max=(getattr(self.args, "micro_vm_max_active", None)
                                                           if getattr(self.args, "micro_vm_package", None) else None),
-                                                  window_state=window_state, exports=exports)
+                                                  window_state=window_state, exports=exports, capture=capture)
             self._dashboard.record(tool, arguments, ok, image)
         except Exception:  # noqa: BLE001 - the dashboard never fails a tool call
             log.exception("dashboard status not written")
