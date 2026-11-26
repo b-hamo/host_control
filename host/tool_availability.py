@@ -34,6 +34,10 @@ REQUIRED_CAPABILITY = {
     # Host feature (--share-programs): an installed compiler shared read-only into the running Sandbox.
     "program_share": "host.programs",
     "app_prepare": "host.programs",
+    # Host feature (--batch-max N): each program of a zip in its own runtime (host/batch_run.py).
+    "batch_run": "host.batch",
+    "batch_status": "host.batch",
+    "batch_observe": "host.batch",
 }
 # Tools whose backend is not built yet. Hidden rather than failing late (B-11).
 NOT_YET_AVAILABLE: dict[str, str] = {}

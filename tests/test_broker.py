@@ -29,15 +29,16 @@ CATALOG = ToolCatalog()
 
 
 # --------------------------------------------------------------------- catalog
-def test_catalog_has_the_twenty_three_tools():
+def test_catalog_has_the_twenty_six_tools():
     # 18 GUI-mode tools + router_capture/router_execute (#94, --router-capture)
     # + program_share (--share-programs) and inbox_write (--inbox)
+    # + batch_run/batch_status/batch_observe (--batch-max)
     assert sorted(CATALOG.names) == sorted([
         "task_submit", "computer_observe", "computer_move", "computer_click", "computer_type",
         "computer_keypress", "computer_hotkey", "computer_scroll", "computer_click_element",
         "runtime_get_state", "artifact_list", "artifact_export", "session_stop", "inbox_download",
         "inbox_import", "inbox_finish", "sandbox_run", "sandbox_run_status", "router_capture", "router_execute",
-        "program_share", "inbox_write", "app_prepare"])
+        "program_share", "inbox_write", "app_prepare", "batch_run", "batch_status", "batch_observe"])
 
 
 def test_validate_fills_defaults():

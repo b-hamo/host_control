@@ -86,6 +86,12 @@ ROUTER_INSTRUCTIONS = (
     "inside the Sandbox, then sandbox_run_status."
 )
 
+BATCH_INSTRUCTIONS = (
+    " When the user asks to run a .zip from Downloads that holds several programs (.exe, .msi), call batch_run with the "
+    "zip's file name instead of task_submit: every program runs in its own isolated runtime, side by side. Then "
+    "call batch_status with wait_ms=60000 until settled is true."
+)
+
 
 ARTIFACT_CAPABILITY = "artifact.export.v1"
 
@@ -251,6 +257,11 @@ class HostBackend(threading.Thread):
         manager = None
         if sandboxed:
             manager = self._sandbox_manager or _real_sandbox_manager(a.sandbox_root, options=a)
+            if self._sandbox_manager is None and a.sandbox_root and __import__("os").environ.get("SCRP_BATCH_CHILD"):
+                # A batch runtime's Host can be ended together with the Agent's app, before it stops anything
+                # (2026-11-26): a watcher outside this process tree then stops what this Host left.
+                from host.orphan_reaper import start as start_orphan_watcher
+                await asyncio.to_thread(start_orphan_watcher, a)
         if getattr(a, "auto_vm_app_window", False):
             # WSB requires the switch-reachable, firewall-approved pair; micro_VM
             # uses per-Host ephemeral loopback ports. Planning is not allocation:
@@ -816,6 +827,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--share-programs", action="store_true",
                     help="with --runner-exe: program_share shares an installed compiler (python, git, gcc, node, go, java, zig, dotnet, ruby, php) "
                          "read-only into the running Sandbox, without asking (team decision 2026-10-29)")
+    ap.add_argument("--batch-max", type=int, default=0,
+                    help="batch_run: run each program (.exe) of one zip in its own runtime, at most this many "
+                         "at once (0 = off). Each runtime is another Host process started like this one")
     ap.add_argument("--sandbox-root", type=Path, default=None,
                     help="Sandbox Manager workspace (default %%LOCALAPPDATA%%/SecureCUA/sandbox-manager)")
     ap.add_argument("--cert-dir", type=Path, default=HOST_DIR / ".certs")
@@ -879,9 +893,15 @@ def main(argv: list[str] | None = None) -> None:
         ap.error("--sandbox-run needs --inbox (the file to run) and --artifact-export (its checked result)")
     if args.router_capture and not args.sandbox_run:
         ap.error("--router-capture needs --sandbox-run (captured commands run through it)")
+    if __import__("os").environ.get("SCRP_BATCH_CHILD"):
+        args.batch_max = 0                           # a batch runtime's Host never starts a batch itself
+    if args.batch_max and not args.sandbox_run:
+        ap.error("--batch-max needs --sandbox-run (each program runs through it)")
+    if not 0 <= args.batch_max <= 8:
+        ap.error("--batch-max is 0 (off) to 8")
     _setup_logging(args.log_file)
 
-    extra = ({ARTIFACT_CAPABILITY} if args.artifact_export else set()) | ({"host.inbox"} if args.inbox else set())         | ({"host.sandbox_run"} if args.sandbox_run else set()) | ({"host.router"} if args.router_capture else set()) | ({"host.programs"} if args.share_programs else set())
+    extra = ({ARTIFACT_CAPABILITY} if args.artifact_export else set()) | ({"host.inbox"} if args.inbox else set())         | ({"host.sandbox_run"} if args.sandbox_run else set()) | ({"host.router"} if args.router_capture else set()) | ({"host.programs"} if args.share_programs else set()) | ({"host.batch"} if args.batch_max else set())
     from host.mcp_runtime import McpRuntime
     tools = load_tool_list(extra)
     if args.output_root is not None:
@@ -898,7 +918,8 @@ def main(argv: list[str] | None = None) -> None:
         save_downloads_description(tools)
     if args.signed_downloads:
         save_downloads_description(tools, SIGNED_DOWNLOADS_RULE)
-    instructions = INSTRUCTIONS + (ROUTER_INSTRUCTIONS if args.router_capture else "")
+    instructions = INSTRUCTIONS + (ROUTER_INSTRUCTIONS if args.router_capture else "") \
+        + (BATCH_INSTRUCTIONS if args.batch_max else "")
     server = McpServer(McpRuntime(args, HostBackend), tools, instructions=instructions, strict_tools=True)
     log.info("MCP server up (pid %s), %d tools", __import__("os").getpid(), len(server.tools))
     out = sys.stdout.buffer

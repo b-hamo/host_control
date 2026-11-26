@@ -51,6 +51,7 @@ It does prohibit invoking a Host compiler or build script yourself to bypass tha
 | A script | Use its supported script form, or inbox plus `sandbox_run` for a downloaded script file | Interpreter and script execute in the Sandbox |
 | A project requiring multiple source files, project-local headers, external packages or build scripts | Inbox ZIP plus `sandbox_run`, when that project type is supported | Dependencies, build scripts, compilation and execution stay in the Sandbox |
 | An existing EXE or installer | Inbox plus `sandbox_run`, or the supported Guest GUI installation flow | Sandbox execution; no compilation |
+| A ZIP in Downloads that holds several programs (`.exe`) or installers (`.msi`) to run | `batch_run` with the zip's file name (when the tool is connected), then `batch_status` | Each program in its own runtime, side by side; the zip is unpacked only there |
 
 - A repository containing only a standalone `.c` file still takes the `c-source` route. Read the
   source through repository/file tools and pass it unchanged to `router_capture`; do not turn it
@@ -202,6 +203,16 @@ runtime is not ready, wait (poll `runtime_get_state`) and call it again with the
    a single CMake program, one Cargo binary) and `arguments`. The Sandbox
    unpacks it, installs its libraries from the internet, builds and runs it; nothing of it runs here.
    Code that needs external packages is a project too: a single-file form has no package install step.
+4. **A zip of several programs** (the user asks to run a `.zip` in Downloads that holds more than one `.exe` or `.msi`;
+   an `.msi` opens its install window in its own runtime, and the person finishes it there):
+   when `batch_run` is connected, call it once with the zip's file name, without `task_submit`, `inbox_import`
+   or `sandbox_run`. Every program gets its own runtime (the first one Windows Sandbox when it is free, the
+   others micro_VMs). It returns at once: call `batch_status` with `wait_ms=60000` and repeat until `settled`
+   is true (1-3 minutes; not settled yet is normal, not a failure), then report each program's state,
+   runtime type and result. `batch_observe` with a program's `index` shows that runtime's screen. If the
+   zip holds more programs than the Host runs at once, nothing starts: tell the user the limit, do not split
+   the zip yourself. Never unpack the zip on this computer. Without `batch_run`, run one program with
+   `sandbox_run` (`file`: the zip, `entry`: the `.exe` inside it).
    A GitHub repository URL alone does not make standalone source a project; apply the route table first.
 4. **Not supported**: Maven/Gradle and make projects, PHP, VBScript (`.vbs`: the Sandbox has no
    VBScript engine), MSVC / Visual Studio C++. Say so; do not run them on this PC on your own. The SCRP hook
